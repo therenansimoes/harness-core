@@ -1,0 +1,11 @@
+data,regiao,produto,quantidade,valor
+2026-01-03,sul,teclado,2,180.50
+2026-01-03,norte,mouse,5,145.00
+2026-01-04,sul,monitor,1,899.90
+2026-01-05,leste,teclado,3,270.75
+2026-01-05,norte,monitor,2,1799.80
+2026-01-06,sul,mouse,4,116.00
+2026-01-07,leste,monitor,1,899.90
+2026-01-07,norte,teclado,6,541.50
+2026-01-08,sul,teclado,1,90.25
+2026-01-09,leste,mouse,7,203.00
