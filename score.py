@@ -6,6 +6,14 @@
     python3 score.py --ab v0 v0.1  # compara duas versões + regra de promoção
 
 Não decide nada sozinho: imprime números e diz se os gates passam.
+
+REGRA DO JUIZ (dívida paga depois do A/B v0.1):
+Toda comparação A/B é NORMALIZADA por run. Somar custo entre amostras de
+tamanho diferente faz o lado com menos runs parecer barato — foi assim que a
+v0.1 quase foi promovida com um ganho que não existia. Runs sem telemetria
+válida (truncadas pelo teto de turns, timeout, JSON quebrado) reportam $0 e
+0 tokens; entrar no agregado de custo puxa a média para baixo e inventa
+eficiência. Elas contam para success e para tempo, nunca para custo.
 """
 
 from __future__ import annotations
@@ -17,38 +25,141 @@ from pathlib import Path
 
 RESULTS = Path(__file__).parent / "results.tsv"
 
+# Marcadores de run que terminou sem telemetria confiável (ver agent.py).
+BAD_TELEMETRY = ("cli_exit", "timeout", "bad_json", "max_turns")
+
+MIN_N = 3            # runs mínimos por lado
+GAIN_PCT = 0.10      # ganho mínimo para creditar melhora (10%)
+IMBALANCE = 1.5      # N de um lado > 1.5x o outro = amostra desbalanceada
+
 
 def load() -> list[dict]:
     if not RESULTS.exists():
         raise SystemExit("results.tsv não existe — rode run_task.py primeiro")
     lines = RESULTS.read_text().strip().splitlines()
     header = lines[0].split("\t")
-    return [dict(zip(header, ln.split("\t"))) for ln in lines[1:] if ln.strip()]
+    rows = []
+    for ln in lines[1:]:
+        if not ln.strip():
+            continue
+        # padding: a última linha do arquivo perde o \t final no strip, e sem
+        # isso o zip trunca e a coluna 'notes' desaparece justo da run mais
+        # recente — que é a que você está olhando.
+        cells = (ln.split("\t") + [""] * len(header))[: len(header)]
+        rows.append(dict(zip(header, cells)))
+    return rows
+
+
+def is_valid(r: dict) -> bool:
+    """Telemetria confiável? (custo/tokens utilizáveis)"""
+    if any(m in r.get("notes", "") for m in BAD_TELEMETRY):
+        return False
+    return int(r.get("tokens") or 0) > 0
 
 
 def agg(rows: list[dict]) -> dict:
     n = len(rows)
+    if not n:
+        return {}
+    valid = [r for r in rows if is_valid(r)]
+    nv = len(valid)
     succ = sum(int(r["success"]) for r in rows)
+    succ_valid = sum(int(r["success"]) for r in valid)
     secs = [float(r["seconds"]) for r in rows]
-    cost = sum(float(r["cost_usd"] or 0) for r in rows)
-    toks = sum(int(r["tokens"] or 0) for r in rows)
+    cost = sum(float(r["cost_usd"] or 0) for r in valid)
+    toks = sum(int(r["tokens"] or 0) for r in valid)
     return {
         "n": n,
+        "n_valid": nv,
+        "n_trunc": n - nv,
+        "trunc_rate": (n - nv) / n,
         "pass": succ,
-        "rate": succ / n if n else 0.0,
-        "med_s": statistics.median(secs) if secs else 0.0,
-        "cost": cost,
-        "tokens": toks,
-        # efficiency do PLAN: success por unidade de custo
-        "eff": (succ / cost) if cost else 0.0,
+        "rate": succ / n,
+        # success contando só runs que terminaram limpas: se divergir do rate,
+        # o success está sendo carregado por runs truncadas que "deram certo".
+        "rate_valid": (succ_valid / nv) if nv else 0.0,
+        "med_s": statistics.median(secs),
+        # NORMALIZADO — nunca comparar somas entre amostras de tamanho diferente
+        "cost_run": (cost / nv) if nv else 0.0,
+        "tok_run": (toks / nv) if nv else 0.0,
+        "cost_total": cost,
+        "eff": (succ_valid / cost) if cost else 0.0,
     }
 
 
 def fmt(label: str, a: dict) -> str:
+    trunc = f"trunc {a['n_trunc']}/{a['n']}" if a["n_trunc"] else "trunc 0"
     return (
         f"{label:<18} {a['pass']:>3}/{a['n']:<3} = {a['rate']:>5.0%}  "
-        f"med {a['med_s']:>5.1f}s  {a['tokens']:>7}tok  ${a['cost']:>7.4f}  eff {a['eff']:>5.1f}"
+        f"med {a['med_s']:>5.1f}s  {a['tok_run']:>6.0f}tok/run  "
+        f"${a['cost_run']:>7.4f}/run  {trunc}"
     )
+
+
+def delta(a: float, b: float) -> tuple[float, str]:
+    """Variação relativa de A para B. Retorna (fração, texto com sinal)."""
+    if not a:
+        return 0.0, "n/a"
+    d = (b - a) / a
+    return d, f"{d:+.1%}"
+
+
+def do_ab(rows: list[dict], va: str, vb: str) -> int:
+    ra = [r for r in rows if r["harness_version"] == va]
+    rb = [r for r in rows if r["harness_version"] == vb]
+    if not ra or not rb:
+        raise SystemExit(f"faltam runs: {va}={len(ra)} {vb}={len(rb)}")
+    A, B = agg(ra), agg(rb)
+
+    print(fmt(f"A {va}", A))
+    print(fmt(f"B {vb}", B))
+    print(f"\n  N total      A={A['n']}  B={B['n']}     (válido: A={A['n_valid']}  B={B['n_valid']})")
+
+    d_med, s_med = delta(A["med_s"], B["med_s"])
+    d_cost, s_cost = delta(A["cost_run"], B["cost_run"])
+    d_tok, s_tok = delta(A["tok_run"], B["tok_run"])
+    print(f"  mediana s    {A['med_s']:.1f} -> {B['med_s']:.1f}   {s_med}")
+    print(f"  custo/run    ${A['cost_run']:.4f} -> ${B['cost_run']:.4f}   {s_cost}")
+    print(f"  tokens/run   {A['tok_run']:.0f} -> {B['tok_run']:.0f}   {s_tok}")
+    print(f"  truncamento  {A['trunc_rate']:.0%} -> {B['trunc_rate']:.0%}")
+
+    if A["rate"] != A["rate_valid"] or B["rate"] != B["rate_valid"]:
+        print(
+            f"  success limpo A={A['rate_valid']:.0%} B={B['rate_valid']:.0%}"
+            "   <- success total inclui runs truncadas"
+        )
+
+    # ---- gates. Melhora = valor CAI em tempo/custo (menor é melhor).
+    faster = -d_med >= GAIN_PCT
+    cheaper = -d_cost >= GAIN_PCT
+    imbalanced = max(A["n_valid"], B["n_valid"]) > IMBALANCE * max(1, min(A["n_valid"], B["n_valid"]))
+
+    gates = [
+        ("success não caiu", B["rate"] >= A["rate"]),
+        ("success limpo não caiu", B["rate_valid"] >= A["rate_valid"]),
+        (f"N válido suficiente (>={MIN_N} por lado)", A["n_valid"] >= MIN_N and B["n_valid"] >= MIN_N),
+        ("truncamento não aumentou", B["trunc_rate"] <= A["trunc_rate"]),
+        (f"ganho normalizado >={GAIN_PCT:.0%} (mediana s OU custo/run)", faster or cheaper),
+        ("sem regressão grave no outro eixo (<+10%)", (d_med < 0.10) and (d_cost < 0.10)),
+    ]
+    print()
+    for name, ok in gates:
+        print(f"  [{'PASS' if ok else 'FAIL'}] {name}")
+
+    if imbalanced:
+        print(
+            f"\n  AVISO: amostra desbalanceada (A={A['n_valid']} vs B={B['n_valid']} runs válidas)."
+            "\n  Métricas por run absorvem isso, mas rode N igual antes de creditar."
+        )
+
+    allok = all(ok for _, ok in gates)
+    if allok:
+        print("\n=> MERGE candidato — confirme em sealed antes de creditar.")
+    else:
+        falhou = [n for n, ok in gates if not ok]
+        print(f"\n=> DISCARD — gate(s): {'; '.join(falhou)}")
+    print("   Registre a decisão em evolution/decisions/.")
+    return 0 if allok else 1
 
 
 def main() -> int:
@@ -59,31 +170,12 @@ def main() -> int:
     rows = load()
 
     if a.ab:
-        va, vb = a.ab
-        ra = [r for r in rows if r["harness_version"] == va]
-        rb = [r for r in rows if r["harness_version"] == vb]
-        if not ra or not rb:
-            raise SystemExit(f"faltam runs: {va}={len(ra)} {vb}={len(rb)}")
-        A, B = agg(ra), agg(rb)
-        print(fmt(f"A {va}", A))
-        print(fmt(f"B {vb}", B))
+        return do_ab(rows, *a.ab)
 
-        gates = [
-            ("success não caiu", B["rate"] >= A["rate"]),
-            ("n suficiente (>=3 por lado)", A["n"] >= 3 and B["n"] >= 3),
-            ("custo sob controle (<=1.5x A ou success subiu)", B["cost"] <= A["cost"] * 1.5 or B["rate"] > A["rate"]),
-            ("ganho real (rate subiu ou custo caiu)", B["rate"] > A["rate"] or B["cost"] < A["cost"]),
-        ]
-        print()
-        for name, ok in gates:
-            print(f"  [{'PASS' if ok else 'FAIL'}] {name}")
-        allok = all(ok for _, ok in gates)
-        print(f"\n=> {'MERGE candidato' if allok else 'DISCARD'} — confirme em sealed antes de creditar.")
-        print("   Registre a decisão em evolution/decisions/.")
-        return 0 if allok else 1
-
-    key = (lambda r: (r["harness_version"], r["suite"], r["task_id"])) if a.by_task else (
-        lambda r: (r["harness_version"], r["suite"])
+    key = (
+        (lambda r: (r["harness_version"], r["suite"], r["task_id"]))
+        if a.by_task
+        else (lambda r: (r["harness_version"], r["suite"]))
     )
     groups: dict[tuple, list[dict]] = defaultdict(list)
     for r in rows:
