@@ -1,5 +1,5 @@
 +++
-version = "1.0"
+version = "1.1"
 updated = "2026-08-01"
 ui = true
 +++
@@ -28,10 +28,18 @@ Estes requisitos não podem regredir em nenhuma entrega futura:
 3. O index tem `<title>` e pelo menos um `<h1>`.
 4. O index linka `style.css` via `<link>` e o arquivo existe em disco.
 
-## Critérios de UI (avaliação humana)
+## Critérios de UI
 
-Estes critérios não são checáveis por script — servem de guia para quem
-revisar a UI manualmente ou julgar screenshots:
+**Parte já é automática** (suite Playwright em `ui/tests/`, rodada pelo verify):
+home responde 200 com estrutura mínima, CSS realmente aplicado no browser, links
+internos sem 404, console sem erro, screenshot vs baseline (threshold 2%) e
+ausência de scroll horizontal em 375px.
+
+### Critérios subjetivos (avaliação humana)
+
+Estes continuam sem checagem por script — só entram na fila do Renan quando a
+suite falha de forma ambígua, quando `review_subjective` está ligado, ou quando
+existe um check `manual_ui*` na acceptance:
 
 1. **Hierarquia visual** — título principal se destaca claramente do resto
    do conteúdo (tamanho, peso ou cor).
