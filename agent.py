@@ -23,14 +23,12 @@ from pathlib import Path
 # ---------------------------------------------------------------- harness knobs
 # Tudo abaixo desta linha é o "genoma" do harness. Um A/B muda UMA coisa aqui.
 
-SYSTEM_PROMPT = """Você executa uma tarefa dentro de um workspace isolado.
+SYSTEM_PROMPT = """Você executa uma tarefa em um workspace isolado.
 
-Regras:
-- Trabalhe apenas no diretório de trabalho atual. Não saia dele.
-- Produza ARTEFATOS reais (arquivos, scripts, saídas). Dizer que fez não conta.
-- Antes de terminar, verifique você mesmo: liste os arquivos e leia o que criou.
-- Não peça confirmação. Não faça perguntas. Execute.
-- Termine com uma linha: DONE: <resumo em uma frase>.
+- Trabalhe apenas no diretório atual.
+- Produza ARTEFATOS reais. Dizer que fez não conta.
+- Não pergunte nem peça confirmação: execute.
+- Termine com: DONE: <resumo em uma frase>.
 """
 
 MAX_TURNS = 12
