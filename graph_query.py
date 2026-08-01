@@ -9,6 +9,9 @@ Uso:
     python3 graph_query.py pending
     python3 graph_query.py confirmations [-n 20]
     python3 graph_query.py outbound [-n 20]
+    python3 graph_query.py sessions [-n 10]
+    python3 graph_query.py delivery <projeto> [-n 20]
+    python3 graph_query.py governance [-n 20]
 """
 
 from __future__ import annotations
@@ -21,9 +24,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from graph import (  # noqa: E402
     _connect,
+    delivery_history,
     pending_outbound,
     recent_confirmations,
     recent_decisions,
+    recent_governance,
+    recent_sessions,
     runs_for_version,
     summary_for_ab,
 )
@@ -168,6 +174,50 @@ def cmd_outbound(args: argparse.Namespace) -> None:
     print(f"\ntotal: {len(rows)} outbound")
 
 
+def cmd_sessions(args: argparse.Namespace) -> None:
+    rows = recent_sessions(n=args.n, db_path=None)
+    if not rows:
+        print("(sem sessions)")
+        return
+
+    print(f"{'session_id':<20} {'project':<20} {'status':<10}  updated")
+    for r in rows:
+        print(f"{r['session_id']:<20} {r['project']:<20} {r['status']:<10}  {r['updated']}")
+    print(f"\ntotal: {len(rows)} sessions")
+
+
+def cmd_delivery(args: argparse.Namespace) -> None:
+    rows = delivery_history(args.project, n=args.n, db_path=None)
+    if not rows:
+        print(f"(sem delivery_events para {args.project})")
+        return
+
+    print(f"{'ts':<20} {'session_id':<16} {'kind':<10} {'ok':>3} {'checks':>7} {'acc':>7}  next_action")
+    for r in rows:
+        checks = f"{r['checks_passed']}/{r['checks_total']}"
+        acc = f"{r['acceptance_passed']}/{r['acceptance_total']}"
+        print(
+            f"{r['ts']:<20} {r['session_id']:<16} {r['kind']:<10} "
+            f"{r['delivery_success']:>3} {checks:>7} {acc:>7}  {_short(r['next_action'], 40)}"
+        )
+    print(f"\ntotal: {len(rows)} eventos de entrega ({args.project})")
+
+
+def cmd_governance(args: argparse.Namespace) -> None:
+    rows = recent_governance(n=args.n, db_path=None)
+    if not rows:
+        print("(sem governance_events)")
+        return
+
+    print(f"{'ts':<20} {'project':<16} {'action':<16} {'actor':<12}  detail")
+    for r in rows:
+        print(
+            f"{r['ts']:<20} {r['project']:<16} {r['action']:<16} {r['actor']:<12}  "
+            f"{_short(r['detail'], 40)}"
+        )
+    print(f"\ntotal: {len(rows)} eventos de governança")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Inspeciona o store de auto-crítica do harness.")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -199,6 +249,19 @@ def main() -> None:
     p_out = sub.add_parser("outbound", help="lista outbound recentes de qualquer status")
     p_out.add_argument("-n", type=int, default=20)
     p_out.set_defaults(func=cmd_outbound)
+
+    p_sess = sub.add_parser("sessions", help="lista sessões de entrega recentes")
+    p_sess.add_argument("-n", type=int, default=10)
+    p_sess.set_defaults(func=cmd_sessions)
+
+    p_deliv = sub.add_parser("delivery", help="histórico de entrega de um projeto")
+    p_deliv.add_argument("project")
+    p_deliv.add_argument("-n", type=int, default=20)
+    p_deliv.set_defaults(func=cmd_delivery)
+
+    p_gov = sub.add_parser("governance", help="lista eventos de governança recentes")
+    p_gov.add_argument("-n", type=int, default=20)
+    p_gov.set_defaults(func=cmd_governance)
 
     args = parser.parse_args()
     args.func(args)

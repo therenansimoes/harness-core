@@ -136,11 +136,69 @@ você ligue `allow_auto_reply_to_owner` (default `false`).
 Não existe comando "enviar". Se você procurar um atalho que cria e já confirma,
 não vai achar: a ausência dele é a funcionalidade.
 
+## Projeto real: spec → session → verify em camadas → post-work → resume
+
+Um `verify.py` congelado no dia 1 não escala para um site que cresce. Aqui a
+verificação tem camadas, e o critério é versionado como qualquer outro artefato.
+
+```
+projects/demo_site/
+├── spec/SPEC.md              # spec VIVA (front matter com version/updated/ui)
+├── spec/CHANGELOG_SPEC.md    # o que mudou no critério, e quando
+├── regression/               # invariantes: só CRESCEM, protegidos por MANIFEST.json
+├── acceptance/<session>/     # o aceite da DELTA desta sessão
+└── sessions/<session>/       # brief.md · state.json · delivery_report.md
+```
+
+```bash
+python3 harness_cli.py project-init meu_site --ui
+python3 harness_cli.py session-new --project meu_site --session s001
+python3 harness_cli.py verify     --project meu_site --session s001   # exit 1 se falta algo
+python3 harness_cli.py post-work  --project meu_site --session s001
+python3 harness_cli.py resume     --project meu_site --session s001
+python3 harness_cli.py promote-checks --project meu_site --session s001  # aceite vira regression
+python3 tests/test_delivery.py    # 11 provas, sem API
+```
+
+**Dois eixos de score, tabelas separadas.** `results.tsv` + `runs` respondem "o
+motor melhorou?". `delivery_events` responde "ficou bom pro Renan?". Um
+`task_01` passando no lab nunca conta como entrega, e vice-versa.
+
+**Governança.** O worker pode ADICIONAR check de regression (só fortalece a
+barra), mas apagar ou editar um existente é **violação** — o `MANIFEST.json`
+guarda o sha256 de cada um, e a verificação falha mesmo que todo o resto esteja
+verde. Senão o caminho mais fácil para ficar verde seria apagar o check. Só
+`governance-approve` reescreve o manifest, e ele é do dono:
+
+```bash
+python3 harness_cli.py governance-approve --project meu_site --note "removi o check X porque..."
+```
+
+O worker também não altera gates de `score.py`. Quando o post-work detecta o
+mesmo check falhando em sessões diferentes, ele abre um **stub de proposta** em
+`evolution/proposals/` e para por aí — mudar o critério de avaliação para ficar
+verde é exatamente o que este harness existe para impedir.
+
+**`next_action`** sai do post-work e é o que a próxima sessão lê:
+
+| valor | significa |
+|---|---|
+| `continue_delivery` | falta trabalho de entrega; os checks dizem o quê |
+| `await_renan` | decisão humana: UI, item do brief ou governança |
+| `evolve_harness` | falha recorrente — o gargalo parece ser o motor |
+| `done` | tudo verde, nada pendente |
+
+UI não é automatizável ainda: projeto com `ui = true` sempre termina em
+`needs_human_ui_review` com uma rubrica de 5 itens no report, nunca em `done`.
+
 ## CLI
 
 ```bash
 python3 harness_cli.py status                # versão, score, última decision, pendentes
-python3 harness_cli.py run --all             # roda a suite
-python3 harness_cli.py evolve --proposal ... # um ciclo
+python3 harness_cli.py run --all             # roda a suite de lab
+python3 harness_cli.py evolve --proposal ... # um ciclo de evolução do motor
 python3 harness_cli.py init --path ~/projeto # cria .harness/ com pin de versão
+python3 graph_query.py sessions              # sessões de entrega
+python3 graph_query.py delivery demo_site    # histórico de entrega do projeto
+python3 graph_query.py governance            # quem aprovou o quê
 ```

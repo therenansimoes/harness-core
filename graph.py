@@ -116,6 +116,47 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_decisions_proposal_id ON decisions(proposal_id);
         CREATE INDEX IF NOT EXISTS idx_outbound_status ON outbound_messages(status);
         CREATE INDEX IF NOT EXISTS idx_confirmation_outbound_id ON confirmation_events(outbound_id);
+
+        CREATE TABLE IF NOT EXISTS sessions (
+            session_id TEXT PRIMARY KEY,
+            ts TEXT NOT NULL,
+            project TEXT NOT NULL,
+            brief_path TEXT NOT NULL,
+            status TEXT NOT NULL,
+            updated TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS delivery_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            project TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            delivery_success INTEGER NOT NULL,
+            checks_total INTEGER NOT NULL,
+            checks_passed INTEGER NOT NULL,
+            regression_passed INTEGER NOT NULL,
+            regression_total INTEGER NOT NULL,
+            acceptance_passed INTEGER NOT NULL,
+            acceptance_total INTEGER NOT NULL,
+            next_action TEXT NOT NULL,
+            notes TEXT DEFAULT '',
+            report_path TEXT DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS governance_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            project TEXT NOT NULL,
+            action TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            detail TEXT DEFAULT ''
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_delivery_events_session_id ON delivery_events(session_id);
+        CREATE INDEX IF NOT EXISTS idx_delivery_events_project ON delivery_events(project);
+        CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
+        CREATE INDEX IF NOT EXISTS idx_governance_events_project ON governance_events(project);
         """
     )
     conn.commit()
@@ -264,6 +305,178 @@ def summary_for_ab(version_a: str, version_b: str, db_path=None) -> dict:
             "a": _summary_one(conn, version_a),
             "b": _summary_one(conn, version_b),
         }
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------- entrega
+#
+# Eixo separado do harness (runs/proposals/decisions acima): sessões de
+# trabalho em projetos reais do usuário e os eventos de entrega/governança
+# ligados a elas. Nunca lê nem escreve nas tabelas do eixo harness.
+
+
+def record_session(session_id: str, project: str, brief_path: str,
+                    status: str = "open", ts: str | None = None, db_path=None) -> str:
+    ts = ts or _now()
+    conn = _connect(db_path)
+    try:
+        existing = conn.execute(
+            "SELECT ts FROM sessions WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        original_ts = existing["ts"] if existing is not None else ts
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO sessions
+                (session_id, ts, project, brief_path, status, updated)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (session_id, original_ts, project, brief_path, status, ts),
+        )
+        conn.commit()
+        return session_id
+    finally:
+        conn.close()
+
+
+def update_session_status(session_id: str, status: str,
+                           ts: str | None = None, db_path=None) -> dict:
+    ts = ts or _now()
+    conn = _connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT * FROM sessions WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"session {session_id} não existe")
+        conn.execute(
+            "UPDATE sessions SET status = ?, updated = ? WHERE session_id = ?",
+            (status, ts, session_id),
+        )
+        conn.commit()
+        return dict(
+            conn.execute(
+                "SELECT * FROM sessions WHERE session_id = ?", (session_id,)
+            ).fetchone()
+        )
+    finally:
+        conn.close()
+
+
+def record_delivery_event(session_id: str, project: str, kind: str,
+                           delivery_success: int, checks_total: int, checks_passed: int,
+                           regression_passed: int, regression_total: int,
+                           acceptance_passed: int, acceptance_total: int,
+                           next_action: str, notes: str = "", report_path: str = "",
+                           ts: str | None = None, db_path=None) -> int:
+    ts = ts or _now()
+    conn = _connect(db_path)
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO delivery_events
+                (ts, session_id, project, kind, delivery_success, checks_total,
+                 checks_passed, regression_passed, regression_total,
+                 acceptance_passed, acceptance_total, next_action, notes, report_path)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (ts, session_id, project, kind, delivery_success, checks_total,
+             checks_passed, regression_passed, regression_total,
+             acceptance_passed, acceptance_total, next_action, notes, report_path),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def session_state(session_id: str, db_path=None) -> dict | None:
+    conn = _connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT * FROM sessions WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        state = dict(row)
+        last_event = conn.execute(
+            """
+            SELECT * FROM delivery_events
+            WHERE session_id = ?
+            ORDER BY ts DESC, id DESC
+            LIMIT 1
+            """,
+            (session_id,),
+        ).fetchone()
+        state["last_event"] = dict(last_event) if last_event is not None else None
+        return state
+    finally:
+        conn.close()
+
+
+def recent_sessions(n: int = 10, db_path=None) -> list[dict]:
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT * FROM sessions
+            ORDER BY updated DESC
+            LIMIT ?
+            """,
+            (n,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def delivery_history(project: str, n: int = 20, db_path=None) -> list[dict]:
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT * FROM delivery_events
+            WHERE project = ?
+            ORDER BY ts DESC, id DESC
+            LIMIT ?
+            """,
+            (project, n),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def record_governance_event(project: str, action: str, actor: str, detail: str = "",
+                             ts: str | None = None, db_path=None) -> int:
+    ts = ts or _now()
+    conn = _connect(db_path)
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO governance_events (ts, project, action, actor, detail)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (ts, project, action, actor, detail),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def recent_governance(n: int = 20, db_path=None) -> list[dict]:
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT * FROM governance_events
+            ORDER BY ts DESC, id DESC
+            LIMIT ?
+            """,
+            (n,),
+        ).fetchall()
+        return [dict(row) for row in rows]
     finally:
         conn.close()
 
@@ -596,6 +809,79 @@ if __name__ == "__main__":
 
         assert get_outbound(oid, db_path=tmp_db)["status"] == "sent"
         assert get_outbound(999999, db_path=tmp_db) is None
+
+        # ------------------------------------------------------ eixo entrega
+
+        assert session_state("nao-existe", db_path=tmp_db) is None
+
+        record_session("sess-1", project="site-renan", brief_path="briefs/sess-1.md",
+                        status="open", ts="2026-07-30T10:00:00+00:00", db_path=tmp_db)
+        s1 = session_state("sess-1", db_path=tmp_db)
+        assert s1 is not None
+        assert s1["project"] == "site-renan"
+        assert s1["status"] == "open"
+        assert s1["last_event"] is None
+
+        # dois delivery_events na mesma sessão -> session_state traz o mais recente
+        record_delivery_event(
+            "sess-1", "site-renan", kind="verify", delivery_success=0,
+            checks_total=5, checks_passed=3, regression_passed=2, regression_total=2,
+            acceptance_passed=1, acceptance_total=3, next_action="corrigir checkout",
+            ts="2026-07-30T11:00:00+00:00", db_path=tmp_db,
+        )
+        record_delivery_event(
+            "sess-1", "site-renan", kind="post_work", delivery_success=1,
+            checks_total=5, checks_passed=5, regression_passed=2, regression_total=2,
+            acceptance_passed=3, acceptance_total=3, next_action="nenhuma",
+            ts="2026-07-30T12:00:00+00:00", db_path=tmp_db,
+        )
+        s1_after = session_state("sess-1", db_path=tmp_db)
+        assert s1_after["last_event"]["kind"] == "post_work"
+        assert s1_after["last_event"]["delivery_success"] == 1
+
+        # update_session_status muda status e updated
+        updated = update_session_status("sess-1", "done", ts="2026-07-30T13:00:00+00:00", db_path=tmp_db)
+        assert updated["status"] == "done"
+        assert updated["updated"] == "2026-07-30T13:00:00+00:00"
+        # ts original preservado (record_session é idempotente por session_id)
+        assert updated["ts"] == "2026-07-30T10:00:00+00:00"
+
+        # delivery_history filtra por projeto (2 projetos, sem vazamento)
+        record_session("sess-2", project="crm-cliente-x", brief_path="briefs/sess-2.md", db_path=tmp_db)
+        record_delivery_event(
+            "sess-2", "crm-cliente-x", kind="verify", delivery_success=1,
+            checks_total=2, checks_passed=2, regression_passed=1, regression_total=1,
+            acceptance_passed=1, acceptance_total=1, next_action="nenhuma", db_path=tmp_db,
+        )
+        hist_site = delivery_history("site-renan", db_path=tmp_db)
+        hist_crm = delivery_history("crm-cliente-x", db_path=tmp_db)
+        assert len(hist_site) == 2
+        assert all(e["project"] == "site-renan" for e in hist_site)
+        assert len(hist_crm) == 1
+        assert hist_crm[0]["project"] == "crm-cliente-x"
+        # mais recentes primeiro
+        assert hist_site[0]["kind"] == "post_work"
+
+        recent_sess = recent_sessions(n=10, db_path=tmp_db)
+        assert {s["session_id"] for s in recent_sess} == {"sess-1", "sess-2"}
+
+        # governança
+        record_governance_event("site-renan", action="approve_deploy", actor="renan",
+                                 detail="ok pra subir", db_path=tmp_db)
+        gov = recent_governance(n=10, db_path=tmp_db)
+        assert len(gov) == 1
+        assert gov[0]["project"] == "site-renan"
+        assert gov[0]["action"] == "approve_deploy"
+
+        # ------------------------------------------- isolamento harness x entrega
+        # a run acima ("v2"/"v1") é do eixo harness; delivery_events é do eixo entrega.
+        # nenhum dos dois pode enxergar o outro.
+        runs_v2_again = runs_for_version("v2", db_path=tmp_db)
+        assert all("project" not in r for r in runs_v2_again), "runs não pode ter coluna de projeto"
+        assert len(runs_v2_again) == 3, "delivery_events não pode contaminar runs"
+
+        hist_v2_as_project = delivery_history("v2", db_path=tmp_db)
+        assert hist_v2_as_project == [], "delivery_history não pode enxergar runs do eixo harness"
 
         print("OK: todos os asserts de graph.py passaram.")
     finally:

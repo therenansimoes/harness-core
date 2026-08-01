@@ -11,9 +11,21 @@ vivo e o exit code real de run_task.py / evolve.py.
     python3 harness_cli.py whatsapp-cancel <id> [--note ...]
     python3 harness_cli.py init [--path DIR]
 
+    python3 harness_cli.py project-init <nome> [--path DIR] [--ui]
+    python3 harness_cli.py session-new --project X --session Y [--brief-file FILE]
+    python3 harness_cli.py verify --project X --session Y
+    python3 harness_cli.py post-work --project X --session Y
+    python3 harness_cli.py resume --project X --session Y
+    python3 harness_cli.py promote-checks --project X --session Y
+    python3 harness_cli.py governance-approve --project X [--note "..."]
+
 Não existe subcomando que envie mensagem direto (nem "whatsapp-send"). O
 único caminho de envio é whatsapp-confirm sobre um pending que já existe —
 isso é o gate, não um detalhe de implementação.
+
+Eixo de ENTREGA (project-init, session-new, verify, post-work, resume,
+promote-checks, governance-approve) é casca fina sobre delivery.py: toda a
+lógica de verify/governança/post-work vive lá, não aqui.
 """
 
 from __future__ import annotations
@@ -24,6 +36,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import config  # noqa: E402
+import delivery  # noqa: E402
 import graph  # noqa: E402
 import score  # noqa: E402
 import whatsapp  # noqa: E402
@@ -175,6 +188,107 @@ def cmd_init(a: argparse.Namespace) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------- delivery
+
+
+def cmd_project_init(a: argparse.Namespace) -> int:
+    path = Path(a.path or f"projects/{a.name}").resolve()
+    delivery.init_project(path, a.name, ui=a.ui)
+    print(f"projeto criado em {path}")
+    for p in sorted(path.rglob("*")):
+        print(f"  {p.relative_to(path)}")
+    return 0
+
+
+def cmd_session_new(a: argparse.Namespace) -> int:
+    project = delivery.resolve_project(a.project)
+    brief = ""
+    if a.brief_file:
+        brief = Path(a.brief_file).read_text(encoding="utf-8")
+    session_dir = delivery.new_session(project, a.session, brief=brief)
+    print(f"sessão criada em {session_dir}")
+    return 0
+
+
+def _print_layer(titulo: str, rows: list[dict]) -> None:
+    print(f"-- {titulo} --")
+    if not rows:
+        print("  (nenhum check)")
+        return
+    for r in rows:
+        status = "PASS" if r["ok"] else "FAIL"
+        motivo = f" — {r['reason']}" if r["reason"] else ""
+        print(f"  [{status}] {r['name']}{motivo}")
+
+
+def cmd_verify(a: argparse.Namespace) -> int:
+    project = delivery.resolve_project(a.project)
+    v = delivery.verify(project, a.session)
+    _print_layer("regression", v["regression"])
+    _print_layer("acceptance", v["acceptance"])
+    print(f"regression: {v['regression_passed']}/{v['regression_total']}  "
+          f"acceptance: {v['acceptance_passed']}/{v['acceptance_total']}  "
+          f"total: {v['checks_passed']}/{v['checks_total']}")
+    if v["governance_violations"]:
+        print("!! VIOLAÇÃO DE GOVERNANÇA !!")
+        for viol in v["governance_violations"]:
+            print(f"  - {viol}")
+    if v["new_unregistered_checks"]:
+        print(f"checks novos não registrados: {', '.join(v['new_unregistered_checks'])}")
+    print(f"delivery_success: {v['delivery_success']}")
+    return 0 if v["delivery_success"] == 1 else 1
+
+
+def cmd_post_work(a: argparse.Namespace) -> int:
+    project = delivery.resolve_project(a.project)
+    v = delivery.post_work(project, a.session, actor="cli")
+    _print_layer("regression", v["regression"])
+    _print_layer("acceptance", v["acceptance"])
+    print(f"regression: {v['regression_passed']}/{v['regression_total']}  "
+          f"acceptance: {v['acceptance_passed']}/{v['acceptance_total']}  "
+          f"total: {v['checks_passed']}/{v['checks_total']}")
+    if v["governance_violations"]:
+        print("!! VIOLAÇÃO DE GOVERNANÇA !!")
+        for viol in v["governance_violations"]:
+            print(f"  - {viol}")
+    if v["open_issues"]:
+        print("issues em aberto:")
+        for issue in v["open_issues"]:
+            print(f"  - {issue}")
+    print(f"next_action: {v['next_action']}")
+    print(f"report: {v['report']}")
+    if v["proposal_stub"]:
+        print(f"proposal_stub: {v['proposal_stub']}")
+    print(f"delivery_success: {v['delivery_success']}")
+    return 0 if v["delivery_success"] == 1 else 1
+
+
+def cmd_resume(a: argparse.Namespace) -> int:
+    project = delivery.resolve_project(a.project)
+    print(delivery.resume(project, a.session))
+    return 0
+
+
+def cmd_promote_checks(a: argparse.Namespace) -> int:
+    project = delivery.resolve_project(a.project)
+    movidos = delivery.promote_checks(project, a.session, actor="cli")
+    if not movidos:
+        print("nada a promover")
+    else:
+        print(f"promovidos {len(movidos)} checks para regression:")
+        for m in movidos:
+            print(f"  - {m}")
+    return 0
+
+
+def cmd_governance_approve(a: argparse.Namespace) -> int:
+    project = delivery.resolve_project(a.project)
+    detail = a.note or "aprovação manual"
+    man = delivery.write_manifest(project, actor="cli", detail=detail)
+    print(f"MANIFEST reescrito: {len(man['checks'])} checks registrados")
+    return 0
+
+
 # --------------------------------------------------------------------------- cli
 
 
@@ -225,6 +339,57 @@ def build_parser() -> argparse.ArgumentParser:
     p_init = sub.add_parser("init", help="cria .harness/ (versão pinada, config, results/) no projeto")
     p_init.add_argument("--path", default=".", help="diretório do projeto (default: cwd)")
     p_init.set_defaults(func=cmd_init)
+
+    p_pinit = sub.add_parser(
+        "project-init", help="cria a árvore de um projeto de ENTREGA (projects/<nome>)"
+    )
+    p_pinit.add_argument("name", help="nome do projeto")
+    p_pinit.add_argument("--path", default=None, help="diretório do projeto (default: projects/<nome>)")
+    p_pinit.add_argument("--ui", action="store_true", help="projeto tem critérios de UI (revisão humana)")
+    p_pinit.set_defaults(func=cmd_project_init)
+
+    p_snew = sub.add_parser("session-new", help="abre uma nova sessão de entrega num projeto")
+    p_snew.add_argument("--project", required=True, help="nome (projects/<nome>) ou path do projeto")
+    p_snew.add_argument("--session", required=True, help="id da sessão")
+    p_snew.add_argument("--brief-file", default=None, help="arquivo com o brief da sessão")
+    p_snew.set_defaults(func=cmd_session_new)
+
+    p_verify = sub.add_parser(
+        "verify", help="roda regression + acceptance da sessão e avalia governança"
+    )
+    p_verify.add_argument("--project", required=True)
+    p_verify.add_argument("--session", required=True)
+    p_verify.set_defaults(func=cmd_verify)
+
+    p_pw = sub.add_parser(
+        "post-work", help="verify + decide next_action + gera report da sessão"
+    )
+    p_pw.add_argument("--project", required=True)
+    p_pw.add_argument("--session", required=True)
+    p_pw.set_defaults(func=cmd_post_work)
+
+    p_resume = sub.add_parser("resume", help="resumo formatado do estado da sessão")
+    p_resume.add_argument("--project", required=True)
+    p_resume.add_argument("--session", required=True)
+    p_resume.set_defaults(func=cmd_resume)
+
+    p_promote = sub.add_parser(
+        "promote-checks", help="promove acceptance/<session> aprovado para regression/ permanente"
+    )
+    p_promote.add_argument("--project", required=True)
+    p_promote.add_argument("--session", required=True)
+    p_promote.set_defaults(func=cmd_promote_checks)
+
+    p_gov = sub.add_parser(
+        "governance-approve",
+        help="ÚNICO comando que reescreve o MANIFEST de regression. Uso: aprovação "
+             "manual e explícita do dono após remover/editar um check de regression. "
+             "Nunca é chamado implicitamente por verify/post-work — isso destruiria "
+             "o gate de governança.",
+    )
+    p_gov.add_argument("--project", required=True)
+    p_gov.add_argument("--note", default="", help="motivo da aprovação (registrado no manifest)")
+    p_gov.set_defaults(func=cmd_governance_approve)
 
     return ap
 
