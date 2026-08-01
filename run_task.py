@@ -13,6 +13,7 @@ Done = verify.py sai com 0. Nada mais. O que o agent diz não conta.
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -24,7 +25,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 from agent import BACKEND, MODEL, run_agent  # noqa: E402
 
 ROOT = Path(__file__).parent.resolve()
-RESULTS = ROOT / "results.tsv"
+# evolve.py roda o runner a partir de uma sandbox (agent.py patchado) mas grava
+# no log canônico: a candidata precisa entrar no MESMO results.tsv do baseline,
+# senão score.py --ab não tem os dois lados para comparar.
+RESULTS = Path(os.environ.get("HARNESS_RESULTS", ROOT / "results.tsv"))
+# Tasks moram no repo; a sandbox copia só o genome.
+TASKS_ROOT = Path(os.environ.get("HARNESS_TASKS_ROOT", ROOT)).resolve()
 HEADER = [
     "timestamp",
     "harness_version",
@@ -107,7 +113,7 @@ def run_once(task_dir: Path, suite: str, keep: bool) -> bool:
 
 
 def discover(suite: str) -> list[Path]:
-    base = ROOT / "tasks" if suite == "fixed" else ROOT / "benchmarks" / suite
+    base = TASKS_ROOT / "tasks" if suite == "fixed" else TASKS_ROOT / "benchmarks" / suite
     return sorted(p for p in base.glob("task_*") if (p / "prompt.md").exists())
 
 

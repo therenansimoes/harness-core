@@ -39,3 +39,10 @@ timestamp	harness_version	backend	model	suite	task_id	success	seconds	tokens	cos
 2026-08-01T16:28:12+00:00	v0.2	cli	claude-haiku-4-5-20251001	fixed	task_01	1	15.7	1322	0.0335	2	
 2026-08-01T16:28:43+00:00	v0.2	cli	claude-haiku-4-5-20251001	fixed	task_02	1	31.2	2603	0.0591	5	
 2026-08-01T16:29:10+00:00	v0.2	cli	claude-haiku-4-5-20251001	fixed	task_03	1	27.2	2148	0.0611	8	
+2026-08-01T16:47:53+00:00	v0.2-dummy	cli	claude-haiku-4-5-20251001	fixed	task_01	1	14.3	1250	0.0340	2	
+2026-08-01T16:48:26+00:00	v0.2-dummy	cli	claude-haiku-4-5-20251001	fixed	task_02	1	32.6	2364	0.0614	6	
+2026-08-01T16:48:57+00:00	v0.2-dummy	cli	claude-haiku-4-5-20251001	fixed	task_03	1	31.5	2282	0.0674	7	
+2026-08-01T16:49:16+00:00	v0.2-dummy	cli	claude-haiku-4-5-20251001	fixed	task_01	1	19.1	1619	0.0362	2	
+2026-08-01T16:49:53+00:00	v0.2-dummy	cli	claude-haiku-4-5-20251001	fixed	task_02	1	36.3	3183	0.0702	7	
+2026-08-01T16:50:28+00:00	v0.2-dummy	cli	claude-haiku-4-5-20251001	fixed	task_03	1	35.1	3304	0.0731	9	
+2026-08-01T16:52:07+00:00	v0.2	cli	claude-haiku-4-5-20251001	fixed	task_01	1	12.3	1013	0.0318	2	

@@ -53,11 +53,27 @@ Toda task nova precisa de um `verify.py` que foi **testado nas duas direções**
 falha no estado errado, passa no estado certo. Verificador que só sabe passar
 não mede nada.
 
-## A/B (etapa 3)
+## Núcleo self-evolutive
 
-1. Baseline de `results.tsv` na `harness_version` atual
-2. Mudar UMA coisa em `agent.py`, bump `harness_version.txt`
-3. `--all --repeat 3` de novo
-4. Comparar success / seconds / cost por versão
-5. Confirmar em `benchmarks/sealed/` antes de creditar
-6. Registrar merge|discard + motivo em `evolution/decisions/`
+Um ciclo = proposta → sandbox → suite → juiz → decisão → merge|discard → graph.
+O baseline **não é tocado** até todos os gates passarem.
+
+```bash
+cp evolution/proposals/_template.md evolution/proposals/minha_ideia.md
+$EDITOR evolution/proposals/minha_ideia.md      # hipótese + [change] old/new
+python3 evolve.py --proposal evolution/proposals/minha_ideia.md --repeat 3
+```
+
+Exit **0 = merge** (genome promovido, versão bumpada) · **1 = discard** (baseline
+intacto) · **2 = erro de infra** (não é veredito).
+
+Quem julga é o `score.py --ab`, os mesmos gates normalizados de sempre — o
+`evolve.py` não tem score próprio. A decisão sai em `evolution/decisions/<id>.md`
+e tudo fica ligado no graph (proposta → runs da candidata → decisão).
+
+```bash
+python3 graph_query.py decisions          # histórico + placar merge/discard
+python3 graph_query.py runs v0.2          # runs de uma versão
+python3 graph_query.py ab v0.2 v0.3       # dois lados no graph
+python3 tests/test_evolve_paths.py        # merge e discard sem gastar API
+```
