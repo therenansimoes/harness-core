@@ -34,10 +34,19 @@ def check(cond: bool, msg: str) -> None:
         FAILS.append(msg)
 
 
-def fresh() -> Path:
-    """Cópia limpa do demo_site, com MANIFEST recém-aprovado."""
+def fresh(ui_enabled: bool = False) -> Path:
+    """Cópia limpa do demo_site, com MANIFEST recém-aprovado.
+
+    UI desligada por default: a camada Playwright é lenta e tem cobertura
+    própria em tests/test_ui_gate.py. Aqui o foco é regression/acceptance e
+    governança.
+    """
     dst = TMP / f"proj_{len(list(TMP.glob('proj_*')))}"
     shutil.copytree(REPO / "projects" / "demo_site", dst)
+    if not ui_enabled:
+        cfg = dst / ".harness" / "config.toml"
+        cfg.write_text(cfg.read_text(encoding="utf-8") + "\n[ui]\nenabled = false\n",
+                       encoding="utf-8")
     delivery.write_manifest(dst, actor="teste", detail="baseline", record=False)
     delivery.new_session(dst, "s001")
     return dst
@@ -136,7 +145,8 @@ def test_post_work_grava_tudo():
     st = json.loads((p / "sessions" / "s001" / "state.json").read_text(encoding="utf-8"))
     check(st["next_action"] == "continue_delivery", "state.json não foi atualizado")
     check(st["scores"]["delivery_success"] == 0, "state não tem delivery_success")
-    check(st["scores"]["needs_human_ui_review"] is True, "demo_site é ui=true, deveria pedir review")
+    check(st["scores"]["needs_human_ui_review"] is True,
+          "ui declarada e não verificável deveria pedir review humano")
     check(any("acceptance:" in i for i in st["open_issues"]), f"open_issues vazio: {st['open_issues']}")
 
     hist = graph.delivery_history(p.name)
@@ -144,8 +154,14 @@ def test_post_work_grava_tudo():
     check(hist[0]["next_action"] == "continue_delivery", "graph não tem o next_action")
 
 
-def test_ui_forca_revisao_humana():
-    p = fresh()
+def test_ui_declarada_sem_suite_falha_fechado():
+    """`ui = true` mas suite indisponível: não fecha sozinho — falha fechado.
+
+    O gate automático de UI vive em test_ui_gate.py. Aqui o que se prova é o
+    contrário: quando a máquina NÃO consegue verificar a UI, ela não finge que
+    está tudo bem — devolve para o humano.
+    """
+    p = fresh(ui_enabled=False)
     (p / "site" / "precos.html").write_text(
         '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">'
         "<title>P</title></head><body><h1>Planos</h1>"
@@ -159,9 +175,9 @@ def test_ui_forca_revisao_humana():
     r = delivery.post_work(p, "s001", actor="teste")
     check(r["delivery_success"] == 1, "tudo verde deveria dar delivery_success 1")
     check(r["next_action"] == "await_renan",
-          f"projeto UI não pode fechar sozinho, veio {r['next_action']}")
+          f"UI não verificável não pode fechar sozinha, veio {r['next_action']}")
     check(any("needs_human_ui_review" in i for i in r["open_issues"]),
-          "faltou marcar needs_human_ui_review")
+          "faltou marcar needs_human_ui_review quando a UI não é verificável")
 
 
 def test_promote_sobe_a_barra():

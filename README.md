@@ -188,8 +188,57 @@ verde é exatamente o que este harness existe para impedir.
 | `evolve_harness` | falha recorrente — o gargalo parece ser o motor |
 | `done` | tudo verde, nada pendente |
 
-UI não é automatizável ainda: projeto com `ui = true` sempre termina em
-`needs_human_ui_review` com uma rubrica de 5 itens no report, nunca em `done`.
+### UI: gate automático com Playwright
+
+Terceira camada de verify. `ui = true` **não** significa mais "espera o Renan":
+significa "roda a suite de UI". O humano entra só onde a máquina não conclui.
+
+```bash
+python3 harness_cli.py ui-test     --project demo_site   # roda a suite
+python3 harness_cli.py ui-baseline --project demo_site --note "novo header aprovado"
+python3 tests/test_ui_gate.py                            # 5 provas do gate
+```
+
+Os checks vivem em `projects/<nome>/ui/tests/*.spec.mjs`, as baselines em
+`ui/baselines/` (versionadas). O que roda hoje no demo: home 200 + estrutura
+mínima, CSS de fato aplicado no browser (não só o `<link>` no HTML), links
+internos sem 404, console sem erro, screenshot desktop vs baseline, e ausência
+de scroll horizontal em 375px — mais screenshot mobile.
+
+Diff de screenshot usa `maxDiffPixelRatio: 0.02`. Pixel-perfect é frágil
+(antialiasing, versão do Chrome, fonte); 2% pega quebra real de layout sem
+alarme falso a cada patch do browser.
+
+`needs_human_ui_review` agora só acontece em quatro casos:
+
+| gatilho | por quê |
+|---|---|
+| suite de UI falhou | ambíguo: bug real ou baseline desatualizada? a máquina não distingue |
+| `review_subjective = true` (ou `REVIEW_UI_SUBJECTIVE=1`) | você pediu rubrica semântica |
+| check `manual_ui*` na acceptance | alguém marcou explicitamente |
+| `ui = true` mas a suite não roda | UI declarada e não verificável falha fechado |
+
+Com tudo verde, um projeto de UI chega a **`done` sem passar pelo Renan** — que
+era o objetivo desta camada.
+
+**`ui-baseline` é sensível e por isso fica registrado na governança:** a baseline
+nova vira a verdade. Se ela for gravada com um bug visual na tela, o bug passa a
+ser o esperado e nenhum check reclama de novo.
+
+Config por projeto em `.harness/config.toml`:
+
+```toml
+[ui]
+enabled = true
+review_subjective = false   # true = sempre pede olho humano
+review_on_failure = true    # false = falha de UI vira continue_delivery, não await_renan
+```
+
+**Browser:** a config usa `channel: 'chrome'` — o Chrome do sistema, sem baixar
+bundle. O runner (`@playwright/test`) está instalado na raiz do repo, e o Node
+resolve subindo a árvore: **projeto fora de `harness-core/` precisa do próprio
+`npm i -D @playwright/test`**, senão a suite falha com `ERR_MODULE_NOT_FOUND` e
+o post-work cai em `needs_human_ui_review` por não conseguir verificar.
 
 ## CLI
 

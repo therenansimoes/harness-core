@@ -8,3 +8,7 @@ evolution/.assist_cursor
 channel/whatsapp/auth/
 channel/whatsapp/inbox.jsonl
 channel/whatsapp/node_modules/
+.ui_test_tmp/
+node_modules/
+projects/*/ui/report.json
+projects/*/ui/test-results/

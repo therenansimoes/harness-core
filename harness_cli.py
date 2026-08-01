@@ -289,6 +289,36 @@ def cmd_governance_approve(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ui_test(a: argparse.Namespace) -> int:
+    project = delivery.resolve_project(a.project)
+    result = delivery.run_ui_suite(project)
+    if not result["ran"]:
+        print(f"UI não rodou: {result['reason']}")
+        return 2
+    for test in result["tests"]:
+        status = "PASS" if test["ok"] else "FAIL"
+        motivo = f" — {test['reason']}" if test["reason"] else ""
+        print(f"[{status}] {test['name']}{motivo}")
+    print(f"ui: {result['passed']}/{result['total']}")
+    return 0 if result["passed"] == result["total"] else 1
+
+
+def cmd_ui_baseline(a: argparse.Namespace) -> int:
+    project = delivery.resolve_project(a.project)
+    result = delivery.run_ui_suite(project, update_baseline=True)
+    if not result["ran"]:
+        print(f"UI não rodou: {result['reason']}")
+        return 2
+    project_name = project.name
+    detail = a.note or "atualização manual de baseline"
+    graph.record_governance_event(project=project_name, action="update_ui_baseline",
+                                   actor="cli", detail=detail)
+    print(f"Baseline atualizada: {result['total']} checks rodaram")
+    print("!! AVISO: baseline nova passa a ser a verdade. Se ela foi gravada com um bug visual na tela,")
+    print("   o bug vira o esperado e nenhum check volta a reclamar sobre isso.")
+    return 0
+
+
 # --------------------------------------------------------------------------- cli
 
 
@@ -390,6 +420,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_gov.add_argument("--project", required=True)
     p_gov.add_argument("--note", default="", help="motivo da aprovação (registrado no manifest)")
     p_gov.set_defaults(func=cmd_governance_approve)
+
+    p_uit = sub.add_parser("ui-test", help="roda suite Playwright e exibe placar")
+    p_uit.add_argument("--project", required=True, help="nome (projects/<nome>) ou path do projeto")
+    p_uit.set_defaults(func=cmd_ui_test)
+
+    p_uib = sub.add_parser(
+        "ui-baseline",
+        help="roda suite Playwright com --update-snapshots e registra o ato na governança. "
+             "SENSÍVEL: baseline nova passa a ser a verdade — se gravada com bug visual, "
+             "o bug vira esperado e nenhum check reclamará.",
+    )
+    p_uib.add_argument("--project", required=True, help="nome (projects/<nome>) ou path do projeto")
+    p_uib.add_argument("--note", default="", help="motivo da atualização (registrado na governança)")
+    p_uib.set_defaults(func=cmd_ui_baseline)
 
     return ap
 

@@ -8,16 +8,16 @@
     "brief não marcado: `site/precos.html` existe e é HTML válido",
     "brief não marcado: três blocos de plano com `class=\"plano\"`",
     "brief não marcado: título `<h1>` na página",
-    "brief não marcado: link da home para a página de preços",
-    "needs_human_ui_review: rubrica visual não é automatizável ainda"
+    "brief não marcado: link da home para a página de preços"
   ],
   "scores": {
     "delivery_success": 0,
     "regression": "3/3",
     "acceptance": "0/2",
-    "needs_human_ui_review": true
+    "ui": "6/6",
+    "needs_human_ui_review": false
   },
   "next_action": "continue_delivery",
   "created": "2026-08-01T18:09:28+00:00",
-  "updated": "2026-08-01T18:09:38+00:00"
+  "updated": "2026-08-01T18:29:33+00:00"
 }

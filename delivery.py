@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tomllib
@@ -196,6 +197,97 @@ def check_governance(project: Path) -> tuple[list[str], list[str]]:
     return violacoes, novos
 
 
+# ------------------------------------------------------------------------- ui
+
+
+def ui_dir(project: Path) -> Path:
+    return project / "ui"
+
+
+def ui_config(project: Path) -> dict:
+    """Política de UI. O default é o ponto desta camada: gate automático.
+
+    Antes, `ui = true` significava "sempre precisa do Renan". Isso fazia dele o
+    gargalo de toda entrega visual. Agora o Playwright é o gate; humano só entra
+    quando a máquina não consegue decidir.
+    """
+    cfg = project_cfg(project).get("ui", {})
+    subjective = cfg.get("review_subjective", False)
+    if os.environ.get("REVIEW_UI_SUBJECTIVE", "").lower() in ("1", "true", "yes"):
+        subjective = True
+    return {
+        "enabled": cfg.get("enabled", True),
+        "review_subjective": subjective,
+        # Falha de UI é ambígua por natureza (pode ser bug, pode ser mudança
+        # intencional de layout que precisa de baseline nova). Por isso, falhou
+        # -> humano decide, em vez de "continue_delivery" cego.
+        "review_on_failure": cfg.get("review_on_failure", True),
+        "config_file": cfg.get("config", "ui/playwright.config.mjs"),
+    }
+
+
+def has_ui_suite(project: Path) -> bool:
+    c = ui_config(project)
+    return (project / c["config_file"]).exists()
+
+
+def run_ui_suite(project: Path, update_baseline: bool = False) -> dict:
+    """Roda a suite Playwright e devolve o placar. Nunca levanta por teste falho."""
+    c = ui_config(project)
+    if not has_ui_suite(project):
+        return {"ran": False, "tests": [], "passed": 0, "total": 0,
+                "reason": "sem suite de UI (ui/playwright.config.mjs não existe)"}
+
+    cmd = ["npx", "playwright", "test", "--config", c["config_file"], "--reporter=json"]
+    if update_baseline:
+        cmd.append("--update-snapshots")
+    try:
+        proc = subprocess.run(cmd, cwd=project, capture_output=True, text=True, timeout=600)
+    except FileNotFoundError:
+        return {"ran": False, "tests": [], "passed": 0, "total": 0,
+                "reason": "npx não encontrado — Node/Playwright não instalado"}
+    except subprocess.TimeoutExpired:
+        return {"ran": False, "tests": [], "passed": 0, "total": 0, "reason": "timeout na suite de UI"}
+
+    tests: list[dict] = []
+    try:
+        # O reporter json escreve no stdout; qualquer ruído antes do '{' é log.
+        raw = proc.stdout[proc.stdout.index("{"):]
+        data = json.loads(raw)
+    except (ValueError, json.JSONDecodeError):
+        return {"ran": False, "tests": [], "passed": 0, "total": 0,
+                "reason": f"saída ilegível do Playwright: {(proc.stderr or proc.stdout)[-200:]}"}
+
+    def walk(suites):
+        for s in suites or []:
+            for spec in s.get("specs", []) or []:
+                ok = bool(spec.get("ok"))
+                motivo = ""
+                if not ok:
+                    for t in spec.get("tests", []) or []:
+                        for r in t.get("results", []) or []:
+                            err = (r.get("error") or {}).get("message") or ""
+                            if err:
+                                motivo = err.strip().splitlines()[0][:200]
+                                break
+                        if motivo:
+                            break
+                tests.append({"name": spec.get("title", "?"), "ok": ok, "reason": motivo})
+            walk(s.get("suites"))
+
+    walk(data.get("suites"))
+    passed = sum(1 for t in tests if t["ok"])
+    return {
+        "ran": True, "tests": tests, "passed": passed, "total": len(tests),
+        "reason": "" if passed == len(tests) else f"{len(tests) - passed} check(s) de UI falharam",
+    }
+
+
+def manual_ui_requested(project: Path, session_id: str) -> bool:
+    """Um check chamado manual_ui* na acceptance força revisão humana explícita."""
+    return any(c.name.startswith("manual_ui") for c in acceptance_checks(project, session_id))
+
+
 # --------------------------------------------------------------------- verify
 
 
@@ -214,32 +306,55 @@ def run_check(project: Path, check: Path) -> dict:
         return {"name": check.name, "ok": False, "reason": "timeout"}
 
 
-def verify(project: Path, session_id: str) -> dict:
-    """Roda as duas camadas. Governança é avaliada ANTES e pode invalidar tudo."""
+def verify(project: Path, session_id: str, skip_ui: bool = False) -> dict:
+    """Roda as TRÊS camadas. Governança é avaliada ANTES e pode invalidar tudo."""
     violacoes, novos = check_governance(project)
     reg = [run_check(project, c) for c in regression_checks(project)]
     acc = [run_check(project, c) for c in acceptance_checks(project, session_id)]
 
+    uc = ui_config(project)
+    ui_on = bool(uc["enabled"]) and has_ui_suite(project) and not skip_ui
+    ui = (run_ui_suite(project) if ui_on
+          else {"ran": False, "tests": [], "passed": 0, "total": 0,
+                "reason": "ui desligada" if skip_ui or not uc["enabled"] else "sem suite de UI"})
+
     reg_ok = sum(1 for r in reg if r["ok"])
     acc_ok = sum(1 for r in acc if r["ok"])
+    ui_ok = ui["ran"] and ui["passed"] == ui["total"] and ui["total"] > 0
+    ui_falhou = ui["ran"] and not ui_ok
+
+    total = len(reg) + len(acc) + (ui["total"] if ui["ran"] else 0)
+    passed = reg_ok + acc_ok + (ui["passed"] if ui["ran"] else 0)
+
     return {
         "project": project.name,
         "session_id": session_id,
         "regression": reg,
         "acceptance": acc,
+        "ui": ui,
+        "ui_enabled": ui_on,
+        "ui_ok": ui_ok,
+        "ui_failed": ui_falhou,
         "regression_passed": reg_ok,
         "regression_total": len(reg),
         "acceptance_passed": acc_ok,
         "acceptance_total": len(acc),
-        "checks_passed": reg_ok + acc_ok,
-        "checks_total": len(reg) + len(acc),
+        "ui_passed": ui["passed"] if ui["ran"] else 0,
+        "ui_total": ui["total"] if ui["ran"] else 0,
+        "checks_passed": passed,
+        "checks_total": total,
         "governance_violations": violacoes,
         "new_unregistered_checks": novos,
         # Entrega só é sucesso com TUDO verde e governança limpa. Um check de
         # regression apagado é falha mesmo que todo o resto passe — senão o
         # caminho mais fácil para "ficar verde" seria apagar o check.
+        # UI agora conta: se a suite rodou e falhou, não há entrega bem-sucedida.
         "delivery_success": int(
-            not violacoes and reg_ok == len(reg) and acc_ok == len(acc) and (len(reg) + len(acc)) > 0
+            not violacoes
+            and reg_ok == len(reg)
+            and acc_ok == len(acc)
+            and not ui_falhou
+            and total > 0
         ),
     }
 
@@ -273,7 +388,28 @@ def brief_open_items(project: Path, session_id: str) -> list[str]:
     ]
 
 
-def decide_next_action(v: dict, abertos: list[str], ui: bool, recorrentes: list[str]) -> str:
+def needs_human_ui(project: Path, session_id: str, v: dict, ui_declared: bool) -> tuple[bool, str]:
+    """Quando o Renan REALMENTE precisa olhar. Deliberadamente estreito.
+
+    O default é a máquina decidir. Humano entra só nos casos em que a máquina
+    não tem como concluir sozinha — não porque "tem UI no projeto".
+    """
+    c = ui_config(project)
+    if manual_ui_requested(project, session_id):
+        return True, "check `manual_ui*` explícito na acceptance"
+    if c["review_subjective"]:
+        return True, "review_subjective ligado (rubrica semântica pedida)"
+    if v["ui_failed"] and c["review_on_failure"]:
+        # Falha de UI é ambígua: pode ser regressão real ou mudança de layout
+        # intencional que só precisa de baseline nova. A máquina não distingue.
+        return True, "suite de UI falhou — bug real ou baseline desatualizada?"
+    if ui_declared and not v["ui"]["ran"]:
+        return True, f"UI declarada mas não verificável: {v['ui']['reason']}"
+    return False, ""
+
+
+def decide_next_action(v: dict, abertos: list[str], needs_human: bool,
+                       recorrentes: list[str]) -> str:
     if v["governance_violations"]:
         return "await_renan"
     if recorrentes:
@@ -282,7 +418,9 @@ def decide_next_action(v: dict, abertos: list[str], ui: bool, recorrentes: list[
         return "continue_delivery"
     if v["acceptance_passed"] < v["acceptance_total"]:
         return "continue_delivery"
-    if abertos or ui:
+    if v["ui_failed"] and not needs_human:
+        return "continue_delivery"
+    if needs_human or abertos:
         return "await_renan"
     return "done"
 
@@ -365,14 +503,16 @@ def post_work(project: Path, session_id: str, actor: str = "cli") -> dict:
 
     abertos = brief_open_items(project, session_id)
     recorrentes = failure_patterns(project, session_id, v)
-    next_action = decide_next_action(v, abertos, ui, recorrentes)
+    human, motivo_human = needs_human_ui(project, session_id, v, ui)
+    next_action = decide_next_action(v, abertos, human, recorrentes)
 
     issues = [f"governança: {x}" for x in v["governance_violations"]]
     issues += [f"regression: {r['name']} — {r['reason']}" for r in v["regression"] if not r["ok"]]
     issues += [f"acceptance: {r['name']} — {r['reason']}" for r in v["acceptance"] if not r["ok"]]
+    issues += [f"ui: {t['name']} — {t['reason']}" for t in v["ui"]["tests"] if not t["ok"]]
     issues += [f"brief não marcado: {b}" for b in abertos]
-    if ui:
-        issues.append("needs_human_ui_review: rubrica visual não é automatizável ainda")
+    if human:
+        issues.append(f"needs_human_ui_review: {motivo_human}")
 
     stub = proposal_stub(project, session_id, recorrentes) if recorrentes else None
 
@@ -383,13 +523,14 @@ def post_work(project: Path, session_id: str, actor: str = "cli") -> dict:
             "delivery_success": v["delivery_success"],
             "regression": f"{v['regression_passed']}/{v['regression_total']}",
             "acceptance": f"{v['acceptance_passed']}/{v['acceptance_total']}",
-            "needs_human_ui_review": ui,
+            "ui": f"{v['ui_passed']}/{v['ui_total']}" if v["ui"]["ran"] else "n/a",
+            "needs_human_ui_review": human,
         },
         "next_action": next_action,
     })
     save_state(project, session_id, st)
 
-    report = write_report(project, session_id, v, abertos, ui, next_action, stub)
+    report = write_report(project, session_id, v, abertos, human, motivo_human, next_action, stub)
     graph.update_session_status(session_id, next_action)
     graph.record_delivery_event(
         session_id=session_id, project=project.name, kind="post_work",
@@ -404,12 +545,13 @@ def post_work(project: Path, session_id: str, actor: str = "cli") -> dict:
     v["next_action"] = next_action
     v["report"] = str(report)
     v["open_issues"] = issues
+    v["needs_human_ui_review"] = human
     v["proposal_stub"] = str(stub) if stub else ""
     return v
 
 
 def write_report(project: Path, session_id: str, v: dict, abertos: list[str],
-                 ui: bool, next_action: str, stub: Path | None) -> Path:
+                 human: bool, motivo_human: str, next_action: str, stub: Path | None) -> Path:
     def tabela(rows):
         if not rows:
             return "_(nenhum)_"
@@ -458,6 +600,14 @@ Este é o eixo de ENTREGA. Não se mistura com o score de laboratório do harnes
 |---|---|---|
 {tabela(v['acceptance'])}
 
+## UI automática ({v['ui_passed']}/{v['ui_total']}) — Playwright
+
+{("_Não rodou: " + v['ui']['reason'] + "_") if not v['ui']['ran'] else ""}
+
+| | check | motivo |
+|---|---|---|
+{tabela(v['ui']['tests'])}
+
 ## Governança
 
 {gov_md}{novos_md}
@@ -465,9 +615,9 @@ Este é o eixo de ENTREGA. Não se mistura com o score de laboratório do harnes
 
 {("Todos os itens do brief estão marcados." if not abertos else chr(10).join(f"- [ ] {b}" for b in abertos))}
 
-## UI
+## Revisão humana de UI
 
-{("Projeto marcado como UI. **needs_human_ui_review** — a rubrica abaixo não é automatizável ainda:" + chr(10) + chr(10) + chr(10).join(f"- [ ] {r}" for r in UI_RUBRICA)) if ui else "Projeto sem UI declarada — sem rubrica visual."}
+{("**needs_human_ui_review** — " + motivo_human + chr(10) + chr(10) + "Rubrica subjetiva (o que a máquina não decide):" + chr(10) + chr(10) + chr(10).join(f"- [ ] {r}" for r in UI_RUBRICA)) if human else "Não necessária: os checks automáticos de UI resolveram. O Renan não é gargalo aqui."}
 
 {f"## Proposta aberta{chr(10)}{chr(10)}Falhas recorrentes geraram um stub de governança em `{stub.relative_to(ROOT) if stub else ''}`. O worker não pode alterar critério de avaliação — só sinalizar." if stub else ""}
 """
