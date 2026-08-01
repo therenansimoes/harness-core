@@ -4,3 +4,7 @@ __pycache__/
 .DS_Store
 evolution/sandboxes/
 evolution/critique.db
+evolution/.assist_cursor
+channel/whatsapp/auth/
+channel/whatsapp/inbox.jsonl
+channel/whatsapp/node_modules/

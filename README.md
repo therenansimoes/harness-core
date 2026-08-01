@@ -75,5 +75,72 @@ e tudo fica ligado no graph (proposta → runs da candidata → decisão).
 python3 graph_query.py decisions          # histórico + placar merge/discard
 python3 graph_query.py runs v0.2          # runs de uma versão
 python3 graph_query.py ab v0.2 v0.3       # dois lados no graph
-python3 tests/test_evolve_paths.py        # merge e discard sem gastar API
+python3 tests/test_evolve_paths.py        # 4 caminhos do ciclo, sem gastar API
+```
+
+### fixed vs sealed — quando um merge é "creditado"
+
+| Suite | Onde | Pergunta que responde | Papel no gate |
+|---|---|---|---|
+| `tasks/` (**fixed**) | hill-climb | "melhorou?" | precisa de **ganho** ≥10% + piso |
+| `benchmarks/sealed/` | held-out | "generaliza?" | precisa só do **piso** (success, truncamento) |
+
+O `evolve.py` roda a fixed primeiro. Se os gates reprovam, acabou — sealed nem
+roda, porque held-out gasto em candidata morta é budget queimado e, repetido,
+vira treino disfarçado na própria held-out. Se a fixed aprova, a candidata vai
+para a sealed e só é **creditada** se o piso se mantiver lá.
+
+- fixed aprova + sealed confirma → **MERGE creditado**
+- fixed aprova + sealed reprova → **DISCARD** (ganho que não generaliza é overfit)
+- fixed aprova + sealed vazia ou `--no-credit` → **MERGE sem crédito**, e a
+  decision diz isso com todas as letras
+
+## WhatsApp assist — nunca envia sem confirmação
+
+Canal de assistência **ao dono**, não atendimento a terceiros. A regra é de
+código, não de disciplina:
+
+> `whatsapp.confirm_send()` é a única função do repo que chama o transporte.
+
+Qualquer outro caminho no máximo cria um `pending` no graph — um pedido de
+permissão, não uma mensagem. Quatro camadas independentes seguram: allowlist ao
+criar, allowlist ao confirmar, máquina de estados no SQLite (só `confirmed` vira
+`sent`) e o serviço Node, que revalida a allowlist e só escuta em `127.0.0.1`.
+
+```bash
+# 1. configure (fora do git)
+mkdir -p ~/.config/harness-core && python3 -c "import config; print(config.example_toml())" \
+  > ~/.config/harness-core/config.toml && $EDITOR ~/.config/harness-core/config.toml
+
+# 2. suba o serviço e pareie lendo o QR uma única vez
+cd channel/whatsapp && npm install && WA_ALLOWLIST="55SEUNUMERO@s.whatsapp.net" npm start
+
+# 3. assist: lê o inbox, obedece só o dono
+python3 assist.py --watch
+```
+
+Fluxo de um envio, de ponta a ponta:
+
+```bash
+python3 harness_cli.py whatsapp-pending      # o que está esperando permissão
+python3 harness_cli.py whatsapp-confirm 3    # ÚNICO caminho que envia
+python3 harness_cli.py whatsapp-cancel 3     # nada sai
+python3 tests/test_outbound_gate.py          # 7 provas de que o gate segura
+```
+
+Pelo próprio WhatsApp o dono manda `status`, `pendentes`, `confirmar <id>`,
+`cancelar <id>`, `decision`. Mensagem de qualquer outro número é ignorada, grupo
+nunca comanda nada, e **até a resposta ao dono fica pendente** — a menos que
+você ligue `allow_auto_reply_to_owner` (default `false`).
+
+Não existe comando "enviar". Se você procurar um atalho que cria e já confirma,
+não vai achar: a ausência dele é a funcionalidade.
+
+## CLI
+
+```bash
+python3 harness_cli.py status                # versão, score, última decision, pendentes
+python3 harness_cli.py run --all             # roda a suite
+python3 harness_cli.py evolve --proposal ... # um ciclo
+python3 harness_cli.py init --path ~/projeto # cria .harness/ com pin de versão
 ```

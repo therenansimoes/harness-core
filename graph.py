@@ -86,9 +86,36 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             gates_json TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS outbound_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            to_addr TEXT NOT NULL,
+            body TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('pending', 'confirmed', 'sent', 'cancelled', 'failed')),
+            requested_by TEXT NOT NULL,
+            context TEXT DEFAULT '',
+            confirmed_by TEXT,
+            ts_confirm TEXT,
+            ts_sent TEXT,
+            message_id TEXT,
+            error TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS confirmation_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            outbound_id INTEGER NOT NULL,
+            event TEXT NOT NULL CHECK(event IN ('confirm', 'cancel')),
+            actor TEXT NOT NULL,
+            source TEXT NOT NULL,
+            note TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_runs_harness_version ON runs(harness_version);
         CREATE INDEX IF NOT EXISTS idx_runs_proposal_id ON runs(proposal_id);
         CREATE INDEX IF NOT EXISTS idx_decisions_proposal_id ON decisions(proposal_id);
+        CREATE INDEX IF NOT EXISTS idx_outbound_status ON outbound_messages(status);
+        CREATE INDEX IF NOT EXISTS idx_confirmation_outbound_id ON confirmation_events(outbound_id);
         """
     )
     conn.commit()
@@ -241,6 +268,194 @@ def summary_for_ab(version_a: str, version_b: str, db_path=None) -> dict:
         conn.close()
 
 
+# ------------------------------------------------------------- outbound gate
+#
+# Nenhuma função abaixo envia nada nem conhece Baileys/rede — só modela e
+# registra o estado do gate de confirmação de envio de WhatsApp.
+#
+#   pending -> confirmed -> sent
+#      \-> cancelled        \-> failed
+#   confirmed -> cancelled / failed
+
+
+def record_outbound_request(to_addr: str, body: str, requested_by: str,
+                             context: str = "", ts: str | None = None, db_path=None) -> int:
+    ts = ts or _now()
+    conn = _connect(db_path)
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO outbound_messages
+                (ts, to_addr, body, status, requested_by, context)
+            VALUES (?, ?, ?, 'pending', ?, ?)
+            """,
+            (ts, to_addr, body, requested_by, context),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def _fetch_outbound(conn: sqlite3.Connection, outbound_id: int) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM outbound_messages WHERE id = ?", (outbound_id,)
+    ).fetchone()
+
+
+def confirm_outbound(outbound_id: int, actor: str, source: str = "cli",
+                      note: str = "", ts: str | None = None, db_path=None) -> dict:
+    ts = ts or _now()
+    conn = _connect(db_path)
+    try:
+        row = _fetch_outbound(conn, outbound_id)
+        if row is None:
+            raise ValueError(f"outbound {outbound_id} não existe")
+        if row["status"] != "pending":
+            raise ValueError(
+                f"outbound {outbound_id} está '{row['status']}', não pode confirmar"
+            )
+        conn.execute(
+            """
+            UPDATE outbound_messages
+            SET status = 'confirmed', confirmed_by = ?, ts_confirm = ?
+            WHERE id = ?
+            """,
+            (actor, ts, outbound_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO confirmation_events (ts, outbound_id, event, actor, source, note)
+            VALUES (?, ?, 'confirm', ?, ?, ?)
+            """,
+            (ts, outbound_id, actor, source, note),
+        )
+        conn.commit()
+        return dict(_fetch_outbound(conn, outbound_id))
+    finally:
+        conn.close()
+
+
+def cancel_outbound(outbound_id: int, actor: str, source: str = "cli",
+                     note: str = "", ts: str | None = None, db_path=None) -> dict:
+    ts = ts or _now()
+    conn = _connect(db_path)
+    try:
+        row = _fetch_outbound(conn, outbound_id)
+        if row is None:
+            raise ValueError(f"outbound {outbound_id} não existe")
+        if row["status"] not in ("pending", "confirmed"):
+            raise ValueError(
+                f"outbound {outbound_id} está '{row['status']}', não pode cancelar"
+            )
+        conn.execute(
+            "UPDATE outbound_messages SET status = 'cancelled' WHERE id = ?",
+            (outbound_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO confirmation_events (ts, outbound_id, event, actor, source, note)
+            VALUES (?, ?, 'cancel', ?, ?, ?)
+            """,
+            (ts, outbound_id, actor, source, note),
+        )
+        conn.commit()
+        return dict(_fetch_outbound(conn, outbound_id))
+    finally:
+        conn.close()
+
+
+def mark_outbound_sent(outbound_id: int, message_id: str, ts: str | None = None, db_path=None) -> dict:
+    ts = ts or _now()
+    conn = _connect(db_path)
+    try:
+        row = _fetch_outbound(conn, outbound_id)
+        if row is None:
+            raise ValueError(f"outbound {outbound_id} não existe")
+        if row["status"] != "confirmed":
+            raise ValueError(
+                f"outbound {outbound_id} está '{row['status']}', não pode marcar como sent "
+                "(precisa estar 'confirmed')"
+            )
+        conn.execute(
+            """
+            UPDATE outbound_messages
+            SET status = 'sent', ts_sent = ?, message_id = ?
+            WHERE id = ?
+            """,
+            (ts, message_id, outbound_id),
+        )
+        conn.commit()
+        return dict(_fetch_outbound(conn, outbound_id))
+    finally:
+        conn.close()
+
+
+def mark_outbound_failed(outbound_id: int, error: str, ts: str | None = None, db_path=None) -> dict:
+    ts = ts or _now()
+    conn = _connect(db_path)
+    try:
+        row = _fetch_outbound(conn, outbound_id)
+        if row is None:
+            raise ValueError(f"outbound {outbound_id} não existe")
+        if row["status"] not in ("confirmed", "sent"):
+            raise ValueError(
+                f"outbound {outbound_id} está '{row['status']}', não pode marcar como failed"
+            )
+        conn.execute(
+            "UPDATE outbound_messages SET status = 'failed', error = ? WHERE id = ?",
+            (error, outbound_id),
+        )
+        conn.commit()
+        return dict(_fetch_outbound(conn, outbound_id))
+    finally:
+        conn.close()
+
+
+def get_outbound(outbound_id: int, db_path=None) -> dict | None:
+    conn = _connect(db_path)
+    try:
+        row = _fetch_outbound(conn, outbound_id)
+        return dict(row) if row is not None else None
+    finally:
+        conn.close()
+
+
+def pending_outbound(limit: int = 50, db_path=None) -> list[dict]:
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT * FROM outbound_messages
+            WHERE status = 'pending'
+            ORDER BY ts DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def recent_confirmations(n: int = 20, db_path=None) -> list[dict]:
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT c.*, o.to_addr AS to_addr, o.body AS outbound_body
+            FROM confirmation_events c
+            JOIN outbound_messages o ON o.id = c.outbound_id
+            ORDER BY c.ts DESC, c.id DESC
+            LIMIT ?
+            """,
+            (n,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------- self-test
 
 if __name__ == "__main__":
@@ -319,6 +534,68 @@ if __name__ == "__main__":
         empty = summary_for_ab("nao-existe", "v2", db_path=tmp_db)
         assert empty["a"]["n"] == 0
         assert empty["a"]["success_rate"] == 0.0
+
+        # ------------------------------------------------- outbound gate
+
+        oid = record_outbound_request(
+            to_addr="5511999999999@s.whatsapp.net", body="oi, tudo bem?",
+            requested_by="evolve", context="proposal p1", db_path=tmp_db,
+        )
+        assert isinstance(oid, int)
+
+        pend = pending_outbound(db_path=tmp_db)
+        assert len(pend) == 1
+        assert pend[0]["id"] == oid
+        assert pend[0]["status"] == "pending"
+
+        # gate: sent direto de pending tem que estourar
+        try:
+            mark_outbound_sent(oid, "wamid.XXX", db_path=tmp_db)
+            assert False, "mark_outbound_sent deveria ter levantado ValueError a partir de pending"
+        except ValueError:
+            pass
+
+        confirmed = confirm_outbound(oid, actor="5511888888888", source="whatsapp", db_path=tmp_db)
+        assert confirmed["status"] == "confirmed"
+        assert confirmed["confirmed_by"] == "5511888888888"
+
+        sent = mark_outbound_sent(oid, "wamid.ABC123", db_path=tmp_db)
+        assert sent["status"] == "sent"
+        assert sent["message_id"] == "wamid.ABC123"
+        assert sent["ts_sent"] is not None
+
+        # cancel de pending funciona
+        oid2 = record_outbound_request(
+            to_addr="5511777777777@s.whatsapp.net", body="cancela isso",
+            requested_by="cli", db_path=tmp_db,
+        )
+        cancelled = cancel_outbound(oid2, actor="cli", db_path=tmp_db)
+        assert cancelled["status"] == "cancelled"
+
+        # cancel de item já sent tem que estourar
+        try:
+            cancel_outbound(oid, actor="cli", db_path=tmp_db)
+            assert False, "cancel_outbound deveria ter levantado ValueError a partir de sent"
+        except ValueError:
+            pass
+
+        # confirm de item já cancelled tem que estourar
+        try:
+            confirm_outbound(oid2, actor="cli", db_path=tmp_db)
+            assert False, "confirm_outbound deveria ter levantado ValueError a partir de cancelled"
+        except ValueError:
+            pass
+
+        confirmations = recent_confirmations(n=10, db_path=tmp_db)
+        assert len(confirmations) == 2
+        events_by_outbound = {c["outbound_id"]: c for c in confirmations}
+        assert events_by_outbound[oid]["event"] == "confirm"
+        assert events_by_outbound[oid]["to_addr"] == "5511999999999@s.whatsapp.net"
+        assert events_by_outbound[oid2]["event"] == "cancel"
+        assert events_by_outbound[oid2]["to_addr"] == "5511777777777@s.whatsapp.net"
+
+        assert get_outbound(oid, db_path=tmp_db)["status"] == "sent"
+        assert get_outbound(999999, db_path=tmp_db) is None
 
         print("OK: todos os asserts de graph.py passaram.")
     finally:

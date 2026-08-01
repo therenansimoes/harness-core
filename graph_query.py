@@ -6,6 +6,9 @@ Uso:
     python3 graph_query.py runs <version>
     python3 graph_query.py ab <a> <b>
     python3 graph_query.py proposals
+    python3 graph_query.py pending
+    python3 graph_query.py confirmations [-n 20]
+    python3 graph_query.py outbound [-n 20]
 """
 
 from __future__ import annotations
@@ -16,7 +19,14 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from graph import _connect, recent_decisions, runs_for_version, summary_for_ab  # noqa: E402
+from graph import (  # noqa: E402
+    _connect,
+    pending_outbound,
+    recent_confirmations,
+    recent_decisions,
+    runs_for_version,
+    summary_for_ab,
+)
 
 
 def _short(s: str, width: int = 40) -> str:
@@ -105,6 +115,59 @@ def cmd_proposals(args: argparse.Namespace) -> None:
     print(f"\ntotal: {len(rows)} proposals")
 
 
+def cmd_pending(args: argparse.Namespace) -> None:
+    rows = pending_outbound(limit=args.n, db_path=None)
+    if not rows:
+        print("(sem outbound pendente)")
+        return
+
+    print(f"{'id':>4} {'ts':<20} {'to_addr':<24} {'requested_by':<12}  body")
+    for r in rows:
+        print(
+            f"{r['id']:>4} {r['ts']:<20} {r['to_addr']:<24} {r['requested_by']:<12}  "
+            f"{_short(r['body'], 50)}"
+        )
+    print(f"\ntotal: {len(rows)} pendentes")
+
+
+def cmd_confirmations(args: argparse.Namespace) -> None:
+    rows = recent_confirmations(n=args.n, db_path=None)
+    if not rows:
+        print("(sem confirmações/cancelamentos)")
+        return
+
+    print(f"{'ts':<20} {'outbound_id':>11} {'event':<8} {'actor':<16} {'source':<10}  to_addr / body")
+    for r in rows:
+        print(
+            f"{r['ts']:<20} {r['outbound_id']:>11} {r['event']:<8} {r['actor']:<16} "
+            f"{r['source']:<10}  {r['to_addr']} / {_short(r['outbound_body'], 30)}"
+        )
+    print(f"\ntotal: {len(rows)} eventos")
+
+
+def cmd_outbound(args: argparse.Namespace) -> None:
+    conn = _connect(None)
+    try:
+        rows = conn.execute(
+            "SELECT * FROM outbound_messages ORDER BY ts DESC, id DESC LIMIT ?",
+            (args.n,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        print("(sem outbound)")
+        return
+
+    print(f"{'id':>4} {'ts':<20} {'status':<9} {'to_addr':<24} {'requested_by':<12}  body")
+    for r in rows:
+        print(
+            f"{r['id']:>4} {r['ts']:<20} {r['status']:<9} {r['to_addr']:<24} "
+            f"{r['requested_by']:<12}  {_short(r['body'], 40)}"
+        )
+    print(f"\ntotal: {len(rows)} outbound")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Inspeciona o store de auto-crítica do harness.")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -124,6 +187,18 @@ def main() -> None:
 
     p_props = sub.add_parser("proposals", help="lista proposals registradas")
     p_props.set_defaults(func=cmd_proposals)
+
+    p_pending = sub.add_parser("pending", help="lista outbound pendentes de confirmação")
+    p_pending.add_argument("-n", type=int, default=50)
+    p_pending.set_defaults(func=cmd_pending)
+
+    p_conf = sub.add_parser("confirmations", help="lista confirmações/cancelamentos recentes")
+    p_conf.add_argument("-n", type=int, default=20)
+    p_conf.set_defaults(func=cmd_confirmations)
+
+    p_out = sub.add_parser("outbound", help="lista outbound recentes de qualquer status")
+    p_out.add_argument("-n", type=int, default=20)
+    p_out.set_defaults(func=cmd_outbound)
 
     args = parser.parse_args()
     args.func(args)

@@ -128,6 +128,61 @@ def run_suite(sandbox: Path, suite: str, repeat: int) -> int:
     return proc.returncode
 
 
+# ------------------------------------------------------------------- sealed
+
+
+def sealed_tasks() -> list[Path]:
+    base = ROOT / "benchmarks" / "sealed"
+    if not base.is_dir():
+        return []
+    return sorted(p for p in base.glob("task_*") if (p / "prompt.md").exists())
+
+
+def rows_for_suite(rows: list[dict], suite: str) -> list[dict]:
+    return [r for r in rows if r["suite"] == suite]
+
+
+def credit_ok(rep: dict) -> bool:
+    """Crédito em sealed = PISO intacto, não ganho.
+
+    A suite fixed é onde a candidata foi desenvolvida — é lá que ela precisa
+    provar ganho. A sealed nunca foi usada para hill-climb, então o que ela
+    responde é outra pergunta: 'o ganho generaliza ou você só decorou a fixed?'.
+    Exigir ganho aqui reprovaria mudanças legítimas por ruído; não exigir nada
+    tornaria o held-out decorativo. O meio-termo é o piso.
+    """
+    return all(g["ok"] for g in rep["gates"] if not g["name"].startswith("ganho normalizado"))
+
+
+def run_sealed_credit(sandbox: Path, va: str, vb: str, repeat: int, pid: str) -> dict | None:
+    """Roda sealed nos DOIS lados (o baseline só se ainda não tiver runs) e julga.
+
+    Devolve o report do juiz sobre a suite sealed, ou None se não há sealed.
+    """
+    if not sealed_tasks():
+        return None
+
+    rows = rows_for_suite(tsv_rows(), "sealed")
+    base_n = len([r for r in rows if r["harness_version"] == va])
+    if base_n < score.MIN_N:
+        print(f"   sealed: baseline {va} tem {base_n} runs, rodando baseline em sealed...")
+        env = {**os.environ, "HARNESS_RESULTS": str(RESULTS), "HARNESS_TASKS_ROOT": str(ROOT)}
+        subprocess.run(
+            [sys.executable, str(ROOT / "run_task.py"), "--all", "--suite", "sealed",
+             "--repeat", str(repeat)],
+            env=env, cwd=ROOT,
+        )
+
+    print("   sealed: rodando candidata...")
+    before = len(tsv_rows())
+    run_suite(sandbox, "sealed", repeat)
+    all_rows = tsv_rows()
+    sync_graph(all_rows, before, pid)
+
+    sealed_rows = rows_for_suite(all_rows, "sealed")
+    return score.ab_report(sealed_rows, va, vb)
+
+
 # --------------------------------------------------------------------- graph
 
 
@@ -171,19 +226,65 @@ def sync_graph(rows: list[dict], since_index: int, pid: str) -> int:
 # ------------------------------------------------------------------ decision
 
 
+def _sealed_md(rep_sealed: dict | None, credited: bool | None) -> str:
+    if rep_sealed is None:
+        return (
+            "Não rodou. Ou a candidata já havia sido reprovada na fixed (não se gasta "
+            "held-out em candidata morta), ou `benchmarks/sealed/` está vazia — nesse "
+            "caso um eventual merge fica **sem crédito de generalização**."
+        )
+    A, B = rep_sealed["a"], rep_sealed["b"]
+    linhas = "\n".join(
+        f"| {'PASS' if g['ok'] else 'FAIL'} | {g['name']} |"
+        for g in rep_sealed["gates"]
+        if not g["name"].startswith("ganho normalizado")
+    )
+    return f"""Veredito: **{'CONFIRMA' if credited else 'REPROVA'}** o crédito.
+
+| Métrica (sealed) | A = {rep_sealed['version_a']} | B = {rep_sealed['version_b']} |
+|---|---|---|
+| success | {A['pass']}/{A['n']} = {A['rate']:.0%} | {B['pass']}/{B['n']} = {B['rate']:.0%} |
+| truncamento | {A['trunc_rate']:.0%} | {B['trunc_rate']:.0%} |
+| mediana s | {A['med_s']:.1f}s | {B['med_s']:.1f}s |
+| custo/run | ${A['cost_run']:.4f} | ${B['cost_run']:.4f} |
+
+Gates de piso na held-out (o gate de ganho não se aplica aqui — sealed responde
+"generaliza?", não "melhorou?"):
+
+| Veredito | Gate |
+|---|---|
+{linhas}"""
+
+
 def write_decision(meta: dict, rep: dict, outcome: str, gid: int, diff_summary: str,
-                   n_runs: int) -> Path:
+                   n_runs: int, rep_sealed: dict | None = None,
+                   credited: bool | None = None) -> Path:
     A, B = rep["a"], rep["b"]
     va, vb = rep["version_a"], rep["version_b"]
     gates_md = "\n".join(
         f"| {'PASS' if g['ok'] else 'FAIL'} | {g['name']} |" for g in rep["gates"]
     )
     if outcome == "merge":
+        selo = (
+            "Confirmado em **sealed** (held-out): o ganho generaliza."
+            if credited else
+            "**NÃO creditado**: sem confirmação em held-out — hill-climb na fixed, "
+            "onde a mudança foi desenvolvida. A evidência é de ganho, não de generalização."
+        )
         reason = (
-            f"Todos os {len(rep['gates'])} gates passaram. Piso intacto "
+            f"Todos os {len(rep['gates'])} gates da fixed passaram. Piso intacto "
             f"(success {B['rate']:.0%}, truncamento {B['trunc_rate']:.0%}) e ganho normalizado "
             f"real: custo/run {rep['d_cost']:+.1%}, mediana {rep['d_med']:+.1%}. "
-            f"Genome promovido para {vb}."
+            f"Genome promovido para {vb}. {selo}"
+        )
+    elif rep["merge"] and credited is False:
+        S = rep_sealed["b"]
+        reason = (
+            f"A fixed aprovou (custo/run {rep['d_cost']:+.1%}), mas a suite **sealed** "
+            f"reprovou o piso: success {S['rate']:.0%}, truncamento {S['trunc_rate']:.0%} "
+            f"— gate(s): {'; '.join(rep_sealed['failed'])}. "
+            f"Ganho que não sobrevive ao held-out é overfitting na suite de treino. "
+            f"Baseline {va} permanece intacto."
         )
     else:
         reason = (
@@ -222,6 +323,10 @@ def write_decision(meta: dict, rep: dict, outcome: str, gid: int, diff_summary: 
 
 {"**AVISO:** amostra desbalanceada — rode N igual antes de creditar." if rep["imbalanced"] else ""}
 
+## Held-out (sealed)
+
+{_sealed_md(rep_sealed, credited)}
+
 ## Razão
 
 {reason}
@@ -245,7 +350,8 @@ def promote(sandbox: Path, to_version: str) -> None:
 # ----------------------------------------------------------------------- cli
 
 
-def cycle(proposal_path: Path, repeat: int, suite: str, force: bool) -> int:
+def cycle(proposal_path: Path, repeat: int, suite: str, force: bool,
+          no_credit: bool = False) -> int:
     meta = parse_proposal(proposal_path)
     pid, va, vb = meta["id"], meta["from_version"], meta["to_version"]
 
@@ -278,25 +384,55 @@ def cycle(proposal_path: Path, repeat: int, suite: str, force: bool) -> int:
     synced = sync_graph(rows, before, pid)
     print(f"   {n_new} runs de candidata · {synced} runs novas no graph")
 
-    rep = score.ab_report(rows, va, vb)
-    outcome = "merge" if rep["merge"] else "discard"
+    rep = score.ab_report(rows_for_suite(rows, suite), va, vb)
+
+    # Sealed só entra se a fixed já aprovou: held-out é para CREDITAR um ganho,
+    # não para procurar um. Rodar sealed numa candidata reprovada é queimar
+    # budget e, pior, é o começo de treinar na held-out.
+    rep_sealed, credited = None, None
+    if rep["merge"] and suite == "fixed" and not no_credit:
+        rep_sealed = run_sealed_credit(sandbox, va, vb, repeat, pid)
+        if rep_sealed is None:
+            print("   sealed: suite vazia — merge NÃO creditado (sem held-out)")
+        else:
+            credited = credit_ok(rep_sealed)
+            print(f"   sealed: {'CONFIRMA' if credited else 'REPROVA'} "
+                  f"(success {rep_sealed['b']['rate']:.0%}, "
+                  f"trunc {rep_sealed['b']['trunc_rate']:.0%})")
+
+    outcome = "merge" if (rep["merge"] and credited is not False) else "discard"
 
     gid = graph.record_decision(
         proposal_id=pid,
         outcome=outcome,
         scores_summary=json.dumps(
-            {"a": rep["a"], "b": rep["b"], "d_med": rep["d_med"], "d_cost": rep["d_cost"]},
+            {"fixed": {"a": rep["a"], "b": rep["b"], "d_med": rep["d_med"],
+                       "d_cost": rep["d_cost"]},
+             "sealed": ({"a": rep_sealed["a"], "b": rep_sealed["b"]} if rep_sealed else None),
+             "credited": credited},
             ensure_ascii=False,
         ),
-        reason="; ".join(rep["failed"]) if rep["failed"] else "todos os gates passaram",
-        gates_json=json.dumps(rep["gates"], ensure_ascii=False),
+        reason=(
+            "; ".join(rep["failed"]) if rep["failed"]
+            else ("sealed reprovou o piso" if credited is False
+                  else "todos os gates passaram" + ("" if credited else " (sem crédito sealed)"))
+        ),
+        gates_json=json.dumps(
+            {"fixed": rep["gates"],
+             "sealed": (rep_sealed["gates"] if rep_sealed else None),
+             "credited": credited},
+            ensure_ascii=False,
+        ),
     )
 
-    doc = write_decision(meta, rep, outcome, gid, diff_summary, n_new)
+    doc = write_decision(meta, rep, outcome, gid, diff_summary, n_new, rep_sealed, credited)
 
     if outcome == "merge":
         promote(sandbox, vb)
-        print(f"\n=> MERGE: genome promovido para {vb}")
+        selo = "creditado em sealed" if credited else "NÃO creditado (sem held-out)"
+        print(f"\n=> MERGE: genome promovido para {vb} — {selo}")
+    elif rep["merge"]:
+        print(f"\n=> DISCARD: fixed aprovou mas sealed reprovou o piso — {va} intacto")
     else:
         print(f"\n=> DISCARD: baseline {va} intacto — gate(s): {'; '.join(rep['failed'])}")
     print(f"   decision: {doc.relative_to(ROOT)}  (graph id {gid})")
@@ -309,12 +445,14 @@ def main() -> int:
     ap.add_argument("--repeat", type=int, default=3, help="runs por task (default 3)")
     ap.add_argument("--suite", default="fixed")
     ap.add_argument("--force", action="store_true", help="ignora mismatch de from_version")
+    ap.add_argument("--no-credit", action="store_true",
+                    help="pula a confirmação em sealed (merge fica SEM crédito de generalização)")
     a = ap.parse_args()
 
     DECISIONS.mkdir(parents=True, exist_ok=True)
     SANDBOXES.mkdir(parents=True, exist_ok=True)
     try:
-        return cycle(Path(a.proposal).resolve(), a.repeat, a.suite, a.force)
+        return cycle(Path(a.proposal).resolve(), a.repeat, a.suite, a.force, a.no_credit)
     except InfraError as e:
         print(f"ERRO DE INFRA: {e}", file=sys.stderr)
         return 2

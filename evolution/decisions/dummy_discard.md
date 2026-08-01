@@ -1,8 +1,8 @@
 # Decisão dummy_discard — DISCARD
 
-**proposal_id:** `dummy_discard` · **graph_decision_id:** `1`
+**proposal_id:** `dummy_discard` · **graph_decision_id:** `2`
 **Proposta:** [`dummy_discard.md`](../proposals/dummy_discard.md)
-**Ciclo:** v0.2 → v0.2-dummy · 6 runs de candidata · gerado por `evolve.py` em 2026-08-01T16:50:28+00:00
+**Ciclo:** v0.2 → v0.2-dummy · 6 runs de candidata · gerado por `evolve.py` em 2026-08-01T16:57:42+00:00
 
 **Hipótese:** Inflar o SYSTEM_PROMPT com instruções redundantes NÃO melhora nada e deve ser reprovado pelos gates — esta proposta existe para exercitar o caminho DISCARD do evolve.py de ponta a ponta.
 
@@ -12,13 +12,13 @@
 
 | Métrica | A = v0.2 | B = v0.2-dummy | Δ |
 |---|---|---|---|
-| success | 18/18 = 100% | 6/6 = 100% | — |
+| success | 20/20 = 100% | 12/12 = 100% | — |
 | success limpo | 100% | 100% | — |
 | truncamento | 0% | 0% | — |
-| mediana s | 22.1s | 32.0s | +45.0% |
-| custo/run | $0.0498 | $0.0570 | +14.6% |
-| tokens/run | 1847 | 2334 | +26.4% |
-| N válido | 18 | 6 | — |
+| mediana s | 20.7s | 26.9s | +30.0% |
+| custo/run | $0.0479 | $0.0549 | +14.6% |
+| tokens/run | 1757 | 2092 | +19.0% |
+| N válido | 20 | 12 | — |
 
 ## Gates
 
@@ -35,7 +35,7 @@
 
 ## Razão
 
-Gate(s) reprovado(s): ganho normalizado >=10% (mediana s OU custo/run); sem regressão grave no outro eixo (<+10%). custo/run +14.6%, mediana +45.0%, truncamento 0% -> 0%. Baseline v0.2 permanece intacto.
+Gate(s) reprovado(s): ganho normalizado >=10% (mediana s OU custo/run); sem regressão grave no outro eixo (<+10%). custo/run +14.6%, mediana +30.0%, truncamento 0% -> 0%. Baseline v0.2 permanece intacto.
 
 ## Notas da proposta
 
