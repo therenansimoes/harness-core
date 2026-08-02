@@ -740,29 +740,30 @@ def test_all_judges_sem_repeats_nao_muda_summary(tmp_path, monkeypatch):
     assert "intra" not in summary and "repeats" not in summary
 
 
-def test_cli_repeats_via_subprocess():
-    """Wiring do CLI (subprocess de verdade -> escreve no repo real, limpa
-    no finally, mesmo padrão de test_judges_build)."""
-    out_dir = REPO / "judges" / "verdicts" / "j_b2b"
-    existia = out_dir.exists()
-    try:
-        proc = subprocess.run(
-            [sys.executable, str(REPO / "judges" / "run_judge.py"), "--dry-run", "--repeats", "3"],
-            cwd=REPO, capture_output=True, text=True, timeout=60,
-        )
-        assert proc.returncode == 0, proc.stderr
-        assert '"repeats": 3' in proc.stdout
-        assert f'"scores_runs": [\n    {DRY_SCORES[0]},' in proc.stdout
+def test_cli_repeats_chega_no_verdict(tmp_path, monkeypatch):
+    """Wiring do CLI. main() in-process (com VERDICTS_DIR redirecionado) em
+    vez de subprocess: judges/verdicts/j_b2b/ é versionado, um subprocess
+    sujaria o repo de verdade."""
+    verdicts_dir = tmp_path / "verdicts"
+    monkeypatch.setattr(run_judge, "VERDICTS_DIR", verdicts_dir)
+    monkeypatch.setattr(sys, "argv", ["run_judge.py", "--dry-run", "--repeats", "3"])
 
-        ruim = subprocess.run(
-            [sys.executable, str(REPO / "judges" / "run_judge.py"), "--dry-run", "--repeats", "0"],
-            cwd=REPO, capture_output=True, text=True, timeout=60,
-        )
-        assert ruim.returncode != 0
-        assert "--repeats precisa ser >= 1" in ruim.stderr
-    finally:
-        if not existia:
-            shutil.rmtree(out_dir, ignore_errors=True)
+    assert run_judge.main() == 0
+    loaded = json.loads((verdicts_dir / "j_b2b" / f"{run_judge.harness_version()}.json").read_text())
+    assert loaded["repeats"] == 3
+    assert loaded["scores_runs"] == DRY_SCORES[:3]
+
+
+def test_cli_rejeita_repeats_invalido(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["run_judge.py", "--dry-run", "--repeats", "0"])
+    with pytest.raises(SystemExit, match="--repeats precisa ser >= 1"):
+        run_judge.main()
+
+
+def test_cli_repeats_nao_existe_na_trilha_build(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["run_judge.py", "--dry-run", "--track", "build", "--repeats", "3"])
+    with pytest.raises(SystemExit, match="só existe na trilha result"):
+        run_judge.main()
 
 
 # ---------------------------------------------------------- verdicts timestamped
