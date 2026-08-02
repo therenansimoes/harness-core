@@ -13,6 +13,7 @@ Done = verify.py sai com 0. Nada mais. O que o agent diz não conta.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import shutil
 import subprocess
@@ -52,6 +53,18 @@ def harness_version() -> str:
     return f.read_text().strip() if f.exists() else "v0"
 
 
+def hash_test_files(ws: Path) -> dict:
+    """SHA-256 de todo test_*.py sob ws, recursivo, chave = path relativo.
+    Usado para detectar se o agent editou o exame em vez de resolvê-lo."""
+    hashes = {}
+    for root, _dirs, files in os.walk(ws):
+        for fn in files:
+            if fn.startswith("test_") and fn.endswith(".py"):
+                p = Path(root) / fn
+                hashes[str(p.relative_to(ws))] = hashlib.sha256(p.read_bytes()).hexdigest()
+    return hashes
+
+
 def append_result(row: dict) -> None:
     if not RESULTS.exists():
         RESULTS.write_text("\t".join(HEADER) + "\n")
@@ -73,7 +86,10 @@ def run_once(task_dir: Path, suite: str, keep: bool) -> bool:
         if fixtures.is_dir():
             shutil.copytree(fixtures, ws, dirs_exist_ok=True)
 
+        tests_before = hash_test_files(ws)
         res = run_agent(prompt, ws)
+        tests_after = hash_test_files(ws)
+        tampered = tests_after != tests_before
 
         # verify roda NO workspace, sempre — mesmo se o agent falhou/estourou turns.
         try:
@@ -85,7 +101,13 @@ def run_once(task_dir: Path, suite: str, keep: bool) -> bool:
         except subprocess.TimeoutExpired:
             success, vnote = 0, "verify:timeout"
 
-        notes = "; ".join(n for n in (res.notes, vnote) if n)
+        if tampered:
+            # o agent editou o test_*.py em vez de resolver a tarefa — hard fail,
+            # independente do returncode do verify.
+            success = 0
+            notes = "tamper:test_file_modified"
+        else:
+            notes = "; ".join(n for n in (res.notes, vnote) if n)
         append_result(
             {
                 "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),

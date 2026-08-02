@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
+import shlex
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import safety
 
 # ---------------------------------------------------------------- harness knobs
 # Tudo abaixo desta linha é o "genoma" do harness. Um A/B muda UMA coisa aqui.
@@ -74,28 +76,25 @@ def _run_cli(prompt: str, workspace: Path) -> AgentResult:
         SYSTEM_PROMPT,
     ]
     t0 = time.time()
-    try:
-        proc = subprocess.run(
-            cmd,
-            cwd=workspace,
-            capture_output=True,
-            text=True,
-            timeout=TIMEOUT_S,
-            env={**os.environ, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"},
-        )
-    except subprocess.TimeoutExpired:
-        return AgentResult(False, time.time() - t0, notes="timeout")
+    returncode, stdout, stderr = safety.safe_run(
+        cmd,
+        cwd=str(workspace),
+        timeout=TIMEOUT_S,
+        env={**os.environ, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"},
+    )
     elapsed = time.time() - t0
+    if stderr == "TIMEOUT" and returncode == -1:
+        return AgentResult(False, elapsed, notes="timeout")
 
-    if proc.returncode != 0:
+    if returncode != 0:
         return AgentResult(
-            False, elapsed, notes=f"cli_exit_{proc.returncode}:{proc.stderr[-200:].strip()}"
+            False, elapsed, notes=f"cli_exit_{returncode}:{stderr[-200:].strip()}"
         )
 
     try:
-        data = json.loads(proc.stdout)
+        data = json.loads(stdout)
     except json.JSONDecodeError:
-        return AgentResult(False, elapsed, text=proc.stdout[-500:], notes="bad_json")
+        return AgentResult(False, elapsed, text=stdout[-500:], notes="bad_json")
 
     usage = data.get("usage") or {}
     tokens = int(usage.get("input_tokens", 0)) + int(usage.get("output_tokens", 0))
@@ -149,17 +148,16 @@ def _run_api(prompt: str, workspace: Path) -> AgentResult:
             if block.type != "tool_use":
                 continue
             try:
-                out = subprocess.run(
-                    block.input["command"],
-                    shell=True,
-                    cwd=workspace,
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                )
-                payload = (out.stdout + out.stderr)[-8000:] or "(sem saída)"
-            except subprocess.TimeoutExpired:
-                payload = "(timeout de 120s)"
+                argv = shlex.split(block.input["command"])
+                rc, out_s, err_s = safety.safe_run(argv, cwd=str(workspace), timeout=120)
+                if err_s == "TIMEOUT" and rc == -1:
+                    payload = "(timeout de 120s)"
+                else:
+                    payload = (out_s + err_s)[-8000:] or "(sem saída)"
+            except safety.SafetyViolation as e:
+                payload = f"(comando bloqueado pela allowlist: {e})"
+            except ValueError as e:
+                payload = f"(comando inválido: {e})"
             results.append(
                 {"type": "tool_result", "tool_use_id": block.id, "content": payload}
             )

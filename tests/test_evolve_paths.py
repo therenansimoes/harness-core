@@ -8,7 +8,7 @@ held-out, decision em markdown, promoção (ou não) do genome e graph.
 Um avaliador precisa saber votar dos dois lados — a mesma regra que vale para os
 `verify.py` das tasks vale para o loop de evolução.
 
-    python3 tests/test_evolve_paths.py    # exit 0 = passou
+    python3 -m pytest tests/test_evolve_paths.py -q
 """
 
 from __future__ import annotations
@@ -18,6 +18,8 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -150,27 +152,20 @@ def run_case(pid, fixed_cand, expect_rc, sealed=None, sealed_base=None,
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def main() -> int:
-    bom = (18.0, 1400, 0.0420, 1)   # -25% tempo, -30% custo
-    ruim = (26.0, 2200, 0.0660, 1)  # mais lenta e mais cara
-    cases = [
-        # (nome, candidata fixed, exit, sealed candidata, sealed baseline, creditado?)
-        ("merge_sem_sealed", bom, 0, None, None, False),
-        ("discard_na_fixed", ruim, 1, None, None, None),
-        ("merge_creditado", bom, 0, (20.0, 1500, 0.0450, 1), (24.0, 2000, 0.0600, 1), True),
-        # ganho na fixed, mas a held-out quebra: success cai de 100% para 0%
-        ("sealed_reprova", bom, 1, (20.0, 1500, 0.0450, 0), (24.0, 2000, 0.0600, 1), None),
-    ]
-    bad = 0
-    for pid, cand, rc, sealed, sbase, cred in cases:
-        fails = run_case(pid, cand, rc, sealed, sbase, cred)
-        if fails:
-            bad += 1
-            print(f"FALHOU {pid}:\n  - " + "\n  - ".join(fails))
-        else:
-            print(f"OK {pid}: exit {rc}, baseline e graph coerentes.")
-    return 1 if bad else 0
+_BOM = (18.0, 1400, 0.0420, 1)   # -25% tempo, -30% custo
+_RUIM = (26.0, 2200, 0.0660, 1)  # mais lenta e mais cara
+
+CASES = [
+    # (nome, candidata fixed, exit, sealed candidata, sealed baseline, creditado?)
+    ("merge_sem_sealed", _BOM, 0, None, None, False),
+    ("discard_na_fixed", _RUIM, 1, None, None, None),
+    ("merge_creditado", _BOM, 0, (20.0, 1500, 0.0450, 1), (24.0, 2000, 0.0600, 1), True),
+    # ganho na fixed, mas a held-out quebra: success cai de 100% para 0%
+    ("sealed_reprova", _BOM, 1, (20.0, 1500, 0.0450, 0), (24.0, 2000, 0.0600, 1), None),
+]
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+@pytest.mark.parametrize("pid,cand,rc,sealed,sbase,cred", CASES, ids=[c[0] for c in CASES])
+def test_evolve_cycle(pid, cand, rc, sealed, sbase, cred):
+    fails = run_case(pid, cand, rc, sealed, sbase, cred)
+    assert not fails, f"{pid}: exit esperado {rc} — " + "; ".join(fails)

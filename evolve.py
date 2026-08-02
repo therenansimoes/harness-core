@@ -37,6 +37,7 @@ import score  # noqa: E402
 RESULTS = ROOT / "results.tsv"
 SANDBOXES = ROOT / "evolution" / "sandboxes"
 DECISIONS = ROOT / "evolution" / "decisions"
+DECISIONS_JSONL = ROOT / "evolution" / "decisions.jsonl"
 # O genome: o que a sandbox copia e o que um merge promove de volta.
 GENOME = ["agent.py"]
 
@@ -337,6 +338,23 @@ def write_decision(meta: dict, rep: dict, outcome: str, gid: int, diff_summary: 
 """
     out = DECISIONS / f"{meta['id']}.md"
     out.write_text(doc, encoding="utf-8")
+
+    # Log de máquina (uma linha por ciclo, accept E reject) — o .md é para
+    # humano ler, o .jsonl é para agregar/auditar sem parsear markdown.
+    DECISIONS_JSONL.parent.mkdir(parents=True, exist_ok=True)
+    jsonl_entry = {
+        "id": meta.get("id"),
+        "va": va,
+        "vb": vb,
+        "accepted": outcome == "merge",
+        "reason": reason,
+        "gates_failed": rep.get("failed"),
+        "d_cost": rep.get("d_cost"),
+        "d_med": rep.get("d_med"),
+    }
+    with DECISIONS_JSONL.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(jsonl_entry, ensure_ascii=False) + "\n")
+
     return out
 
 

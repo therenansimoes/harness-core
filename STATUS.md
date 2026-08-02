@@ -1,0 +1,48 @@
+# STATUS — fonte de verdade do harness-core
+
+**Atualizado:** 2026-08-01. Este arquivo substitui PLAN.md, FAST_START.md e generative-project.md como norte. Eles ficam como referência histórica — não seguir mais.
+
+## Visão (destino, confirmada pelo Renan em 2026-08-01)
+
+O harness mais incrível que existe: desenvolve coisas incríveis com pouca interação humana, gere múltiplos projetos em paralelo, de forma autônoma, e se auto-melhora com prova. Método em aberto (reusar open source vs. do zero) — decidir com evidência, não opinião. A visão dita o DESTINO; o trabalho de hoje segue a escada abaixo, um degrau por vez.
+
+## Decisão de 2026-08-01 (definitiva)
+
+O projeto patinou por meta-recursão: arena (agentes construindo harnesses concorrentes) + satélites (WhatsApp, delivery, UI gate) construídos no mesmo dia em que o plano mandava "core antes de satélite". Correção:
+
+1. **Arena encerrada como método.** Preservada em `arena/` (commitada) como histórico e fonte de mecanismos provados. Não rodar novas gerações.
+2. **Um harness só: o da raiz** (`agent.py`, `run_task.py`, `score.py`, `evolve.py`, `graph.py`) — é o único com histórico real (`results.tsv`, `evolution/decisions/`).
+3. **Satélites CONGELADOS** até o core provar valor em código de terceiro: `whatsapp.py`, `channel/`, `delivery.py`, `assist.py`, UI gate Playwright. Não evoluir, não corrigir, não documentar.
+4. **Desenvolvimento direto:** Fable planeja/orquestra, subagentes executam. Sem gerações competindo.
+
+## O que funciona (verificado por execução)
+
+- Loop evolve: 2 decisões reais — `evolution/decisions/v0.1.md` (DISCARD) e `v0.2.md` (KEEP, −17.8% custo).
+- 3 tasks fixed + 2 sealed rodando com haiku; `results.tsv` como fonte de verdade.
+
+## Dívidas conhecidas
+
+- Só testado com `claude-haiku-4-5`; backend `api` nunca exercitado.
+- 2 runs com `cli_exit_1` silencioso no results.tsv (2026-08-01 15:57/58) — causa não investigada.
+- Gate do evolve não tem tamper check nem safety allowlist (mecanismos existem provados na gen3).
+
+## Próximos passos (ordem)
+
+1. **Port gen3 → core:** gate hermético com reject gravado, tamper check, safety allowlist. (Em execução.)
+2. **Apontar para código que não é dele** — a falha que nenhuma geração da arena resolveu. Primeiro alvo: um repo real do Renan, task com verify determinístico.
+3. Só depois: segundo modelo/backend no A/B.
+
+## Pesquisa (evidência colhida, não opinião)
+
+- **Open source vs. do zero (respondido 2026-08-01):** manter o core do zero — nenhum framework maduro (OpenHands/SWE-agent/Aider) faz meta-loop de auto-melhoria com gate determinístico próprio. Reusar: tasks do Terminal-Bench 2.0/Harbor como fonte de benchmark. Roubar padrão: gate held-in/held-out do Self-Harness (arXiv 2606.09498) e archive de variantes do Darwin Gödel Machine (jennyzzt/dgm).
+
+- **Multi-projeto / memória / modularidade (respondido 2026-08-01):** tudo viável em stdlib, nada de dependência nova. Ordem de adoção decidida:
+  1. Hierarquia de memória em markdown (global → projeto; episódico = `results.tsv`/runs, semântico = STATUS/CLAUDE.md) — pode já.
+  2. Nota por módulo = coluna `module` em `proposals`/`runs` do `graph.py` (extensão de schema, não camada) — só APÓS provar valor em código de terceiro. Credit assignment por módulo é pesquisa aberta; manter "muda 1 coisa por A/B".
+  3. Flags on/off por projeto (dict em config.py) — só quando houver 2+ módulos com histórico isolado.
+  4. Isolamento multi-projeto (padrão event-sourcing do OpenHands V1 / sessões independentes do Agent SDK) — só quando existir 2º projeto real.
+  5. Mem0/Letta/vector DB — ignorar; reavaliar só se markdown+SQLite não escalar.
+
+## Critério de "saiu do lugar"
+
+Uma linha no `results.tsv` onde o harness melhorou código que ele não escreveu, com verify passando em cópia limpa. Até lá, nada de camada nova.
