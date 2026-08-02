@@ -1,7 +1,7 @@
 name = "model_sonnet"
 task = "benchmarks/judge/task_j_b2b"
-n_per_arm = 4
-budget_usd = 6.0
+n_per_arm = 8
+budget_usd = 9.0
 
 [mutation]
 file = "agent.py"
@@ -10,3 +10,6 @@ new = """MODEL = os.environ.get("HARNESS_MODEL", "claude-sonnet-5")"""
 
 [decision_rule]
 min_diff_successes = 2
+
+parallel = true
+est_cost_per_run = 0.45
