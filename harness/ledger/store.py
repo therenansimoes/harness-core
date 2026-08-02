@@ -2,10 +2,14 @@
 
 Caminho do banco: `$HARNESS_DATA_DIR/runs.sqlite`, default `data/runs.sqlite`
 relativo ao cwd. O env var existe para o teste apontar para um tmpdir.
+
+Além das runs, guarda `node_events`: marca `(run_id, node)` de toda escrita
+externa feita por um nó do grafo. É o que torna o resume idempotente.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -35,6 +39,14 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 CREATE INDEX IF NOT EXISTS idx_runs_run_id ON runs(run_id);
 CREATE INDEX IF NOT EXISTS idx_runs_prior ON runs(kind, tier, backend);
+
+CREATE TABLE IF NOT EXISTS node_events (
+    run_id     TEXT NOT NULL,
+    node       TEXT NOT NULL,
+    payload    TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(run_id, node)
+);
 """
 
 _COLUMNS = (
@@ -99,6 +111,29 @@ def history(
             f"SELECT * FROM runs{clause} ORDER BY id DESC LIMIT ?", params
         ).fetchall()
     return [_row(r) for r in rows]
+
+
+def record_node(
+    run_id: str, node: str, payload: dict, path: Path | None = None
+) -> bool:
+    """Marca `(run_id, node)` como já executado. False = já estava lá (resume)."""
+    with connect(path) as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO node_events (run_id, node, payload, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (run_id, node, json.dumps(payload, default=str), now_iso()),
+        )
+        return cur.rowcount == 1
+
+
+def get_node(run_id: str, node: str, path: Path | None = None) -> dict | None:
+    """Payload gravado por `record_node`, ou None se o nó ainda não rodou."""
+    with connect(path) as conn:
+        row = conn.execute(
+            "SELECT payload FROM node_events WHERE run_id = ? AND node = ?",
+            (run_id, node),
+        ).fetchone()
+    return json.loads(row["payload"]) if row is not None else None
 
 
 def _encode(value: object) -> object:
