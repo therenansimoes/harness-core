@@ -22,7 +22,7 @@ Pacote `harness/` (núcleo, zero menção a vendor) sobre LangGraph; legado cong
 | PR-9 | autopilot_graph + improve/ (target, escalate via interrupt, intervention_rate) | — |
 | PR-10 | improve/replay (atribuição por mutação) + docs + publish | — |
 
-Pendência de fiação (não é PR novo): o nó `route` do run_graph ainda é stub — ligar `routing/router.select()` quando o autopilot (PR-9) consumir o grafo.
+Fiação feita (não é PR novo): o nó `route` do run_graph consome `routing/router.select()` no modo `auto` (`run_unit(route="auto")`, `harness run --route auto`), com escalação de tier por attempt; o modo `manual` — default, backend fixado pelo chamador — continua como era.
 
 ## Verificação global (última: 2026-08-02, 8/8 PASS)
 

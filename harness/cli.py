@@ -14,17 +14,18 @@ import time
 import tomllib
 import uuid
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from harness.ab import ArmSpec, run_ab
 from harness.backends import registry
 from harness.ledger import store
+from harness.routing import ROUTE_AUTO, ROUTE_MANUAL, ROUTE_MODES, router
 from harness.ruler.gate import Decision, gate
 from harness.ruler.kpi import collect, load_kpis
 from harness.ruler.verify import run_verify
 from harness.ruler.wilson import MIN_N, Arm, decide_ab, wilson_interval
-from harness.types import ExecRequest, ExecResult, RunRow, UnitSpec
+from harness.types import ExecRequest, ExecResult, RunRow, Selection, UnitSpec
 from harness.workspace.provision import dispose, provision
 
 UNIT_FILE = "unit.toml"
@@ -233,16 +234,53 @@ def run_once(
     return RunOutcome(row=row, decision=decision)
 
 
+def _resolve_route(args: argparse.Namespace, unit: UnitSpec) -> Selection:
+    """Quem executa esta unidade. `manual` obedece às flags; `auto` pergunta ao
+    router, que lê o kind da unidade e o histórico do ledger.
+
+    Combinação inválida sai como erro de argparse (uso + exit 2) e não como
+    exceção no meio do run — mesma convenção do `ab --dim`.
+    """
+    if args.route == ROUTE_AUTO:
+        if args.backend or args.model:
+            args.parser.error("--route auto: quem escolhe backend/model é o router")
+        sel = router.select(unit, history=store.history(project=args.project))
+        # `max_turns` da flag ainda vence: o tier dá o default, não uma trava.
+        turns = args.max_turns if args.max_turns is not None else sel.max_turns
+        return replace(sel, max_turns=turns)
+
+    if not args.backend:
+        args.parser.error("--backend é obrigatório (ou use --route auto)")
+    return Selection(
+        backend=args.backend,
+        model=args.model or "",
+        # Vazio => `tier` NULL no ledger, como sempre foi nesta CLI: run no
+        # dedo não é evidência de nenhuma classe de custo (o prior é keyed em
+        # (kind, tier, backend)), e rotulá-lo agora mudaria o histórico.
+        tier="",
+        kind=unit.kind or "code",
+        max_turns=args.max_turns if args.max_turns is not None else DEFAULT_MAX_TURNS,
+        reasons=("manual:flag",),
+    )
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     unit = load_unit(Path(args.unit))
+    sel = _resolve_route(args, unit)
+    if args.route == ROUTE_AUTO:
+        print(
+            f"route auto {unit.id} kind={sel.kind} tier={sel.tier} "
+            f"{sel.backend} {sel.model or '-'} [{' '.join(sel.reasons)}]"
+        )
     try:
         outcome = run_once(
             unit,
-            args.backend,
-            args.model,
+            sel.backend,
+            sel.model or None,
             repo=args.repo,
             project=args.project,
-            max_turns=args.max_turns,
+            tier=sel.tier or None,
+            max_turns=sel.max_turns,
         )
     except PreflightError as exc:
         print(exc, file=sys.stderr)
@@ -379,14 +417,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = sub.add_parser("run", help="executa uma unidade com um backend")
     run.add_argument("--unit", required=True, help="diretório (ou arquivo) com unit.toml")
-    run.add_argument("--backend", required=True)
+    run.add_argument("--backend", default=None, help="obrigatório sem --route auto")
     run.add_argument("--model", default=None)
+    run.add_argument("--route", choices=list(ROUTE_MODES), default=ROUTE_MANUAL,
+                     help="auto: o router escolhe tier/backend/model pelo kind da "
+                          "unidade e pelo histórico do ledger (exclui --backend/--model)")
     run.add_argument("--project", default=None)
     run.add_argument("--repo", default=None,
                      help="repo-alvo (git, limpo): vira o workspace e é onde os KPIs "
                           "são medidos; sem ele o run roda num tmpdir vazio")
-    run.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS, dest="max_turns")
-    run.set_defaults(func=cmd_run)
+    # default None (e não DEFAULT_MAX_TURNS): é assim que `--route auto` sabe
+    # distinguir "o usuário não pediu turnos" de "o usuário pediu 8".
+    run.add_argument("--max-turns", type=int, default=None, dest="max_turns")
+    run.set_defaults(func=cmd_run, parser=run)
 
     ab = sub.add_parser("ab", help="veredito de Wilson entre dois braços")
     ab.add_argument("--a", type=_arm, metavar="SUCC/N",

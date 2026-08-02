@@ -1,4 +1,5 @@
 import os
+import shutil
 import sqlite3
 from pathlib import Path
 
@@ -6,14 +7,53 @@ import pytest
 
 from harness import cli
 from harness.ledger import store
+from harness.routing import CONFIG_DIR_ENV
 
+REPO = Path(__file__).resolve().parent.parent
 FIXTURE = str(Path(__file__).parent / "fixtures" / "echo")
+
+# Tiers de teste apontando pro backend mock: `--route auto` com o models.toml do
+# repo chamaria modelo de verdade, e teste não gasta hardware nem token.
+MODELS_TOML = """\
+[[tier]]
+name = "t0"
+backend = "mock"
+model = ""
+max_turns = 4
+cost_rank = 0
+
+[[tier]]
+name = "t1"
+backend = "mock"
+model = ""
+max_turns = 9
+cost_rank = 1
+
+[router]
+default_tier = "t0"
+max_attempts = 2
+min_n = 6
+prior_floor = 0.50
+
+[router.kind]
+code = "t0"
+"""
 
 
 @pytest.fixture
 def data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
     return tmp_path / "data"
+
+
+@pytest.fixture
+def config_dir(tmp_path, monkeypatch):
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    (cfg / "models.toml").write_text(MODELS_TOML, encoding="utf-8")
+    shutil.copy(REPO / "config" / "kinds.toml", cfg / "kinds.toml")
+    monkeypatch.setenv(CONFIG_DIR_ENV, str(cfg))
+    return cfg
 
 
 def test_run_mock_exits_zero_and_records_one_row(data_dir):
@@ -80,6 +120,28 @@ def test_model_flag_reaches_ledger_and_backend(data_dir, monkeypatch):
     assert rc == 0
     assert spy.model == "ollama:x:1b"
     assert store.history()[0].model == "ollama:x:1b"
+
+
+def test_cli_route_auto_flag(data_dir, config_dir, capsys):
+    """`--route auto` roda sem `--backend` (quem escolhe é o router) e recusa os
+    dois juntos com erro de argparse — exit 2, não exceção no meio do run."""
+    assert cli.main(["run", "--unit", FIXTURE, "--route", "auto"]) == 0
+
+    out = capsys.readouterr().out
+    assert "route auto echo kind=code tier=t0 mock" in out
+
+    row = store.history()[0]
+    assert (row.backend, row.tier, row.kind, row.ok) == ("mock", "t0", "code", True)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["run", "--unit", FIXTURE, "--route", "auto", "--backend", "mock"])
+    assert exc.value.code == 2
+
+
+def test_run_sem_backend_e_sem_route_auto_sai_2(data_dir):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["run", "--unit", FIXTURE])
+    assert exc.value.code == 2
 
 
 def test_seed_workspace_copies_unit_files_except_unit_toml(tmp_path):
