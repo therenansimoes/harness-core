@@ -269,6 +269,56 @@ def test_persona_mock_devolve_ficha_no_schema():
         assert entry["quote"]
 
 
+def test_extract_ficha_json_ignora_cot_antes_do_json():
+    """Prompt novo pede raciocínio (evidência por critério) antes do JSON
+    final — result não é mais JSON puro de ponta a ponta."""
+    result_text = (
+        "Evidência P1: germany.py:1 — usa reconcile do domínio.\n"
+        "Evidência P2: trace.jsonl:1 — bate com o DONE.\n"
+        '{"P1": {"score": 12, "citation": "germany.py:1", "quote": "x"}, '
+        '"P2": {"score": 8, "citation": "trace.jsonl:1", "quote": "y"}}'
+    )
+    ficha = persona.extract_ficha_json(result_text)
+    assert ficha["P1"]["score"] == 12
+    assert ficha["P2"]["citation"] == "trace.jsonl:1"
+
+
+def _patch_subprocess_run(monkeypatch, returncode: int, stdout: str, stderr: str = ""):
+    def fake_run(cmd, capture_output, text, timeout):
+        return subprocess.CompletedProcess(cmd, returncode, stdout=stdout, stderr=stderr)
+
+    monkeypatch.setattr(persona.subprocess, "run", fake_run)
+
+
+def test_call_persona_com_exit_nao_zero_mas_json_valido_nao_descarta(monkeypatch):
+    """Mesmo padrão de agent.py/_run_cli: `claude -p` pode sair com exit
+    != 0 e mesmo assim ter emitido um result com ficha válida. returncode
+    != 0 não pode descartar um JSON parseável."""
+    monkeypatch.setenv("PERSONA_MOCK", "0")
+    stream_result = {
+        "result": '{"P1": {"score": 10, "citation": "a.py:1", "quote": "q1"}, '
+        '"P2": {"score": 5, "citation": "trace.jsonl:1", "quote": "q2"}}'
+    }
+    _patch_subprocess_run(monkeypatch, returncode=1, stdout=json.dumps(stream_result), stderr="algum aviso")
+
+    ficha = persona.call_persona({}, "diff", "trace", "test output")
+    assert ficha["P1"]["score"] == 10
+    assert ficha["P2"]["citation"] == "trace.jsonl:1"
+
+
+def test_call_persona_exit_nao_zero_sem_json_levanta_erro(monkeypatch):
+    """returncode != 0 SEM nada aproveitável no stdout continua sendo
+    erro de infra de verdade."""
+    monkeypatch.setenv("PERSONA_MOCK", "0")
+    _patch_subprocess_run(monkeypatch, returncode=1, stdout="", stderr="crash de infra")
+
+    try:
+        persona.call_persona({}, "diff", "trace", "test output")
+        assert False, "deveria ter levantado"
+    except RuntimeError as exc:
+        assert "exit 1" in str(exc)
+
+
 # ------------------------------------------------------------ citação/veto
 
 
@@ -286,17 +336,47 @@ def test_criterio_sem_citacao_e_descartado():
     assert "P2" in scored
 
 
-def test_citacao_invalida_vira_veto():
+def test_citacao_invalida_vira_veto_de_persona():
+    """Citação inválida veta a persona (P1+P2 descartados), NÃO zera a
+    ficha inteira — esse é o veto de candidato (D2), outra severidade."""
     ficha = {
         "P1": {"score": 15, "citation": "germany.py:1", "quote": "isso não existe no diff"},
         "P2": {"score": 10, "citation": "trace.jsonl:1", "quote": "DONE: ok"},
     }
-    scored, discarded, veto, reason = run_judge.validate_and_score_persona(
+    scored, discarded, persona_vetoed, reason = run_judge.validate_and_score_persona(
         ficha, diff="+ return super().reconcile(checksum)", trace="trace.jsonl:1 DONE: ok"
     )
-    assert veto
+    assert persona_vetoed
     assert reason
     assert scored == {}
+    assert discarded == ["P1", "P2"]
+
+
+def test_citacao_com_quebra_de_linha_escapada_nao_veta():
+    """Regressão: trace.jsonl guarda a linha bruta do stream, com `\\n`
+    (2 chars) dentro do campo `text`. A citação da persona, depois de
+    json.loads(), tem quebra de linha REAL nesse mesmo trecho — os dois
+    lados precisam ser normalizados pra bater. Fixture = trace real de
+    runs/harness_task_j_b2b_gp04m5hx/trace.jsonl linha 160 (o caso do
+    v0.4 verdict: P2 citou trace.jsonl:160 e foi vetado por engano)."""
+    trace_path = REPO / "runs" / "harness_task_j_b2b_gp04m5hx" / "trace.jsonl"
+    lines = trace_path.read_text().splitlines()
+    trace = "\n".join(f"{i}: {line}" for i, line in enumerate(lines, start=1))
+
+    # trecho real da linha 160, que no arquivo bruto atravessa um `\n`
+    # escapado (entre "<task-notification>" e "Agent ... completed.").
+    quote_com_newline_real = "<task-notification>\nAgent a4938732c46f34fea completed."
+
+    ficha = {
+        "P1": {"score": 0, "citation": "", "quote": ""},
+        "P2": {"score": 8, "citation": "trace.jsonl:160", "quote": quote_com_newline_real},
+    }
+    scored, discarded, persona_vetoed, reason = run_judge.validate_and_score_persona(
+        ficha, diff="", trace=trace
+    )
+    assert not persona_vetoed, reason
+    assert "P2" in scored
+    assert discarded == ["P1"]
 
 
 def test_citacao_valida_nao_veta():
@@ -340,15 +420,39 @@ def test_dry_run_produz_verdict_json_valido(tmp_path, monkeypatch):
     assert loaded["discarded"] == []
 
 
-def test_veto_zera_judge_score():
+def test_veto_de_candidato_zera_judge_score():
+    """D2 (deterministic['veto']=True, trapaça do candidato) é o único
+    veto que zera a ficha inteira."""
     reg = run_judge.read_registry_row("j_b2b")
     deterministic = run_judge.synthetic_deterministic()
+    deterministic["veto"] = True
     verdict = run_judge.build_verdict(
-        "j_b2b", reg, deterministic, persona_scored={}, discarded=[], veto=True,
-        veto_reason="citação inválida em P1", cost_usd=0.1,
+        "j_b2b", reg, deterministic, persona_scored={}, discarded=[], persona_vetoed=False,
+        veto_reason="", cost_usd=0.1,
     )
     assert verdict["judge_score"] == 0
-    assert verdict["veto_reason"] == "citação inválida em P1"
+    assert verdict["veto_reason"] == "D2: tamper/segredo/escrita fora do workspace"
+    assert verdict["persona_vetoed"] is False
+
+
+def test_persona_vetada_mantem_score_deterministico():
+    """Veto de persona (citação inválida) NÃO zera D1-D4 — só descarta
+    P1/P2 do cálculo. Recalcula o caso real do v0.4: D1=25 D2=15 D3=10
+    D4=2, sem P1/P2 -> 52/60 * 100 = 87."""
+    reg = run_judge.read_registry_row("j_b2b")
+    deterministic = {
+        "D1": 25, "D2": 15, "D3": 10, "D4": 2, "veto": False,
+        "evidence": {"target_test": "passed", "full_suite": "415 passed, 0 regressions / 415 total",
+                     "cost_usd": 0.5237, "turns": 1},
+    }
+    verdict = run_judge.build_verdict(
+        "j_b2b", reg, deterministic, persona_scored={}, discarded=["P1", "P2"], persona_vetoed=True,
+        veto_reason="persona vetada: citação inválida em P2: 'trace.jsonl:160' não sustentada pelo material",
+        cost_usd=0.5237,
+    )
+    assert verdict["persona_vetoed"] is True
+    assert verdict["judge_score"] == 87
+    assert verdict["veto_reason"]
 
 
 def test_infra_error_verdict_nao_pontua_e_nao_chama_persona():
@@ -373,7 +477,7 @@ def test_criterio_descartado_recalcula_denominador():
     verdict = run_judge.build_verdict(
         "j_b2b", reg, deterministic,
         persona_scored={"P2": {"score": 10, "citation": "trace.jsonl:1", "quote": "x"}},
-        discarded=["P1"], veto=False, veto_reason="", cost_usd=0.1,
+        discarded=["P1"], persona_vetoed=False, veto_reason="", cost_usd=0.1,
     )
     # numer = 60 + 10 = 70; denom = 60 + 10 (peso de P2) = 70 -> 100
     assert verdict["judge_score"] == 100

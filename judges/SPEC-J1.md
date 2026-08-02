@@ -76,3 +76,7 @@ Cadência: NÃO a cada A/B. Roda em (i) toda promoção de versão, depois do se
 **FASE 1 (mínimo para a primeira avaliação real):** 1 juiz só — `j_b2b` + `registry.tsv` + `_sealed/` + `RUBRIC-J1.md` (D1–D4/P1/P2) + `run_judge.py` + `verdict.json` + linhas `suite=judge` no results.tsv. Gate ainda **manual** (Fable lê o verdict e decide). Isso já produz a linha "saiu do lugar".
 
 **FASE 2:** j_web + j_hw; P3/P4; tabela `judgements`; `judge_ok` automático; mediana/dispersão entre juízes; relatório de defeitos do próprio julgamento; rotação de projeto-juiz saturado (todos passam ⇒ sonda parou de discriminar).
+
+---
+
+**ADENDO 2026-08-02:** a regra de veto desta spec foi refinada após o caso real j_b2b/v0.4 (citação legítima vetada por escaping + verdict inteiro zerado): veto de PERSONA descarta só a ficha da persona (P*); veto TOTAL é exclusivo de trapaça do candidato (D2). A redação viva está em RUBRIC-J1.md §veto — em conflito, o RUBRIC vence.

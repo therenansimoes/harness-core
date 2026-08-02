@@ -40,8 +40,13 @@ PROMPT_TEMPLATE = """Você é um juiz sênior avaliando uma correção de bug se
 ## Saída dos testes
 {test_output}
 
-Avalie SOMENTE os dois critérios abaixo e responda com JSON puro (sem \
-markdown, sem texto fora do JSON), exatamente neste formato:
+Avalie SOMENTE os dois critérios abaixo. Antes de pontuar, escreva o \
+raciocínio em texto puro (sem markdown), uma linha por critério, no \
+formato "Evidência P1: <arquivo:linha ou trace.jsonl:N> — <o que essa \
+linha mostra>" / "Evidência P2: <trace.jsonl:N> — <o que essa linha \
+mostra>" — só cite o que está literalmente no material acima. Depois \
+desse raciocínio, na última parte da resposta, escreva SÓ o JSON puro \
+(sem markdown, sem texto depois dele), exatamente neste formato:
 
 {{
   "P1": {{"score": <inteiro 0-15>, "citation": "<arquivo:linha do diff>", "quote": "<trecho exato citado>"}},
@@ -87,6 +92,18 @@ def build_prompt(deterministic: dict, diff: str, trace: str, test_output: str) -
     )
 
 
+def extract_ficha_json(result_text: str) -> dict:
+    """O prompt agora pede raciocínio (CoT — evidência por critério) ANTES
+    do JSON final, então `result` não é mais JSON puro de ponta a ponta.
+    Acha o primeiro `{` e decodifica a partir dali, ignorando texto solto
+    depois do objeto (raw_decode não exige que a string acabe no `}`)."""
+    start = result_text.find("{")
+    if start == -1:
+        raise json.JSONDecodeError("nenhum '{' encontrado no result", result_text, 0)
+    obj, _ = json.JSONDecoder().raw_decode(result_text, start)
+    return obj
+
+
 def call_persona(deterministic: dict, diff: str, trace: str, test_output: str) -> dict:
     """Devolve {"P1": {...}, "P2": {...}}. PERSONA_MOCK=1 pula tudo abaixo."""
     if os.environ.get("PERSONA_MOCK") == "1":
@@ -95,14 +112,25 @@ def call_persona(deterministic: dict, diff: str, trace: str, test_output: str) -
     prompt = build_prompt(deterministic, diff, trace, test_output)
     cmd = ["claude", "-p", prompt, "--output-format", "json", "--model", MODEL]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT_S)
-    if proc.returncode != 0:
-        raise RuntimeError(f"persona: claude -p falhou (exit {proc.returncode}): {proc.stderr[-300:]}")
 
-    data = json.loads(proc.stdout)
-    ficha = json.loads(data.get("result", ""))
-    for key in ("P1", "P2"):
-        if key not in ficha:
-            raise ValueError(f"persona: ficha sem {key}: {ficha}")
+    # Mesmo padrão de agent.py/_run_cli: `claude -p` pode sair com exit != 0
+    # (ex.: is_error=true em algum evento intermediário) e ainda assim ter
+    # emitido um `result` com JSON válido. Tratar returncode!=0 como falha
+    # de infra ANTES de tentar parsear descartaria uma ficha real. Tenta
+    # parsear primeiro; só cai em erro de infra se não sobrou nada
+    # aproveitável no stdout.
+    try:
+        data = json.loads(proc.stdout)
+        ficha = extract_ficha_json(data.get("result", ""))
+        if not all(key in ficha for key in ("P1", "P2")):
+            raise ValueError(f"persona: ficha sem P1/P2: {ficha}")
+    except (json.JSONDecodeError, ValueError) as exc:
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"persona: claude -p falhou (exit {proc.returncode}): {proc.stderr[-300:]}"
+            ) from exc
+        raise
+
     return ficha
 
 
