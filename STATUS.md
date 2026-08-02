@@ -57,6 +57,17 @@ A arena volta como método de construção QUANDO a camada de juízes provar que
 
 Sequência que protege o investimento: (1) juiz j_b2b rodando honesto ← estamos aqui; (2) rubrica ganha a dimensão "processo" (P3/P4 + uso end-to-end); (3) só então reabrir gerações de candidatos sobre a base atual.
 
+## Doutrina de rodada rápida (Renan, 2026-08-02 — "com metodologia certa, grande parte da verificação vira um script")
+
+Gates escalonados, do mais barato pro mais caro — reprovou, morre ali, $0 adiante:
+1. **Roda?** (script, segundos): não roda/não compila/suite vermelha = descartado. Sem julgamento, sem piedade.
+2. **Milestone técnico** (script, ≤2min): critérios básicos objetivos (milestone_gate.sh da geração; verify da task).
+3. **Determinístico do juiz** (script, ≤5min): D*/B*/X* — só pra quem passou 1-2.
+4. **Persona** (LLM, pago): só sobreviventes do 3.
+5. **Fable decide** (promoção/descarte): lê draft, bate o martelo.
+
+Timeboxes duros (mecanismo, não pedido): dev de candidato ≤12min (SIGTERM); experimento A/B em modo paralelo ≤5min de parede; rodada completa de geração (build+gate+julgamento) ≤30min. Fila esperando >1.5x o previsto = kill + takeover (regra kill-fast).
+
 ## Radar de tecnologia (nunca parar de estudar — veredito registrado antes de adotar)
 
 - **deer-flow (ByteDance, MIT, 78k stars, ativo, 2026-08-01):** SuperAgent harness sobre LangGraph. ROUBAR padrão: sandbox isolado por run (versão subprocess simples, não Docker/K8s); SkillScan (scan determinístico antes de carregar capacidade); memória com escopo explícito (fazer com SQLite/markdown, depois do "saiu do lugar"). IGNORAR: LangGraph como runtime, multi-worker Redis, gateway de canais — contraria stdlib-only e a escada.
