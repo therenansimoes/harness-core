@@ -20,6 +20,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import profile as profile_mod
 import safety
 
 ROOT = Path(__file__).parent.resolve()
@@ -148,6 +149,17 @@ def _write_trace(lines: list[str], run_id: str) -> tuple[str, int]:
 # ------------------------------------------------------------------- backends
 
 
+def _system_prompt(workspace: Path) -> str:
+    """SYSTEM_PROMPT + o que profile.py conseguiu detectar do projeto-alvo
+    (D3, self-adaptive). Detecção pura, sem gravar nada no workspace: um
+    .harness/profile.toml lá dentro sujaria o diff da run."""
+    try:
+        block = profile_mod.prompt_block(profile_mod.detect(workspace))
+    except Exception:
+        block = ""
+    return SYSTEM_PROMPT + block
+
+
 def _run_cli(prompt: str, workspace: Path) -> AgentResult:
     cmd = [
         "claude",
@@ -165,7 +177,7 @@ def _run_cli(prompt: str, workspace: Path) -> AgentResult:
         "--permission-mode",
         "bypassPermissions",
         "--append-system-prompt",
-        SYSTEM_PROMPT,
+        _system_prompt(workspace),
     ]
     t0 = time.time()
     returncode, stdout, stderr = safety.safe_run(
@@ -249,7 +261,7 @@ def _run_api(prompt: str, workspace: Path) -> AgentResult:
         resp = client.messages.create(
             model=MODEL,
             max_tokens=8192,
-            system=SYSTEM_PROMPT,
+            system=_system_prompt(workspace),
             tools=[bash_tool],
             messages=messages,
         )
