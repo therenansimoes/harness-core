@@ -218,7 +218,9 @@ def run_sealed_credit(sandbox: Path, va: str, vb: str, repeat: int, pid: str) ->
 
     rows = rows_for_suite(tsv_rows(), "sealed")
     base_n = len([r for r in rows if r["harness_version"] == va])
-    if base_n < score.MIN_N:
+    # MIN_N_GATE (não MIN_N): aqui a pergunta é "tem baseline sealed suficiente
+    # para os gates de eficiência", não "a régua de Wilson consegue opinar".
+    if base_n < score.MIN_N_GATE:
         print(f"   sealed: baseline {va} tem {base_n} runs, rodando baseline em sealed...")
         env = {**os.environ, "HARNESS_RESULTS": str(RESULTS), "HARNESS_TASKS_ROOT": str(ROOT)}
         subprocess.run(

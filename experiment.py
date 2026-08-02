@@ -21,7 +21,7 @@ Fluxo:
     cada worktree, parando no par completo em que o custo acumulado >= budget
     -> agrega -> grava evolution/experiments/<name>_<ts>.json (runs crus +
     agregados) e evolution/experiments/<name>_<ts>-draft.md (DRAFT de
-    decisão, regra min_diff_successes aplicada).
+    decisão, régua de Wilson do score.py aplicada).
 
 O runner NUNCA edita o genoma real (agent.py na raiz) nem promove/rejeita —
 só escreve o draft. Quem decide é o humano/orquestrador, à mão ou via
@@ -43,6 +43,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).parent.resolve()
+sys.path.insert(0, str(ROOT))
+
+import score  # noqa: E402
+
 EXPERIMENTS_DIR = ROOT / "evolution" / "experiments"
 
 # Mesmo schema do results.tsv de run_task.py (header congelado, ver comentário
@@ -87,6 +91,8 @@ def parse_experiment(path: Path) -> dict:
     mutation.setdefault("file", "agent.py")
 
     cfg.setdefault("decision_rule", {})
+    # legado da régua anterior (diferença bruta de sucessos): mantido para os
+    # TOMLs e JSONs já gravados continuarem legíveis. Quem decide é o Wilson.
     cfg["decision_rule"].setdefault("min_diff_successes", 2)
     cfg.setdefault("parallel", False)
     # custo estimado por run, usado SÓ no modo parallel para pré-calcular um
@@ -210,16 +216,37 @@ def aggregate(runs: list[dict]) -> dict:
     return agg
 
 
+# Régua de score.py -> vocabulário do draft. INCONCLUSIVE nunca promove: é o
+# mesmo efeito prático de rejeitar, mas o artefato registra o rótulo certo —
+# "não deu para distinguir" não é "a mutação é ruim".
+_OUTCOME = {
+    score.KEEP: "promover",
+    score.DISCARD: "rejeitar",
+    score.INCONCLUSIVE: "inconclusivo",
+}
+
+
 def decide(agg: dict, decision_rule: dict) -> dict:
-    min_diff = decision_rule.get("min_diff_successes", 2)
-    diff = agg["B"]["successes"] - agg["A"]["successes"]
-    if diff >= min_diff:
-        outcome = "promover"
-    elif -diff >= min_diff:
-        outcome = "rejeitar"
-    else:
-        outcome = "inconclusivo"
-    return {"outcome": outcome, "diff_successes": diff, "min_diff_successes": min_diff}
+    """Veredito do experimento — quem decide é a régua de Wilson do score.py.
+
+    O runner não tem juiz próprio (nem LLM, nem diferença bruta de sucessos):
+    um harness com dois juízes não tem juiz. `decision_rule` sobrevive só como
+    metadado do TOML (min_diff_successes é legado da régua anterior).
+    """
+    w = score.decide_ab(
+        agg["A"]["successes"], agg["A"]["n"],
+        agg["B"]["successes"], agg["B"]["n"],
+    )
+    return {
+        "outcome": _OUTCOME[w["verdict"]],
+        "verdict": w["verdict"],
+        "reason": w["reason"],
+        "rule": "wilson",
+        "min_n": w["min_n"],
+        "ci_a": list(w["ci_a"]),
+        "ci_b": list(w["ci_b"]),
+        "diff_successes": agg["B"]["successes"] - agg["A"]["successes"],
+    }
 
 
 # --------------------------------------------------------------- orquestra
@@ -415,8 +442,9 @@ def print_table(result: dict) -> None:
               f"ANTES de disparar — budget nominal (2 x n x est_cost_per_run) excedia "
               f"${result['budget_usd']:.4f} (est_cost_per_run=${result['est_cost_per_run']:.2f})")
     d = result["decision"]
-    print(f"\ndiff de sucessos (B-A): {d['diff_successes']} · min_diff_successes={d['min_diff_successes']} "
-          f"-> {d['outcome'].upper()}")
+    print(f"\nWilson 95%  A [{d['ci_a'][0]:.2f},{d['ci_a'][1]:.2f}]  B [{d['ci_b'][0]:.2f},{d['ci_b'][1]:.2f}] "
+          f"· diff de sucessos (B-A): {d['diff_successes']} -> {d['outcome'].upper()}")
+    print(f"  {d['reason']}")
 
 
 def render_draft(result: dict) -> str:
@@ -448,8 +476,10 @@ def render_draft(result: dict) -> str:
         "",
         "## Regra de decisão",
         "",
-        f"diff de sucessos (B-A) = {d['diff_successes']}, "
-        f"min_diff_successes = {d['min_diff_successes']} -> **{d['outcome'].upper()}**.",
+        f"Régua de Wilson 95% (N mínimo {d['min_n']} por braço): "
+        f"A [{d['ci_a'][0]:.2f}, {d['ci_a'][1]:.2f}] vs B [{d['ci_b'][0]:.2f}, {d['ci_b'][1]:.2f}], "
+        f"diff de sucessos (B-A) = {d['diff_successes']} -> **{d['outcome'].upper()}** "
+        f"({d['verdict']}) — {d['reason']}.",
         "",
         "## Draft — NÃO é decisão final",
         "",
