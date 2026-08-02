@@ -265,3 +265,11 @@ def test_load_arquivo_ausente(tmp_path):
 def test_config_real_carrega():
     cfg = router.load_config(REPO / "config" / "models.toml")
     assert [t.name for t in router.tiers(cfg)] == ["t0", "t1", "t2"]
+
+
+def test_config_real_preserva_pricing():
+    """models.toml tem dois donos: o router ([[tier]]/[router]) e o backend
+    ([pricing]). Resolver um conflito jogando uma seção fora zera cost_usd em
+    silêncio — o load do router aceita, ninguém quebra, a conta some."""
+    cfg = router.load_config(REPO / "config" / "models.toml")
+    assert cfg.get("pricing"), "config/models.toml perdeu a tabela [pricing] do backend"
