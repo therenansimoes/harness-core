@@ -35,7 +35,7 @@ SYSTEM_PROMPT = """Você executa uma tarefa em um workspace isolado.
 - Termine com: DONE: <resumo em uma frase>.
 """
 
-MAX_TURNS = 12
+MAX_TURNS = 30
 ALLOWED_TOOLS = ["Bash", "Read", "Write", "Edit"]
 MODEL = os.environ.get("HARNESS_MODEL", "claude-haiku-4-5-20251001")
 BACKEND = os.environ.get("HARNESS_BACKEND", "cli")
