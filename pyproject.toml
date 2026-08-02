@@ -33,6 +33,12 @@ harness = "harness.cli:main"
 [project.entry-points."harness.backends"]
 mock = "harness.backends.mock:MockBackend"
 deepagents = "harness.backends.deepagents_backend:DeepagentsBackend"
+claude_code = "harness.backends.claude_code:ClaudeCodeBackend"
+
+# Slot de auth: só o adapter nulo. Adapter de OAuth de assinatura em cliente de
+# terceiro é área cinzenta de ToS e não entra neste repo (risco 7 da SPEC).
+[project.entry-points."harness.auth"]
+null = "harness.backends.auth.base:NullAuth"
 
 [build-system]
 requires = ["hatchling"]
@@ -44,5 +50,8 @@ packages = ["harness"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 norecursedirs = ["legacy", ".venv", "projects", "benchmarks", "data"]
-addopts = "-m 'not ollama'"
-markers = ["ollama: exige servidor Ollama local rodando (excluído por padrão)"]
+addopts = "-m 'not ollama and not claude_cli'"
+markers = [
+    "ollama: exige servidor Ollama local rodando (excluído por padrão)",
+    "claude_cli: gasta dinheiro — exige o Claude Code CLI instalado e autenticado (excluído por padrão)",
+]

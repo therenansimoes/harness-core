@@ -47,6 +47,7 @@ def _factories() -> dict[str, Callable[[], Backend]]:
     factories: dict[str, Callable[[], Backend]] = {
         "mock": _builtin_mock,
         "deepagents": _builtin_deepagents,
+        "claude_code": _builtin_claude_code,
     }
     factories.update(_entry_point_factories())
     factories.update(_manual)
@@ -63,6 +64,12 @@ def _builtin_deepagents() -> Backend:
     from harness.backends.deepagents_backend import DeepagentsBackend
 
     return DeepagentsBackend()
+
+
+def _builtin_claude_code() -> Backend:
+    from harness.backends.claude_code import ClaudeCodeBackend
+
+    return ClaudeCodeBackend()
 
 
 def available() -> list[str]:

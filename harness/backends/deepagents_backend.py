@@ -165,7 +165,19 @@ def _build_agent(req: ExecRequest):
     middleware.append(ModelCallLimitMiddleware(run_limit=req.max_turns, exit_behavior="end"))
 
     usage_cb = UsageMetadataCallbackHandler()
-    agent = create_deep_agent(model=req.model, backend=fs, middleware=middleware)
+    # Convenção de workspace é responsabilidade do BACKEND, não da unit: o
+    # filesystem virtual tem root no workspace, e a unit fala "seu diretório de
+    # trabalho" sem saber disso. Sem esta ponte, modelo pequeno alucina path.
+    agent = create_deep_agent(
+        model=req.model,
+        backend=fs,
+        middleware=middleware,
+        system_prompt=(
+            "Seu diretório de trabalho é o root do filesystem: os arquivos da "
+            'tarefa estão em "/" (ex.: /arquivo.py). Use ls para conferir e as '
+            "tools de arquivo (read_file, edit_file, write_file) para mexer neles."
+        ),
+    )
     return agent, usage_cb
 
 

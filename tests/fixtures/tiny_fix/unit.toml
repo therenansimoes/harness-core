@@ -1,6 +1,9 @@
 id = "tiny_fix"
 kind = "code"
-prompt = """O arquivo /target.py tem uma função add(a, b) que subtrai em vez de somar.
-Corrija: chame edit_file com file_path="/target.py", old_string="return a - b",
-new_string="return a + b". Não faça mais nada depois disso."""
+# Prompt neutro de backend: nomeia o arquivo e a mudança exata, sem citar tool
+# nem formato de path de um executor específico (aceite do PR-7: mesmo unit
+# roda em qualquer backend).
+prompt = """No seu diretório de trabalho existe o arquivo target.py com uma função
+add(a, b) que está errada: retorna a - b. Edite target.py trocando
+"return a - b" por "return a + b". Não faça mais nada depois disso."""
 verify_cmd = "python3 -c 'from target import add; assert add(2,3)==5'"
