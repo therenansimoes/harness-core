@@ -13,17 +13,20 @@
 # Quem converte token em $ é o backend, via [pricing] no fim do arquivo — o
 # router nunca lê preço absoluto, só a ordem relativa de cost_rank.
 
+# TETO DE HARDWARE (M3 Pro, 18GB RAM): modelo local até ~7-8B. 30B trava a
+# máquina inteira — não entra em tier NUNCA nesta máquina.
+
 [[tier]]
 name = "t0"
 backend = "deepagents"
-model = "ollama:qwen3:4b"        # local, $0 por run
+model = "ollama:qwen2.5:3b"      # local, $0 por run; presente no ollama daqui
 max_turns = 12
 cost_rank = 0
 
 [[tier]]
 name = "t1"
-backend = "deepagents"
-model = "ollama:qwen3-coder:30b"
+backend = "claude_code"
+model = "haiku"                  # ~$0.02/run medido no aceite do PR-7
 max_turns = 24
 cost_rank = 1
 
