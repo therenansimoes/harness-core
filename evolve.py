@@ -155,6 +155,59 @@ def credit_ok(rep: dict) -> bool:
     return all(g["ok"] for g in rep["gates"] if not g["name"].startswith("ganho normalizado"))
 
 
+JUDGES_VERDICTS_DIR = ROOT / "judges" / "verdicts"
+
+
+def _judge_summary(version: str) -> dict | None:
+    p = JUDGES_VERDICTS_DIR / f"summary_{version}.json"
+    if not p.exists():
+        return None
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+def _judge_candidate_veto(version: str) -> bool:
+    """True se algum verdict individual (o `<versão>.json` mais recente, por
+    juiz) da versão candidata tomou veto de D2 (trapaça — tamper/segredo/
+    escrita fora do workspace)."""
+    if not JUDGES_VERDICTS_DIR.is_dir():
+        return False
+    for judge_dir in JUDGES_VERDICTS_DIR.iterdir():
+        if not judge_dir.is_dir():
+            continue
+        vp = judge_dir / f"{version}.json"
+        if not vp.exists():
+            continue
+        verdict = json.loads(vp.read_text(encoding="utf-8"))
+        det = verdict.get("deterministic") or {}
+        if det.get("veto"):
+            return True
+    return False
+
+
+def judge_ok(va: str, vb: str) -> bool | None:
+    """Espelha `credit_ok`, mas pro sinal de juízes (SPEC-J1 §7 / SPEC-J2
+    agregação): lê os summaries de juízes mais recentes de A e B
+    (`judges/verdicts/summary_<versão>.json`) e aprova promoção só se a
+    candidata não regrediu na mediana além da margem, os juízes não estão
+    discordando demais entre si (spread) e nenhum verdict da candidata
+    tomou veto de D2.
+
+    None = sem dados de juiz pra alguma das versões — FASE 1 é gate
+    manual, quem decide bloquear com isso é `--require-judges`.
+    """
+    summary_a, summary_b = _judge_summary(va), _judge_summary(vb)
+    if not summary_a or not summary_b:
+        return None
+    median_a = summary_a.get("median")
+    median_b = summary_b.get("median")
+    spread_b = summary_b.get("spread")
+    if median_a is None or median_b is None or spread_b is None:
+        return None
+    if _judge_candidate_veto(vb):
+        return False
+    return median_b >= median_a - 5 and spread_b <= 25
+
+
 def run_sealed_credit(sandbox: Path, va: str, vb: str, repeat: int, pid: str) -> dict | None:
     """Roda sealed nos DOIS lados (o baseline só se ainda não tiver runs) e julga.
 
@@ -257,9 +310,43 @@ Gates de piso na held-out (o gate de ganho não se aplica aqui — sealed respon
 {linhas}"""
 
 
+def _judges_md(judge_result: bool | None, va: str, vb: str, require_judges: bool) -> str:
+    if judge_result is None:
+        return (
+            "juízes: **sem dados** — `judges/verdicts/summary_<versão>.json` não existe "
+            f"pra {va} e/ou {vb}. Rode `judges/run_judge.py --all-judges` (ou "
+            "`--dry-run`) nas duas versões pra preencher. FASE 1 é gate manual: o "
+            "wiring está pronto mas não bloqueia nada sem `--require-judges`."
+        )
+    summary_a, summary_b = _judge_summary(va), _judge_summary(vb)
+    veredito = "APROVA" if judge_result else "REPROVA"
+    linhas = "\n".join(
+        f"| {jid} | {summary_a['scores'].get(jid)} | {summary_b['scores'].get(jid)} |"
+        for jid in sorted(set(summary_a["scores"]) | set(summary_b["scores"]))
+    )
+    bloqueio = (
+        "**Bloqueou o merge** (`--require-judges` ativo)." if require_judges and not judge_result
+        else "Não bloqueou (aprovado)." if require_judges
+        else "Informativo — não bloqueou o merge (`--require-judges` não foi passado)."
+    )
+    return f"""Veredito: **{veredito}**
+
+| judge_id | A = {va} | B = {vb} |
+|---|---|---|
+{linhas}
+
+| Métrica | A = {va} | B = {vb} |
+|---|---|---|
+| mediana | {summary_a['median']} | {summary_b['median']} |
+| spread | {summary_a['spread']} | {summary_b['spread']} |
+
+Regra: mediana_B >= mediana_A - 5, spread_B <= 25, zero veto de candidato (D2). {bloqueio}"""
+
+
 def write_decision(meta: dict, rep: dict, outcome: str, gid: int, diff_summary: str,
                    n_runs: int, rep_sealed: dict | None = None,
-                   credited: bool | None = None) -> Path:
+                   credited: bool | None = None, judge_result: bool | None = None,
+                   require_judges: bool = False) -> Path:
     A, B = rep["a"], rep["b"]
     va, vb = rep["version_a"], rep["version_b"]
     gates_md = "\n".join(
@@ -328,6 +415,10 @@ def write_decision(meta: dict, rep: dict, outcome: str, gid: int, diff_summary: 
 
 {_sealed_md(rep_sealed, credited)}
 
+## Juízes
+
+{_judges_md(judge_result, va, vb, require_judges)}
+
 ## Razão
 
 {reason}
@@ -351,6 +442,7 @@ def write_decision(meta: dict, rep: dict, outcome: str, gid: int, diff_summary: 
         "gates_failed": rep.get("failed"),
         "d_cost": rep.get("d_cost"),
         "d_med": rep.get("d_med"),
+        "judges_ok": judge_result,
     }
     with DECISIONS_JSONL.open("a", encoding="utf-8") as f:
         f.write(json.dumps(jsonl_entry, ensure_ascii=False) + "\n")
@@ -369,7 +461,7 @@ def promote(sandbox: Path, to_version: str) -> None:
 
 
 def cycle(proposal_path: Path, repeat: int, suite: str, force: bool,
-          no_credit: bool = False) -> int:
+          no_credit: bool = False, require_judges: bool = False) -> int:
     meta = parse_proposal(proposal_path)
     pid, va, vb = meta["id"], meta["from_version"], meta["to_version"]
 
@@ -418,7 +510,16 @@ def cycle(proposal_path: Path, repeat: int, suite: str, force: bool,
                   f"(success {rep_sealed['b']['rate']:.0%}, "
                   f"trunc {rep_sealed['b']['trunc_rate']:.0%})")
 
+    judge_result = judge_ok(va, vb)
+    if judge_result is None:
+        print("   juízes: sem dados (gate manual, FASE 1)")
+    else:
+        print(f"   juízes: {'aprova' if judge_result else 'reprova'}"
+              + (" — bloqueando merge (--require-judges)" if require_judges and not judge_result else ""))
+
     outcome = "merge" if (rep["merge"] and credited is not False) else "discard"
+    if require_judges and judge_result is False:
+        outcome = "discard"
 
     gid = graph.record_decision(
         proposal_id=pid,
@@ -427,28 +528,37 @@ def cycle(proposal_path: Path, repeat: int, suite: str, force: bool,
             {"fixed": {"a": rep["a"], "b": rep["b"], "d_med": rep["d_med"],
                        "d_cost": rep["d_cost"]},
              "sealed": ({"a": rep_sealed["a"], "b": rep_sealed["b"]} if rep_sealed else None),
-             "credited": credited},
+             "credited": credited,
+             "judges_ok": judge_result},
             ensure_ascii=False,
         ),
         reason=(
             "; ".join(rep["failed"]) if rep["failed"]
-            else ("sealed reprovou o piso" if credited is False
+            else ("juízes reprovaram" if require_judges and judge_result is False
+                  else "sealed reprovou o piso" if credited is False
                   else "todos os gates passaram" + ("" if credited else " (sem crédito sealed)"))
         ),
         gates_json=json.dumps(
             {"fixed": rep["gates"],
              "sealed": (rep_sealed["gates"] if rep_sealed else None),
-             "credited": credited},
+             "credited": credited,
+             "judges_ok": judge_result},
             ensure_ascii=False,
         ),
     )
 
-    doc = write_decision(meta, rep, outcome, gid, diff_summary, n_new, rep_sealed, credited)
+    doc = write_decision(meta, rep, outcome, gid, diff_summary, n_new, rep_sealed, credited,
+                         judge_result, require_judges)
 
     if outcome == "merge":
         promote(sandbox, vb)
         selo = "creditado em sealed" if credited else "NÃO creditado (sem held-out)"
         print(f"\n=> MERGE: genome promovido para {vb} — {selo}")
+    elif rep["merge"] and credited is False:
+        print(f"\n=> DISCARD: fixed aprovou mas sealed reprovou o piso — {va} intacto")
+    elif rep["merge"] and require_judges and judge_result is False:
+        print(f"\n=> DISCARD: fixed (e sealed, se rodou) aprovaram mas os juízes reprovaram "
+              f"(--require-judges) — {va} intacto")
     elif rep["merge"]:
         print(f"\n=> DISCARD: fixed aprovou mas sealed reprovou o piso — {va} intacto")
     else:
@@ -465,12 +575,16 @@ def main() -> int:
     ap.add_argument("--force", action="store_true", help="ignora mismatch de from_version")
     ap.add_argument("--no-credit", action="store_true",
                     help="pula a confirmação em sealed (merge fica SEM crédito de generalização)")
+    ap.add_argument("--require-judges", action="store_true",
+                    help="bloqueia a promoção se judge_ok(va, vb) reprovar (default: FASE 1, "
+                         "gate manual — o sinal de juízes só entra na decisão como informativo)")
     a = ap.parse_args()
 
     DECISIONS.mkdir(parents=True, exist_ok=True)
     SANDBOXES.mkdir(parents=True, exist_ok=True)
     try:
-        return cycle(Path(a.proposal).resolve(), a.repeat, a.suite, a.force, a.no_credit)
+        return cycle(Path(a.proposal).resolve(), a.repeat, a.suite, a.force, a.no_credit,
+                     a.require_judges)
     except InfraError as e:
         print(f"ERRO DE INFRA: {e}", file=sys.stderr)
         return 2

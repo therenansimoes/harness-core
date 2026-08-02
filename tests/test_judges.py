@@ -554,3 +554,66 @@ def test_build_summary_ignora_scores_none():
     assert summary["median"] == 80
     assert summary["spread"] == 20
     assert summary["scores"]["j_web"] is None
+
+
+# ---------------------------------------------------------- verdicts timestamped
+
+
+def test_write_verdict_grava_history_timestamped_e_compat(tmp_path, monkeypatch):
+    """write_verdict grava um registro histórico timestamped (que nunca é
+    sobrescrito) além da cópia `<versão>.json` de compatibilidade."""
+    verdicts_dir = tmp_path / "verdicts"
+    monkeypatch.setattr(run_judge, "VERDICTS_DIR", verdicts_dir)
+
+    verdict = run_judge.run_dry()
+    out = run_judge.write_verdict(verdict)
+
+    version = verdict["harness_version"]
+    assert out == verdicts_dir / "j_b2b" / f"{version}.json"
+    assert out.exists()
+
+    history_dir = verdicts_dir / "j_b2b" / "history"
+    hist_files = list(history_dir.glob(f"{version}_*.json"))
+    assert len(hist_files) == 1
+    assert json.loads(hist_files[0].read_text()) == json.loads(out.read_text())
+
+
+def test_write_verdict_rerun_nao_apaga_history_anterior(tmp_path, monkeypatch):
+    """Re-rodar o mesmo juiz/versão sobrescreve a cópia de compat mas
+    acumula um novo registro em history/ (dívida do STATUS.md: antes o
+    verdict.json era sobrescrito a cada re-run e o histórico se perdia)."""
+    verdicts_dir = tmp_path / "verdicts"
+    monkeypatch.setattr(run_judge, "VERDICTS_DIR", verdicts_dir)
+
+    v1 = run_judge.run_dry()
+    v1["ts"] = "2026-01-01T00:00:00+00:00"
+    run_judge.write_verdict(v1)
+
+    v2 = run_judge.run_dry()
+    v2["ts"] = "2026-01-01T00:00:05+00:00"
+    out2 = run_judge.write_verdict(v2)
+
+    history_dir = verdicts_dir / "j_b2b" / "history"
+    hist_files = sorted(p.name for p in history_dir.glob(f"{v2['harness_version']}_*.json"))
+    assert len(hist_files) == 2
+    assert json.loads(out2.read_text())["ts"] == "2026-01-01T00:00:05+00:00"
+
+
+def test_write_verdict_history_nao_duplica_no_ingest(tmp_path, monkeypatch):
+    """graph.ingest_verdicts varre `*/*.json` — history/ fica um nível a
+    mais fundo, então não bate no glob e não duplica linha na tabela
+    `judgements` por causa da cópia de compat."""
+    verdicts_dir = tmp_path / "verdicts"
+    monkeypatch.setattr(run_judge, "VERDICTS_DIR", verdicts_dir)
+
+    verdict = run_judge.run_dry()
+    run_judge.write_verdict(verdict)
+
+    import graph  # noqa: E402 (import local — evita acoplar módulo no topo do arquivo)
+
+    db_path = tmp_path / "g.db"
+    n = graph.ingest_verdicts(verdicts_dir=verdicts_dir, db_path=str(db_path))
+    assert n == 1
+
+    rows = graph.judge_history(n=100, db_path=str(db_path))
+    assert len(rows) == 1

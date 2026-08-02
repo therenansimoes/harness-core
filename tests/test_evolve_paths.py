@@ -135,6 +135,10 @@ def run_case(pid, fixed_cand, expect_rc, sealed=None, sealed_base=None,
                 fails.append("decision não registra o crédito em sealed")
             if expect_credited is False and "NÃO creditado" not in txt and merged:
                 fails.append("merge sem held-out não foi marcado como não creditado")
+            if "## Juízes" not in txt:
+                fails.append("decision não tem a seção ## Juízes")
+            if "sem dados" not in txt:
+                fails.append("sem judges/verdicts/ no sandbox, judge_ok deveria ser None (sem dados)")
 
         if sealed is None and "sealed" in calls:
             fails.append("rodou sealed sem suite sealed existir")

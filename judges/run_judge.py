@@ -17,7 +17,9 @@ Fluxo real (§6 do SPEC-J1), por juiz:
        depende da linha `JUDGE_RESULT=...` e do exit code, não do formato
        de pytest/bnt/ctest.
     4. persona.py entrega P1/P2 com citação.
-    5. verdict.json gravado em judges/verdicts/<judge_id>/<harness_version>.json.
+    5. verdict.json gravado em judges/verdicts/<judge_id>/<harness_version>.json
+       (compat, sempre o mais recente) + um registro histórico timestamped em
+       judges/verdicts/<judge_id>/history/<harness_version>_<ts>.json.
 
 --dry-run: pula (2)-(4), usa números sintéticos + persona em modo mock
 (PERSONA_MOCK=1), só para validar o formato do verdict (§7 do SPEC-J1).
@@ -302,10 +304,25 @@ def build_infra_error_verdict(judge_id: str, reg: dict, row: dict | None) -> dic
 
 
 def write_verdict(verdict: dict) -> Path:
+    """Grava o verdict em dois lugares: um registro histórico timestamped
+    (`history/<versão>_<ts compacto>.json`, um por run — nada é
+    sobrescrito) e a cópia `<versão>.json` de compatibilidade (path que
+    summary/testes/graph.ingest_verdicts já esperam, sempre a mais
+    recente). `history/` fica um nível a mais fundo que `judges/verdicts/
+    <judge_id>/`, então o glob `*/*.json` de `graph.ingest_verdicts` não
+    desce até lá — só a cópia de compat é ingerida, sem duplicar linha."""
     out_dir = VERDICTS_DIR / verdict["judge_id"]
-    out_dir.mkdir(parents=True, exist_ok=True)
+    history_dir = out_dir / "history"
+    history_dir.mkdir(parents=True, exist_ok=True)
+
+    ts_compact = datetime.fromisoformat(verdict["ts"]).strftime("%Y%m%dT%H%M%S")
+    payload = json.dumps(verdict, indent=2, ensure_ascii=False) + "\n"
+
+    hist_path = history_dir / f"{verdict['harness_version']}_{ts_compact}.json"
+    hist_path.write_text(payload)
+
     out = out_dir / f"{verdict['harness_version']}.json"
-    out.write_text(json.dumps(verdict, indent=2, ensure_ascii=False) + "\n")
+    out.write_text(payload)
     return out
 
 
