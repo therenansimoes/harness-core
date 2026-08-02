@@ -6,9 +6,20 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Renan Simões", email = "renan@rogerstenis.com.br" }]
-dependencies = []
+# Pins exatos: a topologia depende do checkpointer, e o risco 1 da spec manda
+# travar versão no lock (uv.lock é immutable no genoma).
+dependencies = [
+    "langgraph==1.2.10",
+    "langgraph-checkpoint-sqlite==3.1.1",
+]
 
 [project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+# Mesmo conteúdo do extra `dev`, como grupo PEP 735: o grupo é sincronizado por
+# default, então `uv run pytest -q` (o aceite de todo PR) funciona em checkout
+# limpo, sem depender de um pytest de fora do lock.
+[dependency-groups]
 dev = ["pytest>=8.0"]
 
 [project.scripts]

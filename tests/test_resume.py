@@ -11,13 +11,10 @@ import time
 from pathlib import Path
 
 import pytest
+import resume_child  # tests/ está no sys.path do pytest
 
-pytest.importorskip("langgraph")
-
-import resume_child  # noqa: E402  (tests/ está no sys.path do pytest)
-
-from harness.backends import registry  # noqa: E402
-from harness.ledger import store  # noqa: E402
+from harness.backends import registry
+from harness.ledger import store
 
 FIXTURE = Path(__file__).parent / "fixtures" / "echo"
 CHILD = Path(__file__).parent / "resume_child.py"

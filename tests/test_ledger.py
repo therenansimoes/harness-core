@@ -42,6 +42,41 @@ def test_roundtrip(data_dir):
     assert got.sec_total == 1.5
 
 
+def test_node_events_are_keyed_by_attempt(data_dir):
+    assert store.record_node("r1", "execute", {"n": 0}) is True
+    assert store.record_node("r1", "execute", {"n": 0}) is False
+    assert store.record_node("r1", "execute", {"n": 1}, attempt=1) is True
+
+    assert store.get_node("r1", "execute") == {"n": 0}
+    assert store.get_node("r1", "execute", attempt=1) == {"n": 1}
+    assert store.get_node("r1", "execute", attempt=2) is None
+
+
+def test_record_run_once_dedups_the_row(data_dir):
+    rid, wrote = store.record_run_once(_row())
+    assert wrote is True
+    assert store.get_node("r1", "record") == {"row_id": rid}
+
+    again, wrote_again = store.record_run_once(_row())
+    assert (again, wrote_again) == (rid, False)
+    assert len(store.history()) == 1
+
+
+def test_record_run_once_rolls_back_row_if_marker_fails(data_dir, monkeypatch):
+    # Crash entre as duas escritas não pode deixar a linha do run órfã: sem
+    # marcador, o resume inseriria uma segunda linha para o mesmo run.
+    def boom(*args, **kwargs):
+        raise RuntimeError("morreu entre o INSERT e o marcador")
+
+    monkeypatch.setattr(store, "_insert_node", boom)
+    with pytest.raises(RuntimeError):
+        store.record_run_once(_row())
+
+    monkeypatch.undo()
+    assert store.history() == []
+    assert store.get_node("r1", "record") is None
+
+
 def test_filters_and_order(data_dir):
     store.record_run(_row(run_id="a", kind="code", backend="mock"))
     store.record_run(_row(run_id="b", kind="content", backend="mock"))

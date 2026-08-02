@@ -7,9 +7,15 @@
 
 Nós `route`, `measure` e `gate` são stubs determinísticos neste PR — o router
 real é PR-6 e a régua real é PR-4. O que este PR entrega de verdade é a
-idempotência: toda escrita externa passa por `(run_id, node)` no ledger, então
-matar o processo no meio de `execute` e reinvocar o mesmo `thread_id` retoma sem
-reexecutar nada que já aconteceu.
+idempotência: toda escrita externa passa por `(run_id, node, attempt)` no
+ledger, então matar o processo no meio de `execute` e reinvocar o mesmo
+`thread_id` retoma sem reexecutar nada que já aconteceu.
+
+O `attempt` faz parte da chave só dos nós por-tentativa (`execute`, `verify`):
+sem ele o braço `retry` seria decorativo — a segunda passagem acharia o registro
+da primeira e devolveria o resultado cacheado, e nem `max_attempts` nem a
+escalação de tier do router mudariam o desfecho. Os nós que rodam uma vez por
+run (`plan`, `provision`, `record`) ficam no attempt 0.
 """
 
 from __future__ import annotations
@@ -184,14 +190,15 @@ def _provision(state: RunState, config=None) -> dict:
 
 
 def _execute(state: RunState, config=None) -> dict:
-    """Chama o backend — no máximo uma vez por run, custe o que custar o crash."""
+    """Chama o backend — uma vez por tentativa, custe o que custar o crash."""
     run_id = state["run_id"]
+    attempt = state.get("attempt", 0)
     db = _db(config)
-    saved = store.get_node(run_id, "execute", db)
+    saved = store.get_node(run_id, "execute", db, attempt=attempt)
     if saved is not None:
         return {
             "exec": _exec_from_payload(saved),
-            "events": [_event("execute", reused=True)],
+            "events": [_event("execute", reused=True, attempt=attempt)],
         }
 
     sel = state["selection"]
@@ -205,22 +212,30 @@ def _execute(state: RunState, config=None) -> dict:
             trace_path=ws / TRACE_FILE,
         )
     )
-    store.record_node(run_id, "execute", _exec_payload(result), db)
+    store.record_node(run_id, "execute", _exec_payload(result), db, attempt=attempt)
     return {
         "exec": result,
-        "events": [_event("execute", ok=result.ok, exit_reason=result.exit_reason)],
+        "events": [
+            _event(
+                "execute",
+                ok=result.ok,
+                exit_reason=result.exit_reason,
+                attempt=attempt,
+            )
+        ],
     }
 
 
 def _verify(state: RunState, config=None) -> dict:
     """A régua roda o `verify_cmd` da unidade. PR-4 troca isto por `ruler/verify`."""
     run_id = state["run_id"]
+    attempt = state.get("attempt", 0)
     db = _db(config)
-    saved = store.get_node(run_id, "verify", db)
+    saved = store.get_node(run_id, "verify", db, attempt=attempt)
     if saved is not None:
         return {
             "verdict": _verdict_from_payload(saved),
-            "events": [_event("verify", reused=True)],
+            "events": [_event("verify", reused=True, attempt=attempt)],
         }
 
     ws = Path(state["workspace"])
@@ -245,10 +260,14 @@ def _verify(state: RunState, config=None) -> dict:
         log_path=log_path,
         sec=time.monotonic() - t0,
     )
-    store.record_node(run_id, "verify", _verdict_payload(verdict), db)
+    store.record_node(run_id, "verify", _verdict_payload(verdict), db, attempt=attempt)
     return {
         "verdict": verdict,
-        "events": [_event("verify", passed=verdict.passed, exit_code=exit_code)],
+        "events": [
+            _event(
+                "verify", passed=verdict.passed, exit_code=exit_code, attempt=attempt
+            )
+        ],
     }
 
 
@@ -283,7 +302,20 @@ def _accept(state: RunState, config=None) -> dict:
 
 
 def _retry(state: RunState, config=None) -> dict:
-    return {"attempt": state["attempt"] + 1, "events": [_event("retry")]}
+    """Nova tentativa: zera o resultado da anterior para ninguém ler estado velho.
+
+    O que faz o backend rodar de novo é o `attempt` na chave do ledger; limpar
+    `exec`/`verdict` aqui garante que um nó futuro não confunda a tentativa
+    anterior com a corrente se o processo morrer entre `retry` e `execute`.
+    """
+    attempt = state["attempt"] + 1
+    return {
+        "attempt": attempt,
+        "exec": None,
+        "verdict": None,
+        "decision": None,
+        "events": [_event("retry", attempt=attempt)],
+    }
 
 
 def _escalate(state: RunState, config=None) -> dict:
@@ -323,7 +355,7 @@ def _record(state: RunState, config=None) -> dict:
     # `ok` é o veredito da régua, não a opinião do agente.
     ok = bool(decision and decision.action == "accept")
 
-    row_id = store.record_run(
+    row_id, wrote = store.record_run_once(
         RunRow(
             run_id=run_id,
             unit_id=unit.id,
@@ -341,10 +373,9 @@ def _record(state: RunState, config=None) -> dict:
             intervention=False,
             created_at=store.now_iso(),
         ),
-        db,
+        path=db,
     )
-    store.record_node(run_id, "record", {"row_id": row_id}, db)
-    return {"events": [_event("record", row_id=row_id, ok=ok)]}
+    return {"events": [_event("record", row_id=row_id, ok=ok, reused=not wrote)]}
 
 
 def _after_gate(state: RunState) -> str:

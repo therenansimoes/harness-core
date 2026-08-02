@@ -3,8 +3,11 @@
 Caminho do banco: `$HARNESS_DATA_DIR/runs.sqlite`, default `data/runs.sqlite`
 relativo ao cwd. O env var existe para o teste apontar para um tmpdir.
 
-Além das runs, guarda `node_events`: marca `(run_id, node)` de toda escrita
-externa feita por um nó do grafo. É o que torna o resume idempotente.
+Além das runs, guarda `node_events`: marca `(run_id, node, attempt)` de toda
+escrita externa feita por um nó do grafo. É o que torna o resume idempotente.
+O `attempt` fica em 0 para os nós que rodam uma vez por run (plan, provision,
+record); os nós por-tentativa (execute, verify) passam o attempt corrente, senão
+o retry replaya o resultado da tentativa anterior em vez de reexecutar.
 """
 
 from __future__ import annotations
@@ -41,11 +44,12 @@ CREATE INDEX IF NOT EXISTS idx_runs_run_id ON runs(run_id);
 CREATE INDEX IF NOT EXISTS idx_runs_prior ON runs(kind, tier, backend);
 
 CREATE TABLE IF NOT EXISTS node_events (
-    run_id     TEXT NOT NULL,
-    node       TEXT NOT NULL,
-    payload    TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    UNIQUE(run_id, node)
+    run_id     TEXT    NOT NULL,
+    node       TEXT    NOT NULL,
+    attempt    INTEGER NOT NULL DEFAULT 0,
+    payload    TEXT    NOT NULL,
+    created_at TEXT    NOT NULL,
+    UNIQUE(run_id, node, attempt)
 );
 """
 
@@ -114,26 +118,67 @@ def history(
 
 
 def record_node(
-    run_id: str, node: str, payload: dict, path: Path | None = None
+    run_id: str, node: str, payload: dict, path: Path | None = None, attempt: int = 0
 ) -> bool:
-    """Marca `(run_id, node)` como já executado. False = já estava lá (resume)."""
+    """Marca `(run_id, node, attempt)` como executado. False = já estava lá."""
     with connect(path) as conn:
-        cur = conn.execute(
-            "INSERT OR IGNORE INTO node_events (run_id, node, payload, created_at) "
-            "VALUES (?, ?, ?, ?)",
-            (run_id, node, json.dumps(payload, default=str), now_iso()),
-        )
-        return cur.rowcount == 1
+        return _insert_node(conn, run_id, node, payload, attempt)
 
 
-def get_node(run_id: str, node: str, path: Path | None = None) -> dict | None:
+def get_node(
+    run_id: str, node: str, path: Path | None = None, attempt: int = 0
+) -> dict | None:
     """Payload gravado por `record_node`, ou None se o nó ainda não rodou."""
     with connect(path) as conn:
-        row = conn.execute(
-            "SELECT payload FROM node_events WHERE run_id = ? AND node = ?",
-            (run_id, node),
-        ).fetchone()
+        row = _select_node(conn, run_id, node, attempt)
     return json.loads(row["payload"]) if row is not None else None
+
+
+def record_run_once(
+    row: RunRow, node: str = "record", path: Path | None = None
+) -> tuple[int, bool]:
+    """Grava a linha do run e o marcador do nó na MESMA transação.
+
+    Devolve `(row_id, gravou_agora)`. Duas transações separadas abririam uma
+    janela em que um SIGKILL deixa a linha em `runs` sem marcador — o re-invoke
+    do mesmo thread_id inseriria uma segunda linha para o mesmo run.
+    """
+    values = [_encode(getattr(row, c)) for c in _COLUMNS]
+    placeholders = ", ".join("?" * len(_COLUMNS))
+    with connect(path) as conn:
+        # IMMEDIATE: o check-then-insert vira atômico também entre processos.
+        conn.execute("BEGIN IMMEDIATE")
+        saved = _select_node(conn, row.run_id, node, 0)
+        if saved is not None:
+            return int(json.loads(saved["payload"])["row_id"]), False
+        cur = conn.execute(
+            f"INSERT INTO runs ({', '.join(_COLUMNS)}) VALUES ({placeholders})",
+            values,
+        )
+        row_id = int(cur.lastrowid)
+        _insert_node(conn, row.run_id, node, {"row_id": row_id}, 0)
+        return row_id, True
+
+
+def _insert_node(
+    conn: sqlite3.Connection, run_id: str, node: str, payload: dict, attempt: int
+) -> bool:
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO node_events "
+        "(run_id, node, attempt, payload, created_at) VALUES (?, ?, ?, ?, ?)",
+        (run_id, node, attempt, json.dumps(payload, default=str), now_iso()),
+    )
+    return cur.rowcount == 1
+
+
+def _select_node(
+    conn: sqlite3.Connection, run_id: str, node: str, attempt: int
+) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT payload FROM node_events "
+        "WHERE run_id = ? AND node = ? AND attempt = ?",
+        (run_id, node, attempt),
+    ).fetchone()
 
 
 def _encode(value: object) -> object:
