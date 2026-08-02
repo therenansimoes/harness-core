@@ -4,6 +4,14 @@ __pycache__/
 .DS_Store
 evolution/sandboxes/
 evolution/critique.db
+# runtime do autopilot (D6): log de sessão, snapshots de revert e a escrita
+# confinada (TMPDIR/workspaces/demo do aceite) — tudo dentro da raiz, nada
+# versionado.
+evolution/autopilot/
+evolution/rollbacks/
+.harness_tmp/
+.harness_ws/
+.harness_demo/
 evolution/.assist_cursor
 channel/whatsapp/auth/
 channel/whatsapp/inbox.jsonl

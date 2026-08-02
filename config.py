@@ -35,6 +35,16 @@ DEFAULTS = {
     "harness": {
         "version_pin": "",        # .harness/ de um projeto pode pinar uma versão
         "results_dir": "",
+        # autopilot (D6): tetos do loop sem supervisão. Os três primeiros são
+        # o freio — o loop para no PRIMEIRO que estourar, não no último.
+        "autopilot_wall_clock_s": 1200,
+        "autopilot_budget_usd": 1.00,
+        "autopilot_max_iterations": 30,
+        "autopilot_self_every": 3,       # a cada N passos de fila, 1 passo de auto-evolução
+        "autopilot_probation_runs": 3,   # runs de observação depois de um merge
+        # Escrita fora da raiz do repo é a única forma de o autopilot estragar
+        # algo que não é dele. FALSE por default e é assim que tem que ficar.
+        "autopilot_allow_external_work_path": False,
     },
 }
 
@@ -74,6 +84,12 @@ def load(repo: Path | None = None) -> dict:
         wa["inbox_path"] = os.environ["HARNESS_WA_INBOX"]
     if os.environ.get("HARNESS_WA_AUTO_REPLY"):
         wa["allow_auto_reply_to_owner"] = os.environ["HARNESS_WA_AUTO_REPLY"].lower() in ("1", "true", "yes")
+
+    h = cfg["harness"]
+    if os.environ.get("HARNESS_AP_MINUTES"):
+        h["autopilot_wall_clock_s"] = int(float(os.environ["HARNESS_AP_MINUTES"]) * 60)
+    if os.environ.get("HARNESS_AP_BUDGET"):
+        h["autopilot_budget_usd"] = float(os.environ["HARNESS_AP_BUDGET"])
 
     # O dono é sempre tratado como autorizado, mas nunca implicitamente:
     # se está configurado, entra na allowlist de forma explícita e visível.

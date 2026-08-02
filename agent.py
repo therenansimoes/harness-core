@@ -35,6 +35,7 @@ SYSTEM_PROMPT = """Você executa uma tarefa em um workspace isolado.
 - Não pergunte nem peça confirmação: execute.
 - Termine com: DONE: <resumo em uma frase>.
 """
+# --- autopilot:prompt_tail ---
 
 MAX_TURNS = 30
 ALLOWED_TOOLS = ["Bash", "Read", "Write", "Edit"]
@@ -297,7 +298,9 @@ def _run_api(prompt: str, workspace: Path) -> AgentResult:
 
 def run_agent(prompt: str, workspace: Path) -> AgentResult:
     if os.environ.get("HARNESS_MOCK_AGENT") == "1":
-        return AgentResult(ok=True, seconds=0.01, tokens=0, cost_usd=0.0, turns=1, text="DONE: mock", notes="mock")
+        import mockagent
+
+        return mockagent.run(prompt, workspace)
     if BACKEND == "api":
         return _run_api(prompt, workspace)
     if BACKEND == "cli":

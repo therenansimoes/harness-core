@@ -1,0 +1,73 @@
+# catalog.toml — o mapa "sintoma observado -> mutação a propor" do autopilot.
+#
+# É deliberadamente uma TABELA, não um LLM: a decisão de qual proposta gerar
+# tem que ser determinística e auditável, senão o loop noturno vira ruído caro
+# e nenhuma decision explica por que aquela mudança foi tentada.
+#
+# A ORDEM importa: `classify()` devolve o `code` da PRIMEIRA regra cujo
+# `match_notes` casa, e empate de contagem em `dominant_error()` é desempatado
+# pela ordem daqui. Regra nova entra onde a precedência dela é verdadeira, não
+# no fim por conveniência.
+#
+# Campos:
+#   code        identificador curto; vira parte do id da proposta e do log.
+#   match_notes regex (re.search) sobre a coluna `notes` do results.tsv.
+#   trace_any   lista de regex sobre as linhas do trace.jsonl da run. Opcional,
+#               e só REFINA: a regra que tem trace_any só conta a run cujo
+#               trace confirma o sintoma.
+#   action      "propose" | "ignore".
+#   file/kind/anchor/factor/max_value/text  o que a proposta gerada faz.
+#   hypothesis  a frase que vai para o front matter — escrita ANTES de rodar.
+#
+# As entradas iniciais saem das notes REAIS do results.tsv (error_max_turns
+# dominante, tamper:test_file_modified 3x, cli_exit_1 3x).
+
+[[rule]]
+code = "max_turns"
+match_notes = "(error_)?max_turns"
+action = "propose"
+file = "agent.py"
+kind = "bump_int"
+anchor = "MAX_TURNS"
+factor = 1.5
+max_value = 60
+hypothesis = "Truncamento por limite de turnos é teto do harness, não incapacidade do modelo: subir MAX_TURNS 1.5x reduz max_turns sem piorar custo/run além de 10%."
+
+[[rule]]
+code = "tamper_tests"
+match_notes = "tamper:"
+action = "propose"
+file = "agent.py"
+kind = "append_prompt"
+anchor = "# --- autopilot:prompt_tail ---"
+text = "- NUNCA edite arquivos test_*.py / verify.py; se o teste parece errado, reporte em vez de alterar."
+hypothesis = "O agente edita o verificador porque nada no prompt proíbe: uma linha explícita elimina tamper: sem custar success."
+
+[[rule]]
+code = "verify_env"
+match_notes = "verify:"
+trace_any = ["ModuleNotFoundError", "command not found", "No module named"]
+action = "propose"
+file = "agent.py"
+kind = "append_prompt"
+anchor = "# --- autopilot:prompt_tail ---"
+text = "- Antes de finalizar, execute o comando de teste detectado no bloco de perfil e cole a saída."
+hypothesis = "Falha de verify com erro de ambiente no trace é entrega sem execução: exigir rodar o teste antes de finalizar converte parte dessas falhas em success."
+
+[[rule]]
+code = "agent_timeout"
+match_notes = "^timeout$"
+action = "propose"
+file = "agent.py"
+kind = "append_prompt"
+anchor = "# --- autopilot:prompt_tail ---"
+text = "- Prefira Edit direto; não releia arquivo já lido."
+hypothesis = "Timeout de parede é gasto de turnos em releitura: instruir edição direta corta mediana de segundos >=5% sem derrubar success."
+
+# Falha de infra, não do genoma. Gerar proposta aqui é queimar budget para
+# mudar agent.py por causa de um erro que não está em agent.py.
+[[rule]]
+code = "cli_exit"
+match_notes = "cli_exit_\\d+"
+action = "ignore"
+hypothesis = "cli_exit_N é falha de infra do backend — não há mutação de genoma que corrija."
