@@ -32,6 +32,8 @@ ROOT = Path(__file__).parent.resolve()
 RESULTS = Path(os.environ.get("HARNESS_RESULTS", ROOT / "results.tsv"))
 # Tasks moram no repo; a sandbox copia só o genome.
 TASKS_ROOT = Path(os.environ.get("HARNESS_TASKS_ROOT", ROOT)).resolve()
+TRACE_ROOT = Path(os.environ.get("HARNESS_TRACE_ROOT", ROOT / "runs"))
+TRACE_KEEP_RUNS = 50
 HEADER = [
     "timestamp",
     "harness_version",
@@ -73,6 +75,29 @@ def append_result(row: dict) -> None:
         fh.write(line + "\n")
 
 
+def gc_traces() -> None:
+    """Mantém as TRACE_KEEP_RUNS runs mais recentes em runs/; apaga o resto.
+    Nunca apaga um run_id citado em algum verdict.json (persona pode ter
+    citado trace.jsonl:N daquela run — apagar quebraria a auditoria)."""
+    if not TRACE_ROOT.is_dir():
+        return
+    run_dirs = sorted(
+        (p for p in TRACE_ROOT.iterdir() if p.is_dir()),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if len(run_dirs) <= TRACE_KEEP_RUNS:
+        return
+    verdicts_dir = ROOT / "judges" / "verdicts"
+    verdict_text = ""
+    if verdicts_dir.is_dir():
+        verdict_text = "\n".join(vf.read_text() for vf in verdicts_dir.rglob("*.json"))
+    for p in run_dirs[TRACE_KEEP_RUNS:]:
+        if p.name in verdict_text:
+            continue
+        shutil.rmtree(p, ignore_errors=True)
+
+
 def run_once(task_dir: Path, suite: str, keep: bool) -> bool:
     task_id = task_dir.name
     prompt = (task_dir / "prompt.md").read_text()
@@ -109,13 +134,14 @@ def run_once(task_dir: Path, suite: str, keep: bool) -> bool:
         except subprocess.TimeoutExpired:
             success, vnote = 0, "verify:timeout"
 
+        trace_token = f"trace:{res.trace_path}" if res.trace_path else ""
         if tampered:
             # o agent editou o test_*.py em vez de resolver a tarefa — hard fail,
             # independente do returncode do verify.
             success = 0
-            notes = "tamper:test_file_modified"
+            notes = "; ".join(n for n in ("tamper:test_file_modified", trace_token) if n)
         else:
-            notes = "; ".join(n for n in (res.notes, vnote) if n)
+            notes = "; ".join(n for n in (res.notes, vnote, trace_token) if n)
         append_result(
             {
                 "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -155,6 +181,8 @@ def main() -> int:
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--keep", action="store_true", help="não apagar o workspace")
     a = ap.parse_args()
+
+    gc_traces()
 
     tasks = discover(a.suite) if a.all else [Path(a.task).resolve()] if a.task else []
     if not tasks:

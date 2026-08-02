@@ -248,6 +248,22 @@ def write_verdict(verdict: dict) -> Path:
 # --------------------------------------------------------------- caminho real
 
 
+def load_trace(notes: str) -> str:
+    """Lê runs/<run_id>/trace.jsonl a partir do token `trace:<path>` gravado
+    por run_task.py nas notes (SPEC-J2 design 1) e renderiza `"{i}: {line}"`
+    — a persona só acerta `trace.jsonl:N` se enxergar o N na frente da
+    linha. Sem token ou arquivo ausente (ex.: backend `api`, que ainda não
+    grava trace): cai no comportamento antigo, as notes cruas."""
+    m = re.search(r"trace:(\S+)", notes or "")
+    if not m:
+        return notes or ""
+    trace_path = REPO_ROOT / m.group(1)
+    if not trace_path.exists():
+        return notes or ""
+    lines = trace_path.read_text().splitlines()
+    return "\n".join(f"{i}: {line}" for i, line in enumerate(lines, start=1))
+
+
 def run_real() -> dict:
     """Roda run_task.py de verdade (agente real via `claude -p`, custo
     real) e monta a ficha a partir do resultado. Não exercitado neste PR
@@ -300,7 +316,7 @@ def run_real() -> dict:
     # tamper que ele expõe pra fora hoje.
     tampered = bool(row and row.get("notes", "").startswith("tamper:"))
 
-    trace = row.get("notes", "") if row else ""  # trace.jsonl não existe ainda no agent.py — ver relatório final
+    trace = load_trace(row.get("notes", "") if row else "")
 
     deterministic = compute_deterministic(verify_result, tampered, cost_usd, turns)
     ficha = persona.call_persona(deterministic, diff, trace, verify_out)

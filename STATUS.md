@@ -63,4 +63,6 @@ Sequência que protege o investimento: (1) juiz j_b2b rodando honesto ← estamo
 
 ## Critério de "saiu do lugar"
 
-Uma linha no `results.tsv` onde o harness melhorou código que ele não escreveu, com verify passando em cópia limpa. Até lá, nada de camada nova.
+Uma linha no `results.tsv` onde o harness melhorou código que ele não escreveu, com verify passando em cópia limpa.
+
+**Estado (2026-08-01, M0):** o MECANISMO está provado — primeiro verdict honesto em código de terceiro: v0.2 = **58/100** no j_b2b (schwifty), D1=0 (13 turns, $0.10, error_max_turns, bug não corrigido, sem veto, sem infra_error). O critério em si ainda NÃO foi atingido — falta o harness passar o teste do mantenedor. Alavanca óbvia: MAX_TURNS=13 é knob do genoma → primeiro A/B real do evolve (após o A/B do trace, que a SPEC-J2 exige como v0.3).

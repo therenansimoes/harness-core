@@ -22,6 +22,8 @@ from pathlib import Path
 
 import safety
 
+ROOT = Path(__file__).parent.resolve()
+
 # ---------------------------------------------------------------- harness knobs
 # Tudo abaixo desta linha é o "genoma" do harness. Um A/B muda UMA coisa aqui.
 
@@ -38,6 +40,11 @@ ALLOWED_TOOLS = ["Bash", "Read", "Write", "Edit"]
 MODEL = os.environ.get("HARNESS_MODEL", "claude-haiku-4-5-20251001")
 BACKEND = os.environ.get("HARNESS_BACKEND", "cli")
 TIMEOUT_S = int(os.environ.get("HARNESS_TIMEOUT", "600"))
+# trace.jsonl (SPEC-J2 design 1): teto de linhas do arquivo gravado por run e
+# teto de tamanho por campo string dentro de cada evento — os dois elegíveis
+# a A/B como o resto do genoma acima.
+TRACE_MAX_LINES = 400
+TRACE_MAX_FIELD = 2000
 
 # ------------------------------------------------------------------- resultado
 
@@ -52,6 +59,90 @@ class AgentResult:
     text: str = ""
     notes: str = ""
     raw: dict = field(default_factory=dict)
+    trace_path: str = ""
+    trace_lines: int = 0
+
+
+# --------------------------------------------------------------------- trace
+
+
+def _parse_stream(stdout: str) -> tuple[dict | None, list[str]]:
+    """`--output-format stream-json` emite 1 evento JSON por linha. Ignora
+    linha não-JSON; guarda a última `type=="result"` (mesmo objeto que
+    `--output-format json` devolvia sozinho antes). `lines` preserva a ordem
+    original — é o que vira trace.jsonl (nº da linha = chave de citação)."""
+    result = None
+    lines = []
+    for raw_line in stdout.splitlines():
+        raw_line = raw_line.strip()
+        if not raw_line:
+            continue
+        try:
+            evt = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        lines.append(raw_line)
+        if isinstance(evt, dict) and evt.get("type") == "result":
+            result = evt
+    return result, lines
+
+
+def _truncate_fields(obj, max_field: int):
+    """Trunca recursivamente qualquer string de evento > max_field chars:
+    prefixo + marcador determinístico com a contagem do que sobrou de fora."""
+    if isinstance(obj, str):
+        if len(obj) > max_field:
+            return obj[:max_field] + f"…[trunc {len(obj) - max_field} chars]"
+        return obj
+    if isinstance(obj, dict):
+        return {k: _truncate_fields(v, max_field) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_truncate_fields(v, max_field) for v in obj]
+    return obj
+
+
+def _relpath_or_abs(p: Path) -> str:
+    try:
+        return str(p.relative_to(ROOT))
+    except ValueError:
+        return str(p)
+
+
+def _write_trace(lines: list[str], run_id: str) -> tuple[str, int]:
+    """Grava runs/<run_id>/trace.jsonl na ordem original. Trunca campo>
+    TRACE_MAX_FIELD por evento; arquivo >TRACE_MAX_LINES mantém as 100
+    primeiras + 299 últimas + 1 linha `harness_trunc` na posição 101 (total
+    sempre TRACE_MAX_LINES). Teto duro de 2MB por cima de tudo. Devolve
+    (path relativo ao repo quando possível, nº de linhas gravadas)."""
+    trace_root = Path(os.environ.get("HARNESS_TRACE_ROOT", str(ROOT / "runs")))
+    out_dir = trace_root / run_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "trace.jsonl"
+
+    truncated = []
+    for raw in lines:
+        try:
+            evt = json.loads(raw)
+        except json.JSONDecodeError:
+            truncated.append(raw)
+            continue
+        truncated.append(json.dumps(_truncate_fields(evt, TRACE_MAX_FIELD), ensure_ascii=False))
+
+    if len(truncated) > TRACE_MAX_LINES:
+        tail_n = TRACE_MAX_LINES - 100 - 1
+        head, tail = truncated[:100], truncated[-tail_n:]
+        dropped = len(truncated) - 100 - tail_n
+        marker = json.dumps({"type": "harness_trunc", "dropped": dropped})
+        truncated = head + [marker] + tail
+
+    content = ("\n".join(truncated) + "\n") if truncated else ""
+    encoded = content.encode("utf-8")
+    if len(encoded) > 2 * 1024 * 1024:
+        encoded = encoded[: 2 * 1024 * 1024]
+        cut = encoded.rfind(b"\n")
+        encoded = encoded[: cut + 1] if cut > 0 else b""
+    out_path.write_bytes(encoded)
+    return _relpath_or_abs(out_path), encoded.count(b"\n")
 
 
 # ------------------------------------------------------------------- backends
@@ -63,7 +154,8 @@ def _run_cli(prompt: str, workspace: Path) -> AgentResult:
         "-p",
         prompt,
         "--output-format",
-        "json",
+        "stream-json",
+        "--verbose",
         "--model",
         MODEL,
         "--max-turns",
@@ -86,23 +178,38 @@ def _run_cli(prompt: str, workspace: Path) -> AgentResult:
     if stderr == "TIMEOUT" and returncode == -1:
         return AgentResult(False, elapsed, notes="timeout")
 
-    # `claude -p --output-format json` sai com exit != 0 sempre que
-    # is_error=true no JSON — inclusive em desfechos NORMAIS do harness
-    # como estourar --max-turns (subtype=error_max_turns), que ainda assim
-    # carregam usage/cost/turns reais no stdout. Tratar todo returncode!=0
-    # como falha de infra (como fazia antes) descarta esses números e
-    # reporta 0 tokens/$0 pra uma run que trabalhou de verdade. Por isso:
-    # tenta parsear o JSON primeiro, independente do returncode; só cai em
-    # "cli_exit_N" (infra quebrada de fato, sem trabalho do agente) quando
-    # não sobrou JSON nenhum pra parsear.
-    try:
-        data = json.loads(stdout)
-    except json.JSONDecodeError:
+    data, lines = _parse_stream(stdout)
+    trace_path, trace_lines = "", 0
+    if lines:
+        run_id = os.environ.get("HARNESS_RUN_ID") or workspace.name
+        trace_path, trace_lines = _write_trace(lines, run_id)
+
+    # `claude -p` sai com exit != 0 sempre que is_error=true no evento
+    # result — inclusive em desfechos NORMAIS do harness como estourar
+    # --max-turns (subtype=error_max_turns), que ainda assim carregam
+    # usage/cost/turns reais. Tratar todo returncode!=0 como falha de infra
+    # (como fazia antes) descarta esses números e reporta 0 tokens/$0 pra
+    # uma run que trabalhou de verdade. Por isso: tenta achar o evento
+    # result primeiro, independente do returncode; só cai em "cli_exit_N"
+    # (infra quebrada de fato, sem trabalho do agente) quando não sobrou
+    # nenhum evento result pra usar.
+    if data is None:
         if returncode != 0:
             return AgentResult(
-                False, elapsed, notes=f"cli_exit_{returncode}:{stderr[-200:].strip()}"
+                False,
+                elapsed,
+                notes=f"cli_exit_{returncode}:{stderr[-200:].strip()}",
+                trace_path=trace_path,
+                trace_lines=trace_lines,
             )
-        return AgentResult(False, elapsed, text=stdout[-500:], notes="bad_json")
+        return AgentResult(
+            False,
+            elapsed,
+            text=stdout[-500:],
+            notes="bad_json",
+            trace_path=trace_path,
+            trace_lines=trace_lines,
+        )
 
     usage = data.get("usage") or {}
     tokens = int(usage.get("input_tokens", 0)) + int(usage.get("output_tokens", 0))
@@ -115,6 +222,8 @@ def _run_cli(prompt: str, workspace: Path) -> AgentResult:
         text=str(data.get("result", ""))[-2000:],
         notes=data.get("subtype", "") if data.get("is_error") else "",
         raw=data,
+        trace_path=trace_path,
+        trace_lines=trace_lines,
     )
 
 
