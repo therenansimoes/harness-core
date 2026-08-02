@@ -20,6 +20,7 @@ Elos: runs.proposal_id -> proposals.id ; decisions.proposal_id -> proposals.id
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import statistics
@@ -157,6 +158,25 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_delivery_events_project ON delivery_events(project);
         CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
         CREATE INDEX IF NOT EXISTS idx_governance_events_project ON governance_events(project);
+
+        CREATE TABLE IF NOT EXISTS judgements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            judge_id TEXT NOT NULL,
+            harness_version TEXT NOT NULL,
+            rubric_version TEXT NOT NULL,
+            judge_score REAL,
+            deterministic_json TEXT DEFAULT '',
+            persona_json TEXT DEFAULT '',
+            veto INTEGER NOT NULL DEFAULT 0,
+            persona_vetoed INTEGER NOT NULL DEFAULT 0,
+            track TEXT,
+            process_json TEXT
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_judgements_unique
+            ON judgements(judge_id, harness_version, rubric_version, ts);
+        CREATE INDEX IF NOT EXISTS idx_judgements_harness_version ON judgements(harness_version);
         """
     )
     conn.commit()
@@ -232,6 +252,83 @@ def record_decision(proposal_id: str, outcome: str, scores_summary: str,
         conn.close()
 
 
+def record_judgement(judge_id: str, harness_version: str, rubric_version: str,
+                      judge_score: float | None, deterministic_json: str = "",
+                      persona_json: str = "", veto: int = 0, persona_vetoed: int = 0,
+                      track: str | None = None, process_json: str | None = None,
+                      ts: str | None = None, db_path=None) -> int:
+    """Upsert idempotente por (judge_id, harness_version, rubric_version, ts)."""
+    ts = ts or _now()
+    conn = _connect(db_path)
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO judgements
+                (ts, judge_id, harness_version, rubric_version, judge_score,
+                 deterministic_json, persona_json, veto, persona_vetoed, track, process_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(judge_id, harness_version, rubric_version, ts) DO UPDATE SET
+                judge_score = excluded.judge_score,
+                deterministic_json = excluded.deterministic_json,
+                persona_json = excluded.persona_json,
+                veto = excluded.veto,
+                persona_vetoed = excluded.persona_vetoed,
+                track = excluded.track,
+                process_json = excluded.process_json
+            """,
+            (ts, judge_id, harness_version, rubric_version, judge_score,
+             deterministic_json, persona_json, veto, persona_vetoed, track, process_json),
+        )
+        conn.commit()
+        row = conn.execute(
+            """
+            SELECT id FROM judgements
+            WHERE judge_id = ? AND harness_version = ? AND rubric_version = ? AND ts = ?
+            """,
+            (judge_id, harness_version, rubric_version, ts),
+        ).fetchone()
+        return row["id"]
+    finally:
+        conn.close()
+
+
+def ingest_verdicts(verdicts_dir=None, db_path=None) -> int:
+    """Varre judges/verdicts/<judge_id>/<harness_version>.json e grava em `judgements`.
+
+    Ignora `summary_*.json`. Idempotente: rodar duas vezes não duplica (upsert
+    por judge_id+harness_version+rubric_version+ts via record_judgement).
+    Retorna a quantidade de verdicts ingeridos.
+    """
+    base = Path(verdicts_dir) if verdicts_dir is not None else ROOT / "judges" / "verdicts"
+    n = 0
+    if not base.is_dir():
+        return n
+
+    for path in sorted(base.glob("*/*.json")):
+        if path.name.startswith("summary_"):
+            continue
+        with open(path, encoding="utf-8") as f:
+            verdict = json.load(f)
+
+        deterministic = verdict.get("deterministic", {})
+        record_judgement(
+            judge_id=verdict.get("judge_id", ""),
+            harness_version=verdict.get("harness_version", ""),
+            rubric_version=verdict.get("rubric_version", ""),
+            judge_score=verdict.get("judge_score"),
+            deterministic_json=json.dumps(deterministic),
+            persona_json=json.dumps(verdict.get("persona", {})),
+            veto=1 if deterministic.get("veto") else 0,
+            persona_vetoed=1 if verdict.get("persona_vetoed") else 0,
+            track=verdict.get("track"),
+            process_json=json.dumps(verdict["process"]) if "process" in verdict else None,
+            ts=verdict.get("ts"),
+            db_path=db_path,
+        )
+        n += 1
+    return n
+
+
 # ------------------------------------------------------------------- leitura
 
 
@@ -264,6 +361,22 @@ def runs_for_version(version: str, db_path=None) -> list[dict]:
             ORDER BY ts DESC, id DESC
             """,
             (version,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def judge_history(n: int = 50, db_path=None) -> list[dict]:
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT * FROM judgements
+            ORDER BY ts ASC, id ASC
+            LIMIT ?
+            """,
+            (n,),
         ).fetchall()
         return [dict(row) for row in rows]
     finally:
@@ -669,9 +782,55 @@ def recent_confirmations(n: int = 20, db_path=None) -> list[dict]:
         conn.close()
 
 
+# --------------------------------------------------------------------- cli
+
+
+def _cli_ingest_verdicts(args) -> None:
+    n = ingest_verdicts()
+    print(f"ingeridos {n} verdicts em judgements")
+
+
+def _cli_judge_history(args) -> None:
+    rows = judge_history(n=args.n)
+    if not rows:
+        print("(sem judgements)")
+        return
+    print(f"{'ts':<20} {'harness_version':<16} {'judge_id':<10} {'score':>6}  veto  persona_veto")
+    for r in rows:
+        score = "" if r["judge_score"] is None else f"{r['judge_score']:.0f}"
+        print(
+            f"{r['ts']:<20} {r['harness_version']:<16} {r['judge_id']:<10} {score:>6}  "
+            f"{'sim' if r['veto'] else 'nao':<4}  {'sim' if r['persona_vetoed'] else 'nao'}"
+        )
+    print(f"\ntotal: {len(rows)} judgements")
+
+
+def _cli(argv) -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="graph.py — CLI mínima para judgements.")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_ingest = sub.add_parser("ingest-verdicts", help="varre judges/verdicts/ e grava em judgements")
+    p_ingest.set_defaults(func=_cli_ingest_verdicts)
+
+    p_hist = sub.add_parser("judge-history", help="lista judgements recentes")
+    p_hist.add_argument("-n", type=int, default=50)
+    p_hist.set_defaults(func=_cli_judge_history)
+
+    args = parser.parse_args(argv)
+    args.func(args)
+
+
 # ---------------------------------------------------------------- self-test
 
 if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) > 1:
+        _cli(sys.argv[1:])
+        raise SystemExit(0)
+
     import tempfile
 
     tmp = tempfile.NamedTemporaryFile(prefix="critique_test_", suffix=".db", delete=False)
