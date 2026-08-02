@@ -25,6 +25,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from agent import BACKEND, MODEL, run_agent  # noqa: E402
 import isolation  # noqa: E402
+import kpi  # noqa: E402
 
 ROOT = Path(__file__).parent.resolve()
 # evolve.py roda o runner a partir de uma sandbox (agent.py patchado) mas grava
@@ -48,6 +49,11 @@ HEADER = [
     "cost_usd",
     "turns",
     "notes",
+    # UMA coluna com JSON compacto ({"nome": valor}) — KPI novo no alvo não
+    # muda o schema do TSV. Linha antiga sem a coluna: os leitores zipam pelo
+    # header do arquivo (score.load, experiment.collect_result), então some
+    # como campo vazio em vez de quebrar.
+    "kpis",
 ]
 
 
@@ -142,6 +148,10 @@ def run_once(task_dir: Path, suite: str, keep: bool, isolation_mode: str = "tmpd
         except subprocess.TimeoutExpired:
             success, vnote = 0, "verify:timeout"
 
+        # KPI do alvo: roda no workspace DEPOIS do verify (o estado medido é o
+        # que o agent entregou). Alvo sem .harness/kpi.toml => {}.
+        kpis = kpi.collect(ws)
+
         trace_token = f"trace:{res.trace_path}" if res.trace_path else ""
         if tampered:
             # o agent editou o test_*.py em vez de resolver a tarefa — hard fail,
@@ -164,10 +174,12 @@ def run_once(task_dir: Path, suite: str, keep: bool, isolation_mode: str = "tmpd
                 "cost_usd": f"{res.cost_usd:.4f}",
                 "turns": res.turns,
                 "notes": notes,
+                "kpis": kpi.to_json(kpis),
             }
         )
         mark = "PASS" if success else "FAIL"
-        print(f"[{mark}] {task_id}  {res.seconds:.1f}s  {res.tokens}tok  ${res.cost_usd:.4f}  {notes}")
+        kpi_note = f"  kpis={kpi.to_json(kpis)}" if kpis else ""
+        print(f"[{mark}] {task_id}  {res.seconds:.1f}s  {res.tokens}tok  ${res.cost_usd:.4f}  {notes}{kpi_note}")
         if keep:
             print(f"       workspace: {ws}")
         return bool(success)

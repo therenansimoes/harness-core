@@ -40,17 +40,20 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import graph  # noqa: E402
+import kpi  # noqa: E402
 
 ROOT = Path(__file__).parent.resolve()
 PROJECTS_ROOT = Path(os.environ.get("HARNESS_PROJECTS_ROOT", ROOT / "projects"))
 WS_ROOT = Path(os.environ.get("HARNESS_WS_ROOT", ROOT / ".harness_ws"))
 
 QUEUE_HEADER = ["id", "state", "priority", "created", "claimed_at", "prompt_file", "verify", "notes"]
-# Mesmo schema do results.tsv global (run_task.py) — header congelado, sem
-# coluna nova; cada projeto grava no SEU results.tsv, não no da raiz.
+# Mesmo schema do results.tsv global (run_task.py); cada projeto grava no SEU
+# results.tsv, não no da raiz. `kpis` é a ÚNICA coluna que o KPI por projeto
+# usa (JSON compacto) — KPI novo no alvo não vira coluna nova aqui.
 RESULTS_HEADER = [
     "timestamp", "harness_version", "backend", "model", "suite",
     "task_id", "success", "seconds", "tokens", "cost_usd", "turns", "notes",
+    "kpis",
 ]
 
 
@@ -291,6 +294,10 @@ def _execute(proj_dir: Path, project_name: str, row: dict, all_rows: list[dict],
         success = 1 if verify_ok else 0
         notes = "; ".join(n for n in (res.notes, vnote) if n)
 
+    # KPI do alvo medido no ws (o que o agent entregou), antes de qualquer
+    # cópia de volta. Projeto sem .harness/kpi.toml no work_path => {}.
+    kpis = kpi.collect(ws)
+
     if success:
         # resultado só é aplicado de volta se verify passou (aceite 7: se
         # falhar, work_path fica intacto — só descartamos o ws).
@@ -311,6 +318,7 @@ def _execute(proj_dir: Path, project_name: str, row: dict, all_rows: list[dict],
             "cost_usd": f"{res.cost_usd:.4f}",
             "turns": res.turns,
             "notes": notes,
+            "kpis": kpi.to_json(kpis),
         },
     )
 
