@@ -62,13 +62,16 @@ def test_ingest_verdicts_reais(fixtures_dir):
     db_path = _fresh_db()
     n = graph.ingest_verdicts(verdicts_dir=fixtures_dir, db_path=db_path)
 
-    # 4 arquivos reais em judges/verdicts/: j_b2b/v0.2, j_b2b/v0.4, j_hw/v0.4, j_web/v0.4
-    # (summary_v0.4.json fica direto em verdicts/, não em verdicts/<judge>/, e é
-    #  ignorado de qualquer forma pelo prefixo summary_).
-    assert n == 4
+    # Conta esperada derivada da própria fixture (judges/verdicts/ é diretório
+    # VIVO — novos juízes/tracks entram; hardcode aqui quebra a cada verdict novo).
+    # Mesmo glob de ingest_verdicts: <judge>/<arquivo>.json, sem summary_*.
+    expected = len(
+        [p for p in fixtures_dir.glob("*/*.json") if not p.name.startswith("summary_")]
+    )
+    assert n == expected
 
     rows = graph.judge_history(n=100, db_path=db_path)
-    assert len(rows) == 4
+    assert len(rows) == expected
 
     by_key = {(r["judge_id"], r["harness_version"]): r for r in rows}
     assert ("j_b2b", "v0.2") in by_key
@@ -114,18 +117,21 @@ def test_ingest_verdicts_ignora_summary(fixtures_dir):
 
 def test_ingest_verdicts_idempotente(fixtures_dir):
     db_path = _fresh_db()
+    expected = len(
+        [p for p in fixtures_dir.glob("*/*.json") if not p.name.startswith("summary_")]
+    )
     n1 = graph.ingest_verdicts(verdicts_dir=fixtures_dir, db_path=db_path)
     n2 = graph.ingest_verdicts(verdicts_dir=fixtures_dir, db_path=db_path)
-    assert n1 == 4
-    assert n2 == 4  # varre de novo, mas não duplica linha
+    assert n1 == expected
+    assert n2 == expected  # varre de novo, mas não duplica linha
 
     rows = graph.judge_history(n=100, db_path=db_path)
-    assert len(rows) == 4  # upsert, não insert cego
+    assert len(rows) == expected  # upsert, não insert cego
 
     # rodar uma terceira vez continua estável
     graph.ingest_verdicts(verdicts_dir=fixtures_dir, db_path=db_path)
     rows_again = graph.judge_history(n=100, db_path=db_path)
-    assert len(rows_again) == 4
+    assert len(rows_again) == expected
 
 
 def test_ingest_verdicts_dir_vazio_ou_ausente():

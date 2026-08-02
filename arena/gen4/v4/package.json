@@ -1,0 +1,8 @@
+{
+  "name": "harness-core-ui",
+  "private": true,
+  "description": "Tooling de UI check (Playwright) compartilhado pelos projetos em projects/",
+  "devDependencies": {
+    "@playwright/test": "^1.62.1"
+  }
+}

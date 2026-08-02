@@ -1,0 +1,12 @@
+name = "model_sonnet"
+task = "benchmarks/judge/task_j_b2b"
+n_per_arm = 4
+budget_usd = 6.0
+
+[mutation]
+file = "agent.py"
+old = """MODEL = os.environ.get("HARNESS_MODEL", "claude-haiku-4-5-20251001")"""
+new = """MODEL = os.environ.get("HARNESS_MODEL", "claude-sonnet-5")"""
+
+[decision_rule]
+min_diff_successes = 2

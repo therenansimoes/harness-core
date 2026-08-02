@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="1" failures="0" skipped="0" tests="75" time="0.130" timestamp="2026-08-02T06:17:09.793529-03:00" hostname="X2.local"><testcase classname="tests.test_checksum" name="test_german_checksum_success[0009290701-DE:00]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0539290858-DE:00]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0001501824-DE:00]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0001501832-DE:00]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0094012341-DE:06]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[5073321010-DE:06]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0094012341-DE:16]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0012345008-DE:10]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0087654008-DE:10]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0446786040-DE:17]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0240334000-DE:19]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0200520016-DE:19]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0000138301-DE:24]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[1306118605-DE:24]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[3307118608-DE:24]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[9307118603-DE:24]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0521382181-DE:25]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0520309001-DE:26]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[1111118111-DE:26]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0005501024-DE:26]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0009141405-DE:32]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[1709107983-DE:32]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0122116979-DE:32]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0121114867-DE:32]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[9030101192-DE:32]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[9245500460-DE:32]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[9913000700-DE:34]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[9914001000-DE:34]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0000191919-DE:38]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0001100660-DE:38]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[2063099200-DE:61]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0260760481-DE:61]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0123456600-DE:63]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[8889654328-DE:68]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0987654324-DE:68]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0987654328-DE:68]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0006543200-DE:76]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[9012345600-DE:76]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[7876543100-DE:76]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0002525259-DE:88]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0001000500-DE:88]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0090013000-DE:88]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0092525253-DE:88]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0099913003-DE:88]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[2974118000-DE:91]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[5281741000-DE:91]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[9952810000-DE:91]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[2974117000-DE:91]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[5281770000-DE:91]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[9952812000-DE:91]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[8840019000-DE:91]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[8840050000-DE:91]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[8840087000-DE:91]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[8840045000-DE:91]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[8840012000-DE:91]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[8840055000-DE:91]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[8840080000-DE:91]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0068007003-DE:99]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0847321750-DE:99]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0396000000-DE:99]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0499999999-DE:99]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0000006000-DE:08]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_success[0000059999-DE:08]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_failure[8840017000-DE:91]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_failure[8840023000-DE:91]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_failure[8840041000-DE:91]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_failure[8840014000-DE:91]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_failure[8840026000-DE:91]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_failure[8840011000-DE:91]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_failure[8840025000-DE:91]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_failure[8840062000-DE:91]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_failure[8840010000-DE:91]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_failure[8840057000-DE:91]" time="0.000" /><testcase classname="tests.test_checksum" name="test_german_checksum_failure[0000060000-DE:08]" time="0.000" /><testcase classname="pytest" name="internal" time="0.000"><error message="internal error">Traceback (most recent call last):
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/_pytest/main.py", line 330, in wrap_session
+    session.exitstatus = doit(config, session) or 0
+                         ~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/_pytest/main.py", line 384, in _main
+    config.hook.pytest_runtestloop(session=session)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+           ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/pluggy/_callers.py", line 167, in _multicall
+    raise exception
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/pluggy/_callers.py", line 139, in _multicall
+    teardown.throw(exception)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/_pytest/logging.py", line 816, in pytest_runtestloop
+    return (yield)  # Run all the tests.
+            ^^^^^
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/pluggy/_callers.py", line 139, in _multicall
+    teardown.throw(exception)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/_pytest/terminal.py", line 708, in pytest_runtestloop
+    result = yield
+             ^^^^^
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/_pytest/main.py", line 408, in pytest_runtestloop
+    item.config.hook.pytest_runtest_protocol(item=item, nextitem=nextitem)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+           ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/pluggy/_callers.py", line 167, in _multicall
+    raise exception
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/pluggy/_callers.py", line 139, in _multicall
+    teardown.throw(exception)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/_pytest/warnings.py", line 90, in pytest_runtest_protocol
+    return (yield)
+            ^^^^^
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/pluggy/_callers.py", line 139, in _multicall
+    teardown.throw(exception)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/_pytest/assertion/__init__.py", line 205, in pytest_runtest_protocol
+    return (yield)
+            ^^^^^
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/pluggy/_callers.py", line 139, in _multicall
+    teardown.throw(exception)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/_pytest/unittest.py", line 612, in pytest_runtest_protocol
+    return (yield)
+            ^^^^^
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/pluggy/_callers.py", line 139, in _multicall
+    teardown.throw(exception)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/_pytest/faulthandler.py", line 102, in pytest_runtest_protocol
+    return (yield)
+            ^^^^^
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/_pytest/runner.py", line 117, in pytest_runtest_protocol
+    ihook.pytest_runtest_logstart(nodeid=item.nodeid, location=item.location)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+           ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/pluggy/_callers.py", line 167, in _multicall
+    raise exception
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/_pytest/terminal.py", line 620, in pytest_runtest_logstart
+    self.flush()
+    ~~~~~~~~~~^^
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/_pytest/terminal.py", line 532, in flush
+    self._tw.flush()
+    ~~~~~~~~~~~~~~^^
+  File "/Users/renansimoes/projects/harness-core/judges/_env/j_b2b/lib/python3.14/site-packages/_pytest/_io/terminalwriter.py", line 187, in flush
+    self._file.flush()
+    ~~~~~~~~~~~~~~~~^^
+BrokenPipeError: [Errno 32] Broken pipe</error></testcase></testsuite></testsuites>

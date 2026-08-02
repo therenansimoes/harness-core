@@ -1,0 +1,38 @@
+{
+  "judge_id": "j_b2b",
+  "harness_version": "v0.4",
+  "rubric_version": "J1",
+  "base_sha": "a84d35818306f613b2e70721dbb5ad72d5ed8cf6",
+  "sealed_sha256": "ccd0fe01337c1bdce254958ad32760e1cfdd1efb9af86772c03beae138a94c19",
+  "deterministic": {
+    "D1": 25,
+    "D2": 15,
+    "D3": 10,
+    "D4": 9,
+    "veto": false,
+    "evidence": {
+      "target_test": "passed",
+      "full_suite": "415 passed, 0 regressions / 415 total",
+      "cost_usd": 0.2488,
+      "turns": 31
+    }
+  },
+  "persona": {
+    "P1": {
+      "score": 12,
+      "citation": "schwifty/checksum/germany.py:221",
+      "quote": "return super().reconcile(checksum)"
+    },
+    "P2": {
+      "score": 9,
+      "citation": "trace.jsonl:256",
+      "quote": "Account: 1000000060\nComputed checksum: 0\nActual check digit: 0\nMatch: True\nValidation result: True"
+    }
+  },
+  "discarded": [],
+  "persona_vetoed": false,
+  "veto_reason": "",
+  "judge_score": 94,
+  "cost_usd": 0.2488,
+  "ts": "2026-08-02T05:37:56+00:00"
+}

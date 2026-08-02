@@ -1,0 +1,38 @@
+{
+  "judge_id": "j_hw",
+  "harness_version": "v0.4",
+  "rubric_version": "J1",
+  "base_sha": "6021415cc75e7922d45b12935f56348b064d8a7f",
+  "sealed_sha256": "b8f34e73e31325dddef5e772143f83d84fbb73be48778d7ce5976ad497d090ea",
+  "deterministic": {
+    "D1": 25,
+    "D2": 15,
+    "D3": 10,
+    "D4": 10,
+    "veto": false,
+    "evidence": {
+      "target_test": "passed",
+      "full_suite": "15 passed, 0 regressions / 15 total",
+      "cost_usd": 0.3438,
+      "turns": 31
+    }
+  },
+  "persona": {
+    "P1": {
+      "score": 14,
+      "citation": "jsmn.c:201",
+      "quote": "-\t\t\t\t\t\tbreak;\n+\t\t\t\t\t\treturn JSMN_ERROR_INVAL;"
+    },
+    "P2": {
+      "score": 9,
+      "citation": "trace.jsonl:256",
+      "quote": "Test '}' alone: -2\nTest double close: 3"
+    }
+  },
+  "discarded": [],
+  "persona_vetoed": false,
+  "veto_reason": "",
+  "judge_score": 98,
+  "cost_usd": 0.3438,
+  "ts": "2026-08-02T03:54:53+00:00"
+}

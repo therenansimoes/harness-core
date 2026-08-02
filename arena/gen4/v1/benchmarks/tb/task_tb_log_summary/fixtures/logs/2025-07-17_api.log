@@ -1,0 +1,591 @@
+2025-07-17 03:58:40 [WARNING] High memory usage detected
+2025-07-17 21:09:17 [ERROR] Database connection lost
+2025-07-17 14:31:49 [INFO] Database connection established
+2025-07-17 15:37:44 [INFO] User login successful for user: eve
+2025-07-17 14:58:02 [ERROR] Unhandled exception: NullPointerException
+2025-07-17 19:04:56 [INFO] Database connection established
+2025-07-17 08:44:11 [INFO] User login successful for user: charlie
+2025-07-17 07:54:23 [INFO] File uploaded: config.yml
+2025-07-17 01:50:10 [INFO] Cache cleared successfully
+2025-07-17 17:49:59 [ERROR] Service payment crashed
+2025-07-17 22:34:40 [INFO] Scheduled backup completed successfully
+2025-07-17 23:21:25 [WARNING] High memory usage detected
+2025-07-17 08:08:37 [ERROR] Unhandled exception: NullPointerException
+2025-07-17 11:44:19 [INFO] User login successful for user: alice
+2025-07-17 11:08:55 [WARNING] High memory usage detected
+2025-07-17 23:50:18 [INFO] Scheduled backup completed successfully
+2025-07-17 07:30:19 [INFO] Cache cleared successfully
+2025-07-17 10:29:16 [ERROR] File write failed: report.pdf
+2025-07-17 18:04:29 [INFO] User login successful for user: alice
+2025-07-17 02:45:27 [INFO] Database connection established
+2025-07-17 14:19:51 [ERROR] File write failed: config.yml
+2025-07-17 07:18:55 [INFO] Cache cleared successfully
+2025-07-17 05:05:36 [WARNING] Configuration file deprecated: report.pdf
+2025-07-17 19:38:55 [WARNING] High memory usage detected
+2025-07-17 22:20:32 [DEBUG] Entering function generate_report with arguments: 2
+2025-07-17 10:02:58 [INFO] Scheduled backup completed successfully
+2025-07-17 10:28:30 [INFO] User login successful for user: alice
+2025-07-17 09:17:32 [INFO] Service payment started
+2025-07-17 06:33:37 [ERROR] Email sending failed to recipient: support@amazon.com
+2025-07-17 05:24:14 [INFO] User login successful for user: alice
+2025-07-17 13:48:56 [ERROR] Service auth crashed
+2025-07-17 00:05:19 [INFO] User login successful for user: diana
+2025-07-17 05:57:57 [WARNING] Disk space low: 2537 remaining
+2025-07-17 00:22:05 [WARNING] Configuration file deprecated: report.pdf
+2025-07-17 13:17:47 [INFO] User login successful for user: diana
+2025-07-17 18:01:55 [ERROR] Service auth crashed
+2025-07-17 03:00:39 [INFO] File uploaded: backup.zip
+2025-07-17 18:34:25 [WARNING] Disk space low: 3893 remaining
+2025-07-17 08:30:13 [INFO] File uploaded: report.pdf
+2025-07-17 09:16:09 [INFO] Service auth started
+2025-07-17 21:13:25 [DEBUG] Entering function send_email with arguments: 1
+2025-07-17 11:37:21 [INFO] Scheduled backup completed successfully
+2025-07-17 02:29:43 [ERROR] Service inventory crashed
+2025-07-17 05:28:15 [INFO] Database connection established
+2025-07-17 02:47:24 [WARNING] Disk space low: 1668 remaining
+2025-07-17 19:00:15 [INFO] File uploaded: config.yml
+2025-07-17 12:31:59 [INFO] Scheduled backup completed successfully
+2025-07-17 15:24:29 [INFO] Cache cleared successfully
+2025-07-17 15:17:36 [WARNING] Second failed login attempt for user: charlie. Next attempt will ERROR. Retrying...
+2025-07-17 08:01:03 [INFO] Database connection established
+2025-07-17 03:29:37 [INFO] Service payment started
+2025-07-17 08:05:18 [WARNING] Disk space low: 3123 remaining
+2025-07-17 18:19:31 [INFO] Database connection established
+2025-07-17 07:55:39 [INFO] File uploaded: data.csv
+2025-07-17 21:20:42 [WARNING] High memory usage detected
+2025-07-17 21:02:50 [INFO] Cache cleared successfully
+2025-07-17 08:54:56 [ERROR] Database connection lost
+2025-07-17 01:45:09 [INFO] User login successful for user: alice
+2025-07-17 01:57:28 [WARNING] Second failed login attempt for user: diana. Next attempt will ERROR. Retrying...
+2025-07-17 15:35:34 [ERROR] Deadlock detected in transaction ID 2313
+2025-07-17 12:04:59 [INFO] Database connection established
+2025-07-17 17:41:35 [ERROR] Email sending failed to recipient: admin@google.com
+2025-07-17 19:58:38 [INFO] Database connection established
+2025-07-17 20:17:50 [INFO] User login successful for user: diana
+2025-07-17 17:33:34 [WARNING] Second failed login attempt for user: diana. Next attempt will ERROR. Retrying...
+2025-07-17 06:39:04 [ERROR] Database connection lost
+2025-07-17 14:21:25 [INFO] File uploaded: config.yml
+2025-07-17 15:06:55 [INFO] User login successful for user: bob
+2025-07-17 11:58:37 [DEBUG] Temporary file created at: config.yml
+2025-07-17 02:23:59 [ERROR] Database connection lost
+2025-07-17 05:12:14 [INFO] Scheduled backup completed successfully
+2025-07-17 02:12:16 [INFO] Service inventory started
+2025-07-17 09:59:16 [INFO] Cache cleared successfully
+2025-07-17 16:54:13 [WARNING] High memory usage detected
+2025-07-17 10:08:18 [INFO] Cache cleared successfully
+2025-07-17 18:37:22 [INFO] File uploaded: report.pdf
+2025-07-17 14:44:04 [INFO] Service inventory started
+2025-07-17 18:17:07 [INFO] Database connection established
+2025-07-17 15:11:53 [INFO] File uploaded: config.yml
+2025-07-17 10:16:43 [WARNING] Slow query detected: execution time 611ms
+2025-07-17 02:36:51 [INFO] Database connection established
+2025-07-17 23:11:38 [INFO] Cache cleared successfully
+2025-07-17 01:08:40 [WARNING] Configuration file deprecated: backup.zip
+2025-07-17 22:38:48 [INFO] Database connection established
+2025-07-17 11:04:05 [ERROR] Service notification crashed
+2025-07-17 02:52:46 [INFO] Service inventory started
+2025-07-17 06:17:20 [INFO] File uploaded: report.pdf
+2025-07-17 13:01:43 [WARNING] Failed login attempt for user: eve. Retrying...
+2025-07-17 11:49:50 [ERROR] Deadlock detected in transaction ID 3888
+2025-07-17 19:48:38 [WARNING] API response time exceeded threshold
+2025-07-17 04:22:51 [WARNING] Configuration file deprecated: data.csv
+2025-07-17 07:39:50 [ERROR] Database connection lost
+2025-07-17 16:44:34 [INFO] User login successful for user: eve
+2025-07-17 01:31:46 [ERROR] Database connection lost
+2025-07-17 09:21:19 [WARNING] Failed login attempt for user: bob. Retrying...
+2025-07-17 02:42:04 [WARNING] API response time exceeded threshold
+2025-07-17 21:10:54 [INFO] User login successful for user: eve
+2025-07-17 06:29:45 [WARNING] Configuration file deprecated: backup.zip
+2025-07-17 06:28:31 [DEBUG] Query executed: UPDATE orders SET status='shipped' WHERE id=42
+2025-07-17 05:38:40 [INFO] Service notification started
+2025-07-17 03:52:26 [INFO] Scheduled backup completed successfully
+2025-07-17 03:08:14 [ERROR] Service payment crashed
+2025-07-17 04:47:35 [WARNING] High memory usage detected
+2025-07-17 11:05:16 [INFO] Service notification started
+2025-07-17 18:44:18 [WARNING] API response time exceeded threshold
+2025-07-17 22:10:00 [INFO] Cache cleared successfully
+2025-07-17 10:04:19 [WARNING] Slow query detected: execution time 2123ms
+2025-07-17 19:49:24 [ERROR] Unhandled exception: NullPointerException
+2025-07-17 00:15:40 [INFO] User login successful for user: bob
+2025-07-17 01:03:14 [INFO] User login successful for user: diana
+2025-07-17 12:23:45 [INFO] User login successful for user: alice
+2025-07-17 11:51:19 [INFO] Database connection established
+2025-07-17 10:57:34 [INFO] Service payment started
+2025-07-17 04:04:27 [WARNING] Configuration file deprecated: backup.zip
+2025-07-17 22:57:57 [INFO] Scheduled backup completed successfully
+2025-07-17 20:27:04 [INFO] Scheduled backup completed successfully
+2025-07-17 04:55:35 [INFO] Scheduled backup completed successfully
+2025-07-17 07:57:06 [WARNING] High memory usage detected
+2025-07-17 06:54:22 [INFO] Database connection established
+2025-07-17 23:33:10 [INFO] Cache cleared successfully
+2025-07-17 19:54:47 [INFO] Service auth started
+2025-07-17 04:54:02 [WARNING] Failed login attempt for user: diana. Retrying...
+2025-07-17 22:45:30 [INFO] Database connection established
+2025-07-17 19:05:51 [WARNING] Configuration file deprecated: backup.zip
+2025-07-17 04:22:43 [ERROR] Service inventory crashed
+2025-07-17 04:11:25 [WARNING] Configuration file deprecated: backup.zip
+2025-07-17 12:21:59 [INFO] Database connection established
+2025-07-17 20:01:19 [WARNING] Failed login attempt for user: charlie. Retrying...
+2025-07-17 01:36:10 [INFO] File uploaded: report.pdf
+2025-07-17 10:10:45 [DEBUG] Entering function send_email with arguments: 3
+2025-07-17 05:28:58 [WARNING] Disk space low: 3249 remaining
+2025-07-17 22:36:45 [INFO] User login successful for user: alice
+2025-07-17 16:52:49 [WARNING] API response time exceeded threshold
+2025-07-17 17:31:20 [WARNING] High memory usage detected
+2025-07-17 22:09:00 [ERROR] Database connection lost
+2025-07-17 11:59:47 [WARNING] API response time exceeded threshold
+2025-07-17 02:10:12 [ERROR] Service payment crashed
+2025-07-17 17:57:18 [INFO] Scheduled backup completed successfully
+2025-07-17 08:31:56 [INFO] Cache cleared successfully
+2025-07-17 20:35:46 [WARNING] High memory usage detected
+2025-07-17 20:57:36 [ERROR] Email sending failed to recipient: admin@google.com
+2025-07-17 10:42:04 [INFO] Service inventory started
+2025-07-17 16:53:52 [WARNING] Second failed login attempt for user: eve. Next attempt will ERROR. Retrying...
+2025-07-17 08:49:47 [INFO] Scheduled backup completed successfully
+2025-07-17 00:19:14 [INFO] Service notification started
+2025-07-17 01:08:01 [ERROR] File write failed: backup.zip
+2025-07-17 21:42:56 [ERROR] File write failed: report.pdf
+2025-07-17 01:23:38 [INFO] Scheduled backup completed successfully
+2025-07-17 06:47:52 [ERROR] Email sending failed to recipient: admin@google.com
+2025-07-17 03:59:35 [INFO] File uploaded: config.yml
+2025-07-17 12:23:46 [INFO] Database connection established
+2025-07-17 19:41:02 [INFO] Cache cleared successfully
+2025-07-17 05:07:52 [WARNING] Configuration file deprecated: data.csv
+2025-07-17 15:00:04 [INFO] Cache cleared successfully
+2025-07-17 04:08:33 [INFO] File uploaded: config.yml
+2025-07-17 00:41:43 [INFO] Service payment started
+2025-07-17 07:21:45 [DEBUG] Query executed: UPDATE orders SET status='shipped' WHERE id=42
+2025-07-17 15:12:58 [INFO] Cache cleared successfully
+2025-07-17 10:45:27 [DEBUG] Query executed: SELECT * FROM users
+2025-07-17 14:12:44 [WARNING] Second failed login attempt for user: charlie. Next attempt will ERROR. Retrying...
+2025-07-17 22:06:19 [INFO] Cache cleared successfully
+2025-07-17 15:17:49 [WARNING] High memory usage detected
+2025-07-17 20:55:20 [INFO] Service notification started
+2025-07-17 21:12:15 [INFO] User login successful for user: bob
+2025-07-17 14:17:24 [ERROR] Service inventory crashed
+2025-07-17 05:52:08 [INFO] File uploaded: backup.zip
+2025-07-17 23:58:34 [INFO] Cache cleared successfully
+2025-07-17 14:59:07 [INFO] Service inventory started
+2025-07-17 21:27:33 [INFO] Cache cleared successfully
+2025-07-17 18:55:30 [INFO] File uploaded: report.pdf
+2025-07-17 15:08:10 [ERROR] Database connection lost
+2025-07-17 14:34:31 [ERROR] File write failed: data.csv
+2025-07-17 12:27:39 [INFO] Service notification started
+2025-07-17 13:52:41 [INFO] User login successful for user: alice
+2025-07-17 11:32:13 [WARNING] API response time exceeded threshold
+2025-07-17 04:20:19 [INFO] Cache cleared successfully
+2025-07-17 09:25:48 [INFO] Scheduled backup completed successfully
+2025-07-17 13:23:17 [DEBUG] Temporary file created at: report.pdf
+2025-07-17 16:41:54 [WARNING] Slow query detected: execution time 1032ms
+2025-07-17 08:48:02 [WARNING] Slow query detected: execution time 1757ms
+2025-07-17 00:56:30 [INFO] File uploaded: backup.zip
+2025-07-17 11:11:24 [ERROR] Unhandled exception: TimeoutError
+2025-07-17 07:54:19 [WARNING] API response time exceeded threshold
+2025-07-17 03:05:39 [INFO] User login successful for user: diana
+2025-07-17 16:07:35 [INFO] User login successful for user: bob
+2025-07-17 12:11:20 [INFO] Database connection established
+2025-07-17 23:23:15 [INFO] File uploaded: report.pdf
+2025-07-17 10:51:23 [DEBUG] Variable x has value: 3911
+2025-07-17 11:24:42 [ERROR] Database connection lost
+2025-07-17 05:09:24 [WARNING] Second failed login attempt for user: diana. Next attempt will ERROR. Retrying...
+2025-07-17 21:15:47 [INFO] Database connection established
+2025-07-17 06:07:20 [INFO] User login successful for user: charlie
+2025-07-17 07:57:40 [INFO] File uploaded: config.yml
+2025-07-17 01:17:18 [WARNING] Configuration file deprecated: report.pdf
+2025-07-17 05:38:49 [INFO] User login successful for user: charlie
+2025-07-17 16:36:18 [INFO] Scheduled backup completed successfully
+2025-07-17 05:15:26 [INFO] Service auth started
+2025-07-17 00:20:20 [INFO] Service auth started
+2025-07-17 08:59:54 [ERROR] File write failed: config.yml
+2025-07-17 03:19:35 [INFO] Database connection established
+2025-07-17 16:54:27 [INFO] Cache cleared successfully
+2025-07-17 10:16:06 [INFO] User login successful for user: alice
+2025-07-17 04:59:49 [ERROR] File write failed: config.yml
+2025-07-17 08:58:19 [INFO] Scheduled backup completed successfully
+2025-07-17 13:48:15 [INFO] Scheduled backup completed successfully
+2025-07-17 21:46:33 [DEBUG] Entering function send_email with arguments: 8
+2025-07-17 05:37:26 [INFO] Cache cleared successfully
+2025-07-17 19:35:27 [INFO] File uploaded: config.yml
+2025-07-17 11:48:38 [INFO] Cache cleared successfully
+2025-07-17 11:55:24 [ERROR] Database connection lost
+2025-07-17 08:27:04 [INFO] Service payment started
+2025-07-17 22:33:56 [INFO] User login successful for user: bob
+2025-07-17 11:10:56 [INFO] User login successful for user: eve
+2025-07-17 03:44:17 [INFO] Service notification started
+2025-07-17 21:34:57 [ERROR] File write failed: config.yml
+2025-07-17 08:51:56 [ERROR] Email sending failed to recipient: admin@google.com
+2025-07-17 10:50:58 [ERROR] Service auth crashed
+2025-07-17 05:49:46 [WARNING] Second failed login attempt for user: alice. Next attempt will ERROR. Retrying...
+2025-07-17 11:22:04 [WARNING] Configuration file deprecated: report.pdf
+2025-07-17 10:01:31 [INFO] Database connection established
+2025-07-17 13:40:38 [INFO] Database connection established
+2025-07-17 22:40:14 [INFO] Database connection established
+2025-07-17 23:13:02 [INFO] User login successful for user: charlie
+2025-07-17 11:13:59 [INFO] Cache cleared successfully
+2025-07-17 03:40:21 [INFO] Database connection established
+2025-07-17 21:20:28 [INFO] Cache cleared successfully
+2025-07-17 17:23:27 [INFO] User login successful for user: charlie
+2025-07-17 15:33:20 [INFO] File uploaded: backup.zip
+2025-07-17 01:08:04 [INFO] Cache cleared successfully
+2025-07-17 15:33:06 [INFO] User login successful for user: charlie
+2025-07-17 19:12:40 [WARNING] High memory usage detected
+2025-07-17 20:09:15 [INFO] Service auth started
+2025-07-17 02:06:31 [ERROR] Unhandled exception: FileNotFoundError
+2025-07-17 03:51:29 [WARNING] Failed login attempt for user: eve. Retrying...
+2025-07-17 08:08:33 [INFO] File uploaded: report.pdf
+2025-07-17 13:03:29 [ERROR] Database connection lost
+2025-07-17 20:48:01 [INFO] Cache cleared successfully
+2025-07-17 11:52:42 [INFO] File uploaded: backup.zip
+2025-07-17 03:06:00 [WARNING] Disk space low: 4403 remaining
+2025-07-17 18:51:57 [ERROR] Service notification crashed
+2025-07-17 15:21:20 [INFO] Cache cleared successfully
+2025-07-17 16:10:59 [INFO] Scheduled backup completed successfully
+2025-07-17 12:34:01 [WARNING] Configuration file deprecated: report.pdf
+2025-07-17 04:51:05 [INFO] Database connection established
+2025-07-17 23:22:27 [WARNING] Failed login attempt for user: diana. Retrying...
+2025-07-17 18:17:04 [DEBUG] Query executed: SELECT * FROM users
+2025-07-17 17:18:04 [ERROR] Service payment crashed
+2025-07-17 05:46:28 [ERROR] Service auth crashed
+2025-07-17 04:54:46 [INFO] User login successful for user: diana
+2025-07-17 01:23:23 [INFO] Service inventory started
+2025-07-17 16:52:37 [DEBUG] Variable x has value: 4382
+2025-07-17 19:17:07 [INFO] Service inventory started
+2025-07-17 06:03:32 [ERROR] File write failed: backup.zip
+2025-07-17 13:28:36 [ERROR] Service payment crashed
+2025-07-17 12:13:17 [INFO] User login successful for user: bob
+2025-07-17 09:07:03 [INFO] Database connection established
+2025-07-17 16:40:03 [WARNING] High memory usage detected
+2025-07-17 06:33:42 [INFO] Scheduled backup completed successfully
+2025-07-17 02:29:09 [INFO] Service inventory started
+2025-07-17 01:48:31 [INFO] Service notification started
+2025-07-17 06:20:46 [INFO] Cache cleared successfully
+2025-07-17 20:21:26 [INFO] Scheduled backup completed successfully
+2025-07-17 08:05:28 [DEBUG] Variable x has value: 420
+2025-07-17 07:00:48 [DEBUG] Session token generated for user: alice
+2025-07-17 08:34:17 [INFO] Cache cleared successfully
+2025-07-17 06:36:16 [INFO] Service notification started
+2025-07-17 04:42:50 [INFO] Scheduled backup completed successfully
+2025-07-17 19:22:44 [DEBUG] Variable x has value: 2073
+2025-07-17 17:35:31 [INFO] User login successful for user: charlie
+2025-07-17 06:39:06 [INFO] File uploaded: data.csv
+2025-07-17 08:17:55 [INFO] File uploaded: data.csv
+2025-07-17 02:58:19 [ERROR] Unhandled exception: NullPointerException
+2025-07-17 11:03:54 [WARNING] High memory usage detected
+2025-07-17 04:53:15 [ERROR] Email sending failed to recipient: admin@google.com
+2025-07-17 15:37:06 [INFO] Cache cleared successfully
+2025-07-17 07:49:51 [ERROR] File write failed: backup.zip
+2025-07-17 09:24:59 [WARNING] API response time exceeded threshold
+2025-07-17 08:37:43 [ERROR] Database connection lost
+2025-07-17 23:29:20 [INFO] File uploaded: config.yml
+2025-07-17 20:06:33 [ERROR] Unhandled exception: TimeoutError
+2025-07-17 17:41:30 [INFO] Database connection established
+2025-07-17 14:48:56 [ERROR] Email sending failed to recipient: support@amazon.com
+2025-07-17 04:20:44 [INFO] User login successful for user: charlie
+2025-07-17 14:33:41 [INFO] Database connection established
+2025-07-17 21:00:40 [INFO] Cache cleared successfully
+2025-07-17 17:57:54 [INFO] User login successful for user: bob
+2025-07-17 03:24:29 [ERROR] Service payment crashed
+2025-07-17 09:48:58 [INFO] User login successful for user: alice
+2025-07-17 03:55:54 [INFO] Service payment started
+2025-07-17 00:59:38 [WARNING] Second failed login attempt for user: alice. Next attempt will ERROR. Retrying...
+2025-07-17 15:37:23 [INFO] Cache cleared successfully
+2025-07-17 14:37:58 [DEBUG] Variable x has value: 1116
+2025-07-17 21:44:17 [INFO] User login successful for user: eve
+2025-07-17 04:41:56 [INFO] Scheduled backup completed successfully
+2025-07-17 19:16:08 [DEBUG] Variable x has value: 3635
+2025-07-17 02:41:02 [WARNING] High memory usage detected
+2025-07-17 07:31:31 [WARNING] Slow query detected: execution time 2890ms
+2025-07-17 19:29:45 [INFO] Database connection established
+2025-07-17 06:42:19 [INFO] User login successful for user: eve
+2025-07-17 23:17:45 [INFO] Service inventory started
+2025-07-17 20:34:20 [ERROR] Database connection lost
+2025-07-17 15:53:35 [INFO] User login successful for user: charlie
+2025-07-17 01:10:57 [INFO] Service notification started
+2025-07-17 07:25:03 [WARNING] Failed login attempt for user: eve. Retrying...
+2025-07-17 06:17:57 [ERROR] Unhandled exception: FileNotFoundError
+2025-07-17 12:08:32 [WARNING] API response time exceeded threshold
+2025-07-17 10:57:32 [INFO] Database connection established
+2025-07-17 11:39:21 [INFO] File uploaded: data.csv
+2025-07-17 03:31:27 [INFO] Scheduled backup completed successfully
+2025-07-17 12:20:12 [WARNING] API response time exceeded threshold
+2025-07-17 22:33:52 [INFO] User login successful for user: charlie
+2025-07-17 14:11:48 [INFO] Scheduled backup completed successfully
+2025-07-17 12:34:24 [INFO] File uploaded: config.yml
+2025-07-17 19:41:51 [INFO] Service payment started
+2025-07-17 05:40:03 [ERROR] Deadlock detected in transaction ID 840
+2025-07-17 02:00:00 [INFO] Service inventory started
+2025-07-17 07:50:50 [ERROR] File write failed: config.yml
+2025-07-17 13:51:54 [INFO] Database connection established
+2025-07-17 15:42:33 [INFO] File uploaded: config.yml
+2025-07-17 15:53:39 [INFO] Scheduled backup completed successfully
+2025-07-17 13:14:43 [WARNING] Slow query detected: execution time 1509ms
+2025-07-17 13:57:54 [WARNING] Failed login attempt for user: alice. Retrying...
+2025-07-17 11:39:10 [INFO] Service auth started
+2025-07-17 19:07:55 [INFO] Database connection established
+2025-07-17 01:48:28 [ERROR] Unhandled exception: NullPointerException
+2025-07-17 04:17:30 [INFO] File uploaded: report.pdf
+2025-07-17 16:41:54 [INFO] User login successful for user: eve
+2025-07-17 22:20:32 [ERROR] Service payment crashed
+2025-07-17 14:22:52 [ERROR] Service notification crashed
+2025-07-17 05:07:43 [INFO] Scheduled backup completed successfully
+2025-07-17 08:47:31 [ERROR] File write failed: config.yml
+2025-07-17 12:07:57 [INFO] Database connection established
+2025-07-17 05:15:10 [INFO] Cache cleared successfully
+2025-07-17 16:54:41 [INFO] File uploaded: data.csv
+2025-07-17 00:54:58 [ERROR] Email sending failed to recipient: user@gmail.com
+2025-07-17 20:43:36 [ERROR] File write failed: report.pdf
+2025-07-17 14:31:09 [WARNING] Failed login attempt for user: eve. Retrying...
+2025-07-17 10:28:50 [INFO] File uploaded: config.yml
+2025-07-17 21:30:46 [INFO] Scheduled backup completed successfully
+2025-07-17 00:14:29 [WARNING] Second failed login attempt for user: charlie. Next attempt will ERROR. Retrying...
+2025-07-17 19:19:55 [INFO] Service notification started
+2025-07-17 14:54:47 [DEBUG] Variable x has value: 2602
+2025-07-17 06:41:15 [WARNING] Second failed login attempt for user: diana. Next attempt will ERROR. Retrying...
+2025-07-17 16:01:20 [INFO] Cache cleared successfully
+2025-07-17 03:26:12 [INFO] Database connection established
+2025-07-17 00:39:37 [INFO] Scheduled backup completed successfully
+2025-07-17 00:29:20 [ERROR] Email sending failed to recipient: admin@google.com
+2025-07-17 20:08:39 [INFO] Cache cleared successfully
+2025-07-17 13:18:47 [INFO] Database connection established
+2025-07-17 00:08:54 [INFO] User login successful for user: bob
+2025-07-17 05:36:22 [INFO] Cache cleared successfully
+2025-07-17 03:08:20 [INFO] Service payment started
+2025-07-17 20:50:01 [INFO] Scheduled backup completed successfully
+2025-07-17 16:24:17 [INFO] Database connection established
+2025-07-17 19:06:57 [INFO] Scheduled backup completed successfully
+2025-07-17 07:47:36 [INFO] Service inventory started
+2025-07-17 02:03:48 [INFO] Service notification started
+2025-07-17 16:44:32 [INFO] User login successful for user: eve
+2025-07-17 15:35:07 [INFO] Database connection established
+2025-07-17 12:45:41 [INFO] File uploaded: data.csv
+2025-07-17 07:05:52 [INFO] Database connection established
+2025-07-17 15:27:57 [INFO] Cache cleared successfully
+2025-07-17 21:06:19 [ERROR] File write failed: data.csv
+2025-07-17 17:27:45 [INFO] Service inventory started
+2025-07-17 15:38:47 [INFO] Cache cleared successfully
+2025-07-17 07:21:59 [INFO] Cache cleared successfully
+2025-07-17 02:43:19 [WARNING] Slow query detected: execution time 945ms
+2025-07-17 23:10:50 [INFO] File uploaded: config.yml
+2025-07-17 08:40:44 [ERROR] Deadlock detected in transaction ID 990
+2025-07-17 13:29:21 [INFO] User login successful for user: charlie
+2025-07-17 14:28:03 [INFO] Database connection established
+2025-07-17 12:08:27 [INFO] Service auth started
+2025-07-17 20:38:23 [INFO] File uploaded: report.pdf
+2025-07-17 17:02:53 [WARNING] Second failed login attempt for user: charlie. Next attempt will ERROR. Retrying...
+2025-07-17 20:45:29 [WARNING] Configuration file deprecated: data.csv
+2025-07-17 01:32:41 [WARNING] High memory usage detected
+2025-07-17 17:36:33 [INFO] Database connection established
+2025-07-17 16:44:45 [INFO] File uploaded: config.yml
+2025-07-17 05:46:08 [INFO] File uploaded: backup.zip
+2025-07-17 07:55:21 [INFO] User login successful for user: alice
+2025-07-17 23:36:52 [INFO] Service auth started
+2025-07-17 21:08:01 [WARNING] Slow query detected: execution time 358ms
+2025-07-17 08:43:02 [INFO] Database connection established
+2025-07-17 06:06:02 [INFO] Service notification started
+2025-07-17 20:13:02 [INFO] Scheduled backup completed successfully
+2025-07-17 19:15:18 [WARNING] Disk space low: 1416 remaining
+2025-07-17 11:00:13 [INFO] Scheduled backup completed successfully
+2025-07-17 01:44:32 [INFO] Service auth started
+2025-07-17 10:51:22 [INFO] File uploaded: backup.zip
+2025-07-17 19:00:05 [WARNING] Failed login attempt for user: diana. Retrying...
+2025-07-17 17:51:38 [ERROR] File write failed: data.csv
+2025-07-17 15:36:44 [WARNING] API response time exceeded threshold
+2025-07-17 04:05:53 [ERROR] Unhandled exception: NullPointerException
+2025-07-17 02:33:10 [INFO] Cache cleared successfully
+2025-07-17 12:05:48 [WARNING] High memory usage detected
+2025-07-17 18:41:00 [INFO] Database connection established
+2025-07-17 00:04:50 [DEBUG] Variable x has value: 299
+2025-07-17 22:05:08 [INFO] Database connection established
+2025-07-17 20:11:14 [INFO] Cache cleared successfully
+2025-07-17 20:41:49 [INFO] User login successful for user: eve
+2025-07-17 05:30:14 [WARNING] Second failed login attempt for user: alice. Next attempt will ERROR. Retrying...
+2025-07-17 01:29:19 [WARNING] Failed login attempt for user: alice. Retrying...
+2025-07-17 04:48:18 [INFO] Cache cleared successfully
+2025-07-17 15:03:40 [INFO] Cache cleared successfully
+2025-07-17 17:26:12 [ERROR] Service payment crashed
+2025-07-17 03:02:32 [WARNING] Slow query detected: execution time 1967ms
+2025-07-17 00:38:05 [INFO] Database connection established
+2025-07-17 02:31:28 [INFO] Service inventory started
+2025-07-17 03:19:00 [INFO] Database connection established
+2025-07-17 20:59:26 [WARNING] High memory usage detected
+2025-07-17 06:44:32 [ERROR] File write failed: report.pdf
+2025-07-17 12:19:45 [INFO] User login successful for user: diana
+2025-07-17 08:19:23 [INFO] Cache cleared successfully
+2025-07-17 23:47:39 [INFO] Service notification started
+2025-07-17 08:11:28 [INFO] User login successful for user: diana
+2025-07-17 12:12:57 [INFO] Cache cleared successfully
+2025-07-17 19:52:40 [ERROR] Email sending failed to recipient: support@amazon.com
+2025-07-17 10:20:29 [INFO] User login successful for user: alice
+2025-07-17 17:59:12 [DEBUG] Session token generated for user: bob
+2025-07-17 15:35:57 [ERROR] Unhandled exception: TimeoutError
+2025-07-17 00:41:30 [INFO] Database connection established
+2025-07-17 08:18:41 [INFO] File uploaded: backup.zip
+2025-07-17 11:27:09 [INFO] Scheduled backup completed successfully
+2025-07-17 12:55:55 [INFO] Scheduled backup completed successfully
+2025-07-17 03:39:40 [INFO] Scheduled backup completed successfully
+2025-07-17 02:19:30 [WARNING] High memory usage detected
+2025-07-17 14:15:22 [INFO] File uploaded: data.csv
+2025-07-17 16:21:52 [WARNING] Second failed login attempt for user: eve. Next attempt will ERROR. Retrying...
+2025-07-17 18:47:44 [WARNING] Failed login attempt for user: eve. Retrying...
+2025-07-17 22:52:38 [DEBUG] Entering function generate_report with arguments: 3
+2025-07-17 17:41:32 [INFO] Scheduled backup completed successfully
+2025-07-17 14:24:55 [ERROR] Database connection lost
+2025-07-17 02:05:08 [INFO] Scheduled backup completed successfully
+2025-07-17 17:18:58 [INFO] Service notification started
+2025-07-17 09:30:18 [INFO] Service auth started
+2025-07-17 15:52:18 [WARNING] Slow query detected: execution time 2435ms
+2025-07-17 13:40:26 [INFO] Service inventory started
+2025-07-17 16:53:34 [INFO] User login successful for user: alice
+2025-07-17 02:25:27 [INFO] Scheduled backup completed successfully
+2025-07-17 00:19:10 [INFO] Cache cleared successfully
+2025-07-17 08:41:39 [ERROR] Deadlock detected in transaction ID 224
+2025-07-17 14:58:38 [INFO] Cache cleared successfully
+2025-07-17 07:22:54 [INFO] Database connection established
+2025-07-17 12:29:32 [INFO] File uploaded: backup.zip
+2025-07-17 05:14:42 [WARNING] Configuration file deprecated: config.yml
+2025-07-17 06:52:25 [INFO] Scheduled backup completed successfully
+2025-07-17 19:20:32 [WARNING] High memory usage detected
+2025-07-17 12:25:42 [INFO] Service inventory started
+2025-07-17 12:24:16 [WARNING] Disk space low: 8 remaining
+2025-07-17 09:37:05 [WARNING] Disk space low: 72 remaining
+2025-07-17 09:07:15 [INFO] Service notification started
+2025-07-17 11:34:15 [WARNING] High memory usage detected
+2025-07-17 23:18:46 [INFO] Service notification started
+2025-07-17 06:02:54 [INFO] Database connection established
+2025-07-17 22:16:21 [INFO] Cache cleared successfully
+2025-07-17 19:27:12 [WARNING] Second failed login attempt for user: alice. Next attempt will ERROR. Retrying...
+2025-07-17 11:56:50 [WARNING] Disk space low: 2762 remaining
+2025-07-17 07:20:55 [INFO] Cache cleared successfully
+2025-07-17 16:58:39 [DEBUG] Session token generated for user: diana
+2025-07-17 11:29:18 [INFO] File uploaded: backup.zip
+2025-07-17 00:22:10 [INFO] Service inventory started
+2025-07-17 09:49:10 [INFO] Cache cleared successfully
+2025-07-17 08:00:14 [ERROR] File write failed: data.csv
+2025-07-17 02:31:25 [INFO] Database connection established
+2025-07-17 12:44:00 [INFO] User login successful for user: alice
+2025-07-17 21:31:45 [INFO] Cache cleared successfully
+2025-07-17 12:12:24 [INFO] Database connection established
+2025-07-17 12:47:27 [ERROR] Unhandled exception: NullPointerException
+2025-07-17 09:00:35 [DEBUG] Temporary file created at: report.pdf
+2025-07-17 16:24:35 [INFO] File uploaded: data.csv
+2025-07-17 16:02:23 [WARNING] Second failed login attempt for user: bob. Next attempt will ERROR. Retrying...
+2025-07-17 00:03:25 [INFO] User login successful for user: diana
+2025-07-17 20:38:44 [INFO] File uploaded: data.csv
+2025-07-17 17:37:32 [INFO] Cache cleared successfully
+2025-07-17 12:51:09 [INFO] Cache cleared successfully
+2025-07-17 19:09:47 [INFO] File uploaded: backup.zip
+2025-07-17 18:01:37 [WARNING] Second failed login attempt for user: bob. Next attempt will ERROR. Retrying...
+2025-07-17 16:29:05 [INFO] Service inventory started
+2025-07-17 19:02:47 [DEBUG] Variable x has value: 4940
+2025-07-17 02:33:57 [INFO] Service payment started
+2025-07-17 22:24:50 [INFO] Service inventory started
+2025-07-17 00:15:09 [WARNING] Slow query detected: execution time 616ms
+2025-07-17 01:36:38 [INFO] Scheduled backup completed successfully
+2025-07-17 02:45:12 [INFO] Cache cleared successfully
+2025-07-17 11:47:19 [INFO] Cache cleared successfully
+2025-07-17 07:25:34 [WARNING] Disk space low: 3004 remaining
+2025-07-17 19:35:30 [WARNING] Second failed login attempt for user: alice. Next attempt will ERROR. Retrying...
+2025-07-17 17:50:52 [INFO] User login successful for user: alice
+2025-07-17 03:41:56 [WARNING] High memory usage detected
+2025-07-17 02:51:23 [INFO] Service payment started
+2025-07-17 07:48:44 [INFO] Service inventory started
+2025-07-17 13:24:07 [INFO] User login successful for user: bob
+2025-07-17 05:44:40 [WARNING] High memory usage detected
+2025-07-17 15:54:10 [INFO] User login successful for user: alice
+2025-07-17 16:08:37 [INFO] Cache cleared successfully
+2025-07-17 04:13:05 [INFO] Scheduled backup completed successfully
+2025-07-17 12:01:35 [INFO] User login successful for user: bob
+2025-07-17 01:10:55 [INFO] Scheduled backup completed successfully
+2025-07-17 14:26:40 [WARNING] Disk space low: 1648 remaining
+2025-07-17 18:20:10 [ERROR] Database connection lost
+2025-07-17 04:02:34 [WARNING] API response time exceeded threshold
+2025-07-17 16:24:56 [INFO] File uploaded: data.csv
+2025-07-17 14:29:24 [INFO] Scheduled backup completed successfully
+2025-07-17 19:24:59 [WARNING] High memory usage detected
+2025-07-17 06:13:07 [INFO] Service notification started
+2025-07-17 18:35:38 [ERROR] Unhandled exception: FileNotFoundError
+2025-07-17 13:00:11 [WARNING] Second failed login attempt for user: eve. Next attempt will ERROR. Retrying...
+2025-07-17 20:19:29 [INFO] File uploaded: data.csv
+2025-07-17 16:22:18 [INFO] Scheduled backup completed successfully
+2025-07-17 15:03:41 [WARNING] Configuration file deprecated: report.pdf
+2025-07-17 19:34:01 [INFO] Scheduled backup completed successfully
+2025-07-17 07:07:36 [INFO] User login successful for user: bob
+2025-07-17 11:19:29 [INFO] File uploaded: backup.zip
+2025-07-17 09:06:33 [INFO] Scheduled backup completed successfully
+2025-07-17 00:29:15 [INFO] User login successful for user: eve
+2025-07-17 02:25:00 [INFO] Service auth started
+2025-07-17 03:41:51 [INFO] Database connection established
+2025-07-17 22:53:51 [INFO] User login successful for user: eve
+2025-07-17 00:12:21 [WARNING] API response time exceeded threshold
+2025-07-17 17:02:22 [INFO] User login successful for user: eve
+2025-07-17 13:57:39 [ERROR] Deadlock detected in transaction ID 130
+2025-07-17 14:03:13 [WARNING] API response time exceeded threshold
+2025-07-17 01:12:58 [INFO] User login successful for user: bob
+2025-07-17 16:36:00 [WARNING] Configuration file deprecated: backup.zip
+2025-07-17 14:23:27 [WARNING] Failed login attempt for user: diana. Retrying...
+2025-07-17 15:36:20 [WARNING] Disk space low: 4806 remaining
+2025-07-17 07:30:53 [ERROR] Database connection lost
+2025-07-17 21:44:52 [INFO] Scheduled backup completed successfully
+2025-07-17 07:47:35 [WARNING] Configuration file deprecated: report.pdf
+2025-07-17 12:26:23 [WARNING] Failed login attempt for user: diana. Retrying...
+2025-07-17 18:03:59 [WARNING] Disk space low: 695 remaining
+2025-07-17 23:16:47 [INFO] Database connection established
+2025-07-17 10:05:15 [DEBUG] Variable x has value: 2742
+2025-07-17 04:54:44 [INFO] File uploaded: data.csv
+2025-07-17 18:47:39 [DEBUG] Query executed: UPDATE orders SET status='shipped' WHERE id=42
+2025-07-17 11:36:29 [INFO] Database connection established
+2025-07-17 22:40:55 [INFO] Service payment started
+2025-07-17 08:04:48 [ERROR] Unhandled exception: FileNotFoundError
+2025-07-17 02:18:40 [ERROR] Deadlock detected in transaction ID 1101
+2025-07-17 00:37:29 [WARNING] Configuration file deprecated: backup.zip
+2025-07-17 22:02:43 [INFO] Cache cleared successfully
+2025-07-17 12:27:48 [INFO] User login successful for user: charlie
+2025-07-17 05:42:26 [INFO] Scheduled backup completed successfully
+2025-07-17 01:52:19 [INFO] File uploaded: report.pdf
+2025-07-17 23:55:27 [INFO] Cache cleared successfully
+2025-07-17 15:58:55 [INFO] Scheduled backup completed successfully
+2025-07-17 14:52:50 [INFO] Cache cleared successfully
+2025-07-17 20:36:17 [ERROR] Database connection lost
+2025-07-17 03:14:30 [INFO] User login successful for user: eve
+2025-07-17 05:59:30 [INFO] File uploaded: config.yml
+2025-07-17 12:13:25 [WARNING] Configuration file deprecated: config.yml
+2025-07-17 20:43:05 [INFO] File uploaded: config.yml
+2025-07-17 12:55:29 [INFO] User login successful for user: bob
+2025-07-17 11:48:50 [DEBUG] Entering function process_payment with arguments: 3
+2025-07-17 16:31:10 [WARNING] Configuration file deprecated: config.yml
+2025-07-17 20:20:58 [INFO] Database connection established
+2025-07-17 05:39:31 [INFO] Cache cleared successfully
+2025-07-17 00:29:28 [WARNING] Slow query detected: execution time 2964ms
+2025-07-17 07:49:02 [INFO] Scheduled backup completed successfully
+2025-07-17 10:42:47 [WARNING] Second failed login attempt for user: eve. Next attempt will ERROR. Retrying...
+2025-07-17 03:16:21 [ERROR] Deadlock detected in transaction ID 4111
+2025-07-17 08:25:50 [WARNING] Configuration file deprecated: report.pdf
+2025-07-17 08:23:51 [INFO] Cache cleared successfully
+2025-07-17 05:58:17 [INFO] Database connection established
+2025-07-17 19:49:37 [INFO] Cache cleared successfully
+2025-07-17 20:32:33 [INFO] Scheduled backup completed successfully
+2025-07-17 11:46:00 [ERROR] Service notification crashed
+2025-07-17 12:45:13 [ERROR] Database connection lost
+2025-07-17 20:01:16 [INFO] Cache cleared successfully
+2025-07-17 01:52:51 [WARNING] API response time exceeded threshold
+2025-07-17 06:48:02 [INFO] Database connection established
+2025-07-17 10:29:28 [INFO] Service notification started
+2025-07-17 10:30:44 [WARNING] Failed login attempt for user: bob. Retrying...
+2025-07-17 08:28:14 [INFO] User login successful for user: alice
+2025-07-17 03:02:49 [INFO] File uploaded: data.csv
+2025-07-17 00:50:51 [INFO] Database connection established
+2025-07-17 05:56:05 [INFO] User login successful for user: bob
+2025-07-17 03:33:07 [INFO] Database connection established
+2025-07-17 06:20:37 [INFO] Scheduled backup completed successfully
+2025-07-17 19:16:13 [WARNING] Second failed login attempt for user: alice. Next attempt will ERROR. Retrying...
+2025-07-17 11:01:44 [WARNING] Second failed login attempt for user: alice. Next attempt will ERROR. Retrying...
+2025-07-17 06:30:11 [INFO] Scheduled backup completed successfully
+2025-07-17 15:41:08 [ERROR] Email sending failed to recipient: support@amazon.com
+2025-07-17 22:43:37 [WARNING] Configuration file deprecated: report.pdf
+2025-07-17 23:17:57 [INFO] User login successful for user: eve
+2025-07-17 15:26:46 [INFO] Cache cleared successfully
+2025-07-17 06:30:39 [INFO] Service inventory started
+2025-07-17 22:19:47 [INFO] Cache cleared successfully
+2025-07-17 10:09:22 [INFO] File uploaded: report.pdf
+2025-07-17 12:09:28 [INFO] Database connection established
+2025-07-17 06:27:58 [WARNING] Slow query detected: execution time 3822ms

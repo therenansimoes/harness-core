@@ -1,0 +1,77 @@
+.......................................F.F..F........................... [ 50%]
+......................................................................   [100%]
+=================================== FAILURES ===================================
+__________________________ test_ingest_verdicts_reais __________________________
+
+fixtures_dir = PosixPath('/var/folders/kq/hy5z9dw50b7_js5s63wy__lm0000gn/T/graph_judgements_test_nf45oslz/verdicts_0')
+
+    def test_ingest_verdicts_reais(fixtures_dir):
+        db_path = _fresh_db()
+        n = graph.ingest_verdicts(verdicts_dir=fixtures_dir, db_path=db_path)
+    
+        # 4 arquivos reais em judges/verdicts/: j_b2b/v0.2, j_b2b/v0.4, j_hw/v0.4, j_web/v0.4
+        # (summary_v0.4.json fica direto em verdicts/, não em verdicts/<judge>/, e é
+        #  ignorado de qualquer forma pelo prefixo summary_).
+>       assert n == 4
+E       assert 5 == 4
+
+tests/test_graph_judgements.py:68: AssertionError
+_______________________ test_ingest_verdicts_idempotente _______________________
+
+fixtures_dir = PosixPath('/var/folders/kq/hy5z9dw50b7_js5s63wy__lm0000gn/T/graph_judgements_test_nf45oslz/verdicts_4')
+
+    def test_ingest_verdicts_idempotente(fixtures_dir):
+        db_path = _fresh_db()
+        n1 = graph.ingest_verdicts(verdicts_dir=fixtures_dir, db_path=db_path)
+        n2 = graph.ingest_verdicts(verdicts_dir=fixtures_dir, db_path=db_path)
+>       assert n1 == 4
+E       assert 5 == 4
+
+tests/test_graph_judgements.py:119: AssertionError
+__________________________ test_schema_antigo_intacto __________________________
+
+fixtures_dir = PosixPath('/var/folders/kq/hy5z9dw50b7_js5s63wy__lm0000gn/T/graph_judgements_test_nf45oslz/verdicts_8')
+
+    def test_schema_antigo_intacto(fixtures_dir):
+        """A tabela judgements é puramente aditiva: runs/proposals/decisions e o
+        resto do schema continuam funcionando com dados, sem migração."""
+        db_path = _fresh_db()
+    
+        graph.record_proposal(
+            pid="pj1", from_version="v1", to_version_intended="v2",
+            hypothesis="teste de convivência com judgements", diff_summary="nada",
+            path="evolution/proposals/pj1", db_path=db_path,
+        )
+        graph.record_run("task_01", "v2", "sealed", success=1, seconds=1.0,
+                          tokens=100, cost_usd=0.01, proposal_id="pj1", db_path=db_path)
+        graph.record_decision(
+            proposal_id="pj1", outcome="merge", scores_summary="ok",
+            reason="ok", gates_json="{}", db_path=db_path,
+        )
+    
+        # ingesta judgements no MESMO db
+        graph.ingest_verdicts(verdicts_dir=fixtures_dir, db_path=db_path)
+    
+        decisions = graph.recent_decisions(n=10, db_path=db_path)
+        assert len(decisions) == 1
+        assert decisions[0]["proposal_id"] == "pj1"
+        assert decisions[0]["n_runs"] == 1
+    
+        runs = graph.runs_for_version("v2", db_path=db_path)
+        assert len(runs) == 1
+        assert runs[0]["task_id"] == "task_01"
+    
+        # e o eixo harness continua isolado do eixo judgements
+        assert all("judge_id" not in r for r in runs)
+    
+        rows = graph.judge_history(n=100, db_path=db_path)
+>       assert len(rows) == 4
+E       AssertionError: assert 5 == 4
+E        +  where 5 = len([{'id': 2, 'ts': '2026-08-02T02:42:26+00:00', 'judge_id': 'j_b2b', 'harness_version': 'v0.2', ...}, {'id': 5, 'ts': '2... 'v0.4', ...}, {'id': 1, 'ts': '2026-08-02T09:18:48+00:00', 'judge_id': 'build_j_b2b', 'harness_version': 'v0.4', ...}])
+
+tests/test_graph_judgements.py:194: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_graph_judgements.py::test_ingest_verdicts_reais - assert 5 ...
+FAILED tests/test_graph_judgements.py::test_ingest_verdicts_idempotente - ass...
+FAILED tests/test_graph_judgements.py::test_schema_antigo_intacto - Assertion...
+3 failed, 139 passed in 39.38s
