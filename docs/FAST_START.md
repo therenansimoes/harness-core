@@ -1,3 +1,5 @@
+> SUPERSEDED 2026-08-02: ver STATUS.md (pivô LangGraph)
+
 # Fast Start — Acelerar a implementação do Harness
 
 **Companion de:** `PLAN.md`  

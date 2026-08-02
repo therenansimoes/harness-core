@@ -1,3 +1,5 @@
+> SUPERSEDED 2026-08-02: ver STATUS.md (pivô LangGraph)
+
 # Self-Improving Harness — PLAN.md
 
 **Versão do documento:** 1.0  

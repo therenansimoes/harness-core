@@ -1,6 +1,34 @@
 # STATUS — fonte de verdade do harness-core
 
-**Atualizado:** 2026-08-02 (noite — escada D0–D6 completa; desvio DeerFlow encerrado). Este arquivo substitui PLAN.md, FAST_START.md e generative-project.md como norte. Eles ficam como referência histórica — não seguir mais.
+**Atualizado:** 2026-08-02 (noite — PIVÔ: base completa sobre LangGraph + LangChain). Este arquivo substitui PLAN.md, FAST_START.md e generative-project.md como norte. Eles ficam como referência histórica — não seguir mais.
+
+## PIVÔ: base completa sobre LangGraph + LangChain (2026-08-02 noite)
+
+**Decisão do dono: parar de construir por incrementos.** A base completa do executor é implementada de uma vez, sobre plataforma pronta:
+
+- **LangGraph = orquestração.** StateGraphs + checkpointer SQLite dão resume, topologia explícita e estado durável — coisas que hoje são `if` espalhado no `project.py`.
+- **LangChain = lib padrão de integrações.** FAISS + OllamaEmbeddings + text splitters. Não escrever retrieval artesanal.
+- **Abraço completo, consciente.** O repo deixa de ser stdlib-only. Isolamento vem de pins exatos + `requirements.lock` **imutável no genome** — o loop não mexe em dependência.
+- **Executor continua Claude CLI**, dentro do node `execute`. LangGraph orquestra; quem trabalha é o CLI.
+
+**Escada de PRs:**
+
+| PR | O quê | Nota |
+|---|---|---|
+| PR-0 | Piloto GraphRAG | go/no-go: build ≤45min, malformed ≤5%, local p50 ≤15s. Probe de gleaning ANTES. Runtime usa community summaries C0/C1 **estáticas**; global search nunca por query. Paralelo ao PR-1. |
+| PR-1 | RunPlan | ~~feito~~ FEITO (338 testes) |
+| PR-L1 | Dependências (LangGraph/LangChain, pins + requirements.lock) | — |
+| PR-L2 | Grafo de run | **RISCO:** redistribui `project._execute` em nodes. Aceite: `results.tsv` byte-idêntico. |
+| PR-L3 | Grafo do autopilot | — |
+| PR-2 | Kinds | — |
+| PR-4 | Memory | — |
+| PR-5 | Skills | — |
+| PR-6 | Retrieval 3 canais | GraphRAG estático / Serena código / FAISS texto |
+| PR-7 | Replay + `escalate_human` | — |
+
+**Cancelados:** PR-3 hooks declarativos (o grafo JÁ é o pipeline — hook vira node) e `retrieval.py` artesanal (LangChain cobre).
+
+**Regra mantida:** topologia e mecanismo são **immutable no genome**; o loop calibra só TOMLs. **`projects/website-faz-rogers` CONGELADO** até a base ficar de pé — volta depois como benchmark, não como obra em andamento.
 
 ## Desvio DeerFlow — ENCERRADO (2026-08-02 noite)
 
@@ -46,7 +74,11 @@ O projeto patinou por meta-recursão: arena (agentes construindo harnesses conco
 | D6 | ~~`autopilot`: fila → run → KPI → revert se regride; propostas de catálogo determinístico do erro dominante~~ FEITO (merge c7d1911, aceite mock 20min: 7 runs fila + 2 self, zero escrita fora do ROOT) | 20min sem intervenção, ≥5 linhas em results.tsv, zero escrita fora do workspace | builder |
 | D7 | Prova em código de terceiro: +3 tasks held-out de repos OSS distintos | 3 verifies red no base, green pós-run em cópia limpa | builder |
 
+SUPERSEDED 2026-08-02 (pivô LangGraph): o parágrafo abaixo tratava a 1ª rodada do site como próximo passo — o site está CONGELADO até a base; as duas pendências (sandbox/copytree) seguem como dívida, agora resolvidas dentro do grafo (PR-L2).
+
 Pós-escada (2026-08-02): 1º projeto real registrado — `projects/website-faz-rogers` (site da fazenda, Astro 5, 13 tasks na fila, verify próprio + 5 KPIs). Pendências antes da 1ª rodada real: (a) sandbox do evolve não copia o fecho de runtime (safety.py etc.) — toda proposta morre em InfraError, fix em decisão no architect; (b) copytree do project.py sem ignore copia node_modules por task — idem. D7 (3 tasks held-out de OSS) continua aberto.
+
+SUPERSEDED 2026-08-02 (pivô LangGraph): a lista "NÃO construir" abaixo vale menos vector DB/GraphRAG — GraphRAG estático é PR-0 e FAISS entra via LangChain; o resto continua vetado.
 
 Riscos vigiados: KPI gameável (KPI calculado fora do genoma + held-out selado), genoma 360 se auto-quebrar (blocklist + worktree + revert por regressão), autonomia sem teto (budget $ e wall-clock por SIGTERM no config). NÃO construir: satélites, Docker, vector DB/GraphRAG/Mem0, credit assignment por módulo, multi-projeto real (só com 2º projeto), qualquer volta de arena.
 
@@ -54,7 +86,7 @@ Riscos vigiados: KPI gameável (KPI calculado fora do genoma + held-out selado),
 
 - **Open source vs. do zero (respondido 2026-08-01):** manter o core do zero — nenhum framework maduro (OpenHands/SWE-agent/Aider) faz meta-loop de auto-melhoria com gate determinístico próprio. Reusar: tasks do Terminal-Bench 2.0/Harbor como fonte de benchmark. Roubar padrão: gate held-in/held-out do Self-Harness (arXiv 2606.09498) e archive de variantes do Darwin Gödel Machine (jennyzzt/dgm).
 
-- **Multi-projeto / memória / modularidade (respondido 2026-08-01):** tudo viável em stdlib, nada de dependência nova. Ordem de adoção decidida:
+- **Multi-projeto / memória / modularidade (respondido 2026-08-01):** SUPERSEDED 2026-08-02 (pivô LangGraph) na premissa "stdlib, nada de dependência nova" — memória/retrieval passam por LangChain (itens 1 e 5); a ordem de adoção dos itens 2–4 continua válida. tudo viável em stdlib, nada de dependência nova. Ordem de adoção decidida:
   1. Hierarquia de memória em markdown (global → projeto; episódico = `results.tsv`/runs, semântico = STATUS/CLAUDE.md) — pode já.
   2. Nota por módulo = coluna `module` em `proposals`/`runs` do `graph.py` (extensão de schema, não camada) — só APÓS provar valor em código de terceiro. Credit assignment por módulo é pesquisa aberta; manter "muda 1 coisa por A/B".
   3. Flags on/off por projeto (dict em config.py) — só quando houver 2+ módulos com histórico isolado.
@@ -86,6 +118,7 @@ Timeboxes duros (mecanismo, não pedido): dev de candidato ≤12min (SIGTERM); e
 
 ## Radar de tecnologia (nunca parar de estudar — veredito registrado antes de adotar)
 
+- SUPERSEDED 2026-08-02 (pivô LangGraph): o veredito "IGNORAR LangGraph como runtime — contraria stdlib-only" caiu; LangGraph é agora a base de orquestração (o resto do veredito deer-flow segue).
 - **deer-flow (ByteDance, MIT, 78k stars, ativo, 2026-08-01):** SuperAgent harness sobre LangGraph. ROUBAR padrão: sandbox isolado por run (versão subprocess simples, não Docker/K8s); SkillScan (scan determinístico antes de carregar capacidade); memória com escopo explícito (fazer com SQLite/markdown, depois do "saiu do lugar"). IGNORAR: LangGraph como runtime, multi-worker Redis, gateway de canais — contraria stdlib-only e a escada.
 
 - **Terminal-Bench 2.0 import (2026-08-01): PARCIAL.** Maioria das 89 tasks exige Docker (ambiente embutido no Dockerfile). Pool portável pequeno (dígito único a baixa dezena); 1 task (`cancel-async-tasks`) adaptada e validada red/green no scratchpad, ~30-45min/task portável. Decisão: importar as portáveis quando precisarmos de largura de benchmark; suporte Docker fica na fila de longo prazo (junto do A/B sério).

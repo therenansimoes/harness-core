@@ -1,3 +1,5 @@
+> SUPERSEDED 2026-08-02: ver STATUS.md (pivô LangGraph)
+
 # Plano da noite — 2026-08-02 (autorização: Renan, até ele dizer "pare" de manhã)
 
 Modo: trabalho contínuo autônomo. Fable orquestra; subagentes executam. Prioridade a trabalho validável offline; runs pagas só no caminho crítico com teto declarado. Checkpoint commit a cada entrega. De manhã: relatório completo.

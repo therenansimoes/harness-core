@@ -1,3 +1,5 @@
+> SUPERSEDED 2026-08-02: ver STATUS.md (pivô LangGraph)
+
 # SPEC — Multi-projeto FASE 1 (aprovada 2026-08-02)
 
 Design opus, revisão Fable. Doutrina: dois eixos que não se misturam — HARNESS (tasks/, benchmarks/, results.tsv, score.py) mede o motor; ENTREGA (projects/<nome>/) mede o produto. Multi-projeto vive 100% no eixo ENTREGA. stdlib-only, sem daemon.
