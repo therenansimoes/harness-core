@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import subprocess
 import sys
@@ -15,6 +16,7 @@ from pathlib import Path
 from harness.backends import registry
 from harness.ledger import store
 from harness.types import ExecRequest, RunRow, UnitSpec
+from harness.workspace.provision import dispose, provision
 
 UNIT_FILE = "unit.toml"
 
@@ -116,6 +118,28 @@ def cmd_backends(args: argparse.Namespace) -> int:
     return 0
 
 
+def _pct(values: list[float], q: int) -> float:
+    """Percentil por rank mais próximo — sem dependência, honesto para n pequeno."""
+    ordered = sorted(values)
+    idx = max(0, math.ceil(q / 100 * len(ordered)) - 1)
+    return ordered[idx]
+
+
+def cmd_bench(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    secs: list[float] = []
+    for _ in range(args.n):
+        t0 = time.monotonic()
+        ws = provision(repo, f"bench-{uuid.uuid4().hex[:8]}")
+        secs.append(time.monotonic() - t0)
+        dispose(ws, keep=False)
+    print(
+        f"provision n={len(secs)} "
+        f"p50={_pct(secs, 50):.3f}s p95={_pct(secs, 95):.3f}s"
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="harness", description="agent harness provider-agnostic")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -130,6 +154,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     backends = sub.add_parser("backends", help="lista backends registrados + preflight")
     backends.set_defaults(func=cmd_backends)
+
+    bench = sub.add_parser("bench", help="mede o custo de uma operação do harness")
+    bench.add_argument("what", choices=["provision"])
+    bench.add_argument("--n", type=int, default=10)
+    bench.add_argument("--repo", default=".", help="repositório git de origem")
+    bench.set_defaults(func=cmd_bench)
 
     return p
 
