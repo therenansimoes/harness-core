@@ -32,7 +32,7 @@ harness-core/
   config/      models.toml kinds.toml tools.toml catalog.toml genome.toml   # calibráveis pelo loop
   benchmarks/  held_in/ sealed/
   data/        runs.sqlite results.tsv checkpoints.sqlite   # gitignored
-  projects/    website-faz-rogers/  # CONGELADO, vira benchmark
+  projects/    # projetos privados do operador — gitignored, fora da história pública
   tests/
   legacy/      # REFERÊNCIA read-only, fora do pytest, fora do genoma
 ```

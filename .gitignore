@@ -23,3 +23,8 @@ legacy/evolution/critique.db
 legacy/evolution/autopilot/
 legacy/evolution/rollbacks/
 legacy/evolution/decisions.jsonl
+
+# Projetos privados/de família: nunca na história pública
+projects/website-faz-rogers/
+# Nota humana é avaliação subjetiva do operador
+projects/*/notes.tsv

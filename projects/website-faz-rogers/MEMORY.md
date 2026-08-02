@@ -1,1 +1,0 @@
-# MEMORY — website-faz-rogers

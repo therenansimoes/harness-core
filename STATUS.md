@@ -4,7 +4,7 @@
 
 ## O que o repo é agora
 
-Pacote `harness/` (núcleo, zero menção a vendor) sobre LangGraph; legado congelado em `legacy/` (referência read-only, fora do pytest e do genoma). Fonte de verdade de runs: `data/runs.sqlite` (TSV vira export). `projects/website-faz-rogers/` segue CONGELADO.
+Pacote `harness/` (núcleo, zero menção a vendor) sobre LangGraph; legado congelado em `legacy/` (referência read-only, fora do pytest e do genoma). Fonte de verdade de runs: `data/runs.sqlite` (TSV vira export). Projetos privados vivem em `projects/` mas ficam fora do git (gitignored) — o repo público carrega só fixtures e benchmarks sintéticos.
 
 ## Escada de PRs (docs/SPEC-rebuild.md §6)
 
