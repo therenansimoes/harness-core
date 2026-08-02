@@ -274,6 +274,8 @@ def sync_graph(rows: list[dict], since_index: int, pid: str) -> int:
             valid=1 if score.is_valid(r) else 0,
             proposal_id=pid if i >= since_index else None,
             ts=r["timestamp"],
+            # linha antiga do TSV não tem a coluna kpis — score.load devolve ""
+            kpis=r.get("kpis", ""),
         )
         n += 1
     return n

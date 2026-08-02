@@ -64,7 +64,8 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             cost_usd REAL NOT NULL,
             notes TEXT DEFAULT '',
             valid INTEGER NOT NULL DEFAULT 1,
-            proposal_id TEXT
+            proposal_id TEXT,
+            kpis TEXT DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS proposals (
@@ -179,7 +180,17 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_judgements_harness_version ON judgements(harness_version);
         """
     )
+    # CREATE TABLE IF NOT EXISTS não migra DB antigo: coluna nova em tabela que
+    # já existe precisa de ALTER TABLE, guardado por PRAGMA table_info para
+    # continuar idempotente (nunca apaga dado, roda a cada _connect).
+    _add_column_if_missing(conn, "runs", "kpis", "TEXT DEFAULT ''")
     conn.commit()
+
+
+def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, decl: str) -> None:
+    cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
 def _now() -> str:
@@ -192,7 +203,9 @@ def _now() -> str:
 def record_run(task_id: str, harness_version: str, suite: str, success: int,
                seconds: float, tokens: int, cost_usd: float, notes: str = "",
                valid: int = 1, proposal_id: str | None = None,
-               ts: str | None = None, db_path=None) -> int:
+               ts: str | None = None, kpis: str = "", db_path=None) -> int:
+    """`kpis`: JSON compacto da coluna homônima do results.tsv ({"nome": valor}),
+    guardado como texto — quem consulta interpreta; o graph não agrega KPI."""
     ts = ts or _now()
     conn = _connect(db_path)
     try:
@@ -200,11 +213,11 @@ def record_run(task_id: str, harness_version: str, suite: str, success: int,
             """
             INSERT INTO runs
                 (ts, task_id, harness_version, suite, success, seconds,
-                 tokens, cost_usd, notes, valid, proposal_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 tokens, cost_usd, notes, valid, proposal_id, kpis)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (ts, task_id, harness_version, suite, success, seconds,
-             tokens, cost_usd, notes, valid, proposal_id),
+             tokens, cost_usd, notes, valid, proposal_id, kpis or ""),
         )
         conn.commit()
         return cur.lastrowid

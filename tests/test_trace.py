@@ -43,12 +43,15 @@ EXPECTED_HEADER = [
     "cost_usd",
     "turns",
     "notes",
+    # D4a: coleta de KPI por projeto. UMA coluna JSON, não N colunas.
+    "kpis",
 ]
 
 
 def test_header_results_tsv_byte_a_byte_igual():
     """Aceite 4 do SPEC-J2: o token de trace vai dentro da coluna `notes`
-    já existente — o HEADER do results.tsv não ganha coluna nova."""
+    já existente — o trace não ganha coluna própria. A única coluna posterior
+    ao SPEC-J2 é `kpis` (D4a), e é uma só para qualquer número de KPIs."""
     assert run_task.HEADER == EXPECTED_HEADER
 
 
