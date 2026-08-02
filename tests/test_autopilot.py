@@ -320,7 +320,8 @@ def test_autopilot_erro_no_experimento_nao_deixa_config_suja(sandbox, monkeypatc
 
     assert alvo.read_bytes() == antes
     linha = store.mutations(path=db(sandbox))[0]
-    assert (linha.verdict, linha.reverted, linha.note) == ("INCONCLUSIVE", True, "error")
+    # ABORTED, não INCONCLUSIVE: experimento sem amostra não é empate.
+    assert (linha.verdict, linha.reverted, linha.note) == ("ABORTED", True, "error")
     assert fim.results[0]["arm_a"] == "0/0"   # experimento sem amostra nenhuma
 
 

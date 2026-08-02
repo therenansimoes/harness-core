@@ -95,9 +95,10 @@ class MutationRow:
 
     `arm_a`/`arm_b` são `"sucessos/tentativas"` — o mesmo formato de `harness ab
     --a 5/6`, legível no sqlite e parseável sem esquema extra. `verdict` é o da
-    régua (KEEP/DISCARD/INCONCLUSIVE) ou `REJECTED`, quando o genoma barrou a
-    regra antes de qualquer run. `note` carrega a violação ou o motivo da
-    escalação: rejeição sem causa registrada não é auditável.
+    régua (KEEP/DISCARD/INCONCLUSIVE), `REJECTED`, quando o genoma barrou a
+    regra antes de qualquer run, ou `ABORTED`, quando o experimento começou e
+    não terminou. `note` carrega a violação ou o motivo da escalação: rejeição
+    sem causa registrada não é auditável.
     """
 
     mutation_id: str

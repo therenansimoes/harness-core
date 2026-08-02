@@ -16,10 +16,14 @@ inventar mutação.
 **Fan-out é sequencial neste PR, de propósito.** `run_ab` alterna A,B,A,B e os
 braços diferem por uma mutação em `config/*.toml`, que é estado GLOBAL do
 processo: dois braços em paralelo leriam o mesmo arquivo e mediriam a mesma
-coisa. Então o braço é montado por `before_run` (liga/desliga a mutação antes
-de cada run) e `Budget.max_parallel` fica em 1. O `Send` paralelo da SPEC §3
-entra quando a config for injetável por run (parâmetro do `ExecRequest` em vez
-de arquivo) — aí o teto do semáforo passa a valer de verdade.
+coisa. Então o braço é montado em duas etapas — `before_run` liga/desliga a
+mutação e `spec_of` relê a config JÁ nesse estado para dizer quem executa —, e
+`Budget.max_parallel` fica em 1. O `Send` paralelo da SPEC §3 entra quando a
+config for injetável por run (parâmetro do `ExecRequest` em vez de arquivo) —
+aí o teto do semáforo passa a valer de verdade.
+
+Durante o ciclo, `$HARNESS_CONFIG_DIR` aponta para `<raiz>/config`: o loop muta
+uma árvore e o router lê a que o env manda, e as duas têm que ser a mesma.
 
 `deadline_ts` é checado na entrada de cada nó E antes de cada run do A/B (risco
 6). Só a entrada do nó não basta: `fanout_ab` é UM nó que roda `2 x n x
@@ -32,9 +36,12 @@ o loop escala com `reason="deadline"`.
 
 from __future__ import annotations
 
+import contextlib
 import operator
+import os
 import time
 import uuid
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Annotated, Any, Sequence, TypedDict
@@ -42,10 +49,11 @@ from typing import Annotated, Any, Sequence, TypedDict
 from harness.graph.checkpoint import open_checkpointer
 from harness.graph.run_graph import CFG_BACKEND, CFG_DATA_DIR, CFG_MODEL, _cfg, _event
 from harness.graph.state import Budget, Event
+from harness.improve import CONFIG_SUBDIR, mutate
 from harness.improve import escalate as esc
-from harness.improve import mutate
 from harness.improve.mutate import GenomeViolation, Mutation, MutationError
 from harness.improve.target import (
+    ABORTED,
     REJECTED,
     Rule,
     Target,
@@ -54,6 +62,7 @@ from harness.improve.target import (
     with_ledger_priors,
 )
 from harness.ledger import store
+from harness.routing import CONFIG_DIR_ENV
 from harness.ruler.wilson import MIN_N, Arm, decide_ab, wilson_interval
 from harness.types import MutationRow
 
@@ -172,6 +181,27 @@ def _expired(state: AutopilotState, node: str) -> dict | None:
     if not budget.expired(time.time()):
         return None
     return _stop(state, esc.DEADLINE, {"node": node, "deadline_ts": budget.deadline_ts})
+
+
+@contextlib.contextmanager
+def _pinned_config(base: Path) -> Iterator[None]:
+    """`$HARNESS_CONFIG_DIR` = `<raiz do ciclo>/config` enquanto o ciclo roda.
+
+    O loop muta `ROOT/config/*.toml` e o router lê `$HARNESS_CONFIG_DIR`: com
+    os dois apontando para árvores diferentes, o ciclo calibraria uma e mediria
+    a outra — exatamente o que o docstring de `improve/__init__.py` promete que
+    não acontece. Restaura no fim porque o processo é o mesmo (a CLI pode ter
+    outros comandos depois, e o teste tem outros testes depois).
+    """
+    previous = os.environ.get(CONFIG_DIR_ENV)
+    os.environ[CONFIG_DIR_ENV] = str(base / CONFIG_SUBDIR)
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(CONFIG_DIR_ENV, None)
+        else:
+            os.environ[CONFIG_DIR_ENV] = previous
 
 
 def _arm_text(arm: Arm) -> str:
@@ -348,6 +378,12 @@ def _fanout_ab(state: AutopilotState, config=None) -> dict:
     `run_ab` (ambiente que degrada no meio pune os dois braços igual) mesmo com
     a config sendo estado global.
 
+    O braço em si é montado DEPOIS do toggle, pelo `spec_of`: o router lê o
+    `models.toml` recém-ligado (ou desligado) e é dele que saem
+    backend/model/tier/max_turns da run. Sem isso o experimento monta os dois
+    braços com a mesma `ArmSpec` congelada na entrada do nó e mede a mutação
+    contra ela mesma — INCONCLUSIVE garantido, seja qual for a mutação.
+
     O mesmo `before_run` é onde o deadline vira interrupção de verdade: a checagem
     de entrada de nó não olharia o relógio de novo antes de `2 x n x unidades`
     runs. Cada run tem timeout próprio, então granularidade entre-runs basta.
@@ -356,27 +392,48 @@ def _fanout_ab(state: AutopilotState, config=None) -> dict:
         return stop
 
     from harness.ab import ArmSpec, run_ab
+    from harness.cli import load_unit
+    from harness.routing import router
 
     mutation = Mutation(**state["mutation"])
     root = _root(config)
     n = int(_cfg(config, CFG_N, MIN_N))
-    spec = ArmSpec(
-        backend=_cfg(config, CFG_BACKEND, "mock"), model=_cfg(config, CFG_MODEL)
-    )
+    forced_backend = _cfg(config, CFG_BACKEND)
+    forced_model = _cfg(config, CFG_MODEL)
+    models_toml = root / CONFIG_SUBDIR / router.MODELS_FILE
     data_dir = Path(_cfg(config, CFG_DATA_DIR, "data"))
     parallel = max(1, int(state["budget"].max_parallel))
+    # Histórico congelado na entrada do nó: o prior do router é função do
+    # ledger, e o A/B escreve no ledger a cada run. Relendo run a run, o braço
+    # poderia trocar de tier no meio do experimento por evidência que a própria
+    # amostra produziu — diferença entre os braços que não é a mutação.
+    history = store.history(path=_db(config))
 
     def before_run(label: str, _i: int) -> None:
         if state["budget"].expired(time.time()):
             raise _DeadlineHit()
         mutate.toggle(mutation, root=root, applied=label == "b")
 
+    def spec_for(unit_spec) -> ArmSpec:
+        """O braço desta run, lido da config que está no disco AGORA."""
+        sel = router.select(unit_spec, history, cfg=router.load_config(models_toml))
+        if forced_backend:
+            # Executor no dedo (`improve --backend`): só backend/model saem da
+            # mão do router. Tier e max_turns continuam vindo da config, senão
+            # a mutação não teria por onde mudar a run.
+            return ArmSpec(forced_backend, forced_model, sel.tier, sel.max_turns)
+        return ArmSpec(sel.backend, sel.model or None, sel.tier, sel.max_turns)
+
     totals = {"a": Arm(0, 0), "b": Arm(0, 0)}
     try:
         for unit in state["units"]:
+            unit_spec = load_unit(Path(unit))
             report = run_ab(
-                unit, spec, spec, n=n, data_dir=data_dir,
+                unit, n=n, data_dir=data_dir,
                 before_run=before_run,
+                # O rótulo do braço não entra na conta: quem diz A de B é o
+                # estado do toml que o `before_run` acabou de deixar no disco.
+                spec_of=lambda _label, u=unit_spec: spec_for(u),
                 intervention=state["interventions"] > 0,
             )
             for label, arm in (("a", report.arm_a), ("b", report.arm_b)):
@@ -475,7 +532,11 @@ def _record(state: AutopilotState, config=None) -> dict:
     """Uma linha em `mutations` por experimento — a fonte do replay do PR-10."""
     mutation = Mutation(**state["mutation"])
     arm_a, arm_b = _arms(state)
-    verdict = state.get("verdict") or "INCONCLUSIVE"
+    # Sem veredito aqui só se chegou pelo `escalate` (deadline, erro, humano
+    # abortando): experimento sem amostra não é empate, é experimento que não
+    # aconteceu. O `INSERT OR IGNORE` do ledger já pode ter a linha ABORTED
+    # gravada pelo `escalate` — esta é a mesma linha, não outra.
+    verdict = state.get("verdict") or ABORTED
     reverted = verdict != "KEEP"
     rate_a = arm_a.succ / arm_a.n if arm_a.n else 0.0
     rate_b = arm_b.succ / arm_b.n if arm_b.n else 0.0
@@ -522,6 +583,37 @@ def _record(state: AutopilotState, config=None) -> dict:
     }
 
 
+def _record_aborted(state: AutopilotState, config=None) -> None:
+    """Linha de ledger do experimento que parou no meio.
+
+    Grava ANTES do `interrupt()` porque a parada pode ser definitiva: quem roda
+    `harness improve` na CLI e não responde nunca chega ao nó `record`, e a
+    mutação teria sido aplicada sem deixar rastro nenhum — o replay do PR-10
+    não teria como saber que aquele toml esteve calibrado. O `mutation_id` é
+    determinístico e o ledger é `INSERT OR IGNORE`, então o `record` de um
+    resume posterior encontra a linha já lá em vez de duplicá-la.
+    """
+    mutation = Mutation(**state["mutation"])
+    arm_a, arm_b = _arms(state)
+    try:
+        reverted = not mutate.is_applied(mutation, root=_root(config))
+    except (OSError, MutationError):
+        reverted = False      # não deu para conferir: não se afirma que voltou
+    store.record_mutation(
+        MutationRow(
+            mutation_id=mutation.mutation_id,
+            rule_id=mutation.rule_id,
+            verdict=ABORTED,
+            arm_a=_arm_text(arm_a),
+            arm_b=_arm_text(arm_b),
+            applied_at=mutation.applied_at,
+            reverted=reverted,
+            note=(state.get("escalation") or {}).get("reason"),
+        ),
+        path=_db(config),
+    )
+
+
 def _escalate(state: AutopilotState, config=None) -> dict:
     """`interrupt()`: o grafo para aqui até alguém responder.
 
@@ -532,6 +624,8 @@ def _escalate(state: AutopilotState, config=None) -> dict:
     """
     from langgraph.types import interrupt
 
+    if state.get("mutation"):
+        _record_aborted(state, config)
     answer = interrupt(state["escalation"])
     action = answer.get("action") if isinstance(answer, dict) else None
     rule_id = answer.get("rule_id") if isinstance(answer, dict) else None
@@ -663,7 +757,7 @@ def run_autopilot(
     deadline_s: float | None = None,
     *,
     units: Sequence[Path | str] = (),
-    backend: str = "mock",
+    backend: str | None = None,
     model: str | None = None,
     n: int | None = None,
     root: Path | str | None = None,
@@ -674,6 +768,11 @@ def run_autopilot(
 
     `resume` não-None reinjeta a resposta do humano no `interrupt()` pendente —
     é o outro lado do `escalate`, e é por onde `intervention` entra no ledger.
+
+    `backend` None = quem escolhe o executor é o router, lendo o `models.toml`
+    da raiz do ciclo; é o default porque é o que deixa a mutação chegar até a
+    run. Passar backend fixa o executor dos DOIS braços e reduz o experimento
+    ao que sobra da config (tier e max_turns).
     """
     from harness.improve import root_dir
 
@@ -701,7 +800,7 @@ def run_autopilot(
         max_parallel=int(cfg["max_parallel"]),
     )
 
-    with open_checkpointer(data_dir) as checkpointer:
+    with _pinned_config(base), open_checkpointer(data_dir) as checkpointer:
         graph = build_autopilot_graph(checkpointer)
         config = {
             "configurable": {

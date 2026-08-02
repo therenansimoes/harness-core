@@ -54,15 +54,16 @@ class AbReport:
 
 def run_ab(
     unit_dir: Path | str,
-    arm_a: ArmSpec | Selection,
-    arm_b: ArmSpec | Selection,
-    n: int,
+    arm_a: ArmSpec | Selection | None = None,
+    arm_b: ArmSpec | Selection | None = None,
+    n: int = MIN_N,
     data_dir: Path | str | None = None,
     *,
     min_n: int = MIN_N,
     project: str | None = None,
     on_run: Callable[[str, int, RunRow], None] | None = None,
     before_run: Callable[[str, int], None] | None = None,
+    spec_of: Callable[[str], ArmSpec] | None = None,
     intervention: bool = False,
 ) -> AbReport:
     """Roda `n` vezes cada braço, alternando, e devolve o veredito de Wilson.
@@ -77,6 +78,14 @@ def run_ab(
     roda dentro do experimento, então exceção dele aborta o A/B inteiro — é
     intencional, braço montado errado não vira amostra.
 
+    `spec_of` recebe o rótulo do braço e devolve o `ArmSpec` daquela run, e tem
+    PRECEDÊNCIA sobre `arm_a`/`arm_b` (que continuam valendo para o braço
+    estático — `harness ab --dim backend`). Ele é avaliado DEPOIS do
+    `before_run`, e a ordem é o experimento inteiro: quem monta o braço a
+    partir da config (o autopilot) precisa ler a config JÁ com a mutação
+    ligada/desligada. Invertido, o braço B nasceria montado com a config do
+    baseline e os dois braços mediriam a mesma coisa.
+
     `intervention=True` marca as linhas do ledger como "teve humano no loop".
     Quem sabe disso é o chamador (o grafo que foi retomado por um resume), não
     a run.
@@ -87,17 +96,24 @@ def run_ab(
 
     if n <= 0:
         raise ValueError(f"n tem que ser positivo: {n}")
+    if spec_of is None and (arm_a is None or arm_b is None):
+        raise ValueError("A/B sem braço: passe arm_a/arm_b ou spec_of")
 
     unit = load_unit(Path(unit_dir))
-    specs = tuple(_spec(arm) for arm in (arm_a, arm_b))
+    if spec_of is None:
+        # Braço estático: o mesmo `ArmSpec` em toda run daquele rótulo. Vira
+        # `spec_of` aqui para o laço ter um caminho só.
+        static = dict(zip(ARMS, (_spec(arm_a), _spec(arm_b))))
+        spec_of = static.__getitem__
     db = Path(data_dir) / store.DB_NAME if data_dir is not None else None
     rows: dict[str, list[RunRow]] = {label: [] for label in ARMS}
 
     t0 = time.monotonic()
     for i in range(1, n + 1):
-        for label, spec in zip(ARMS, specs):
+        for label in ARMS:
             if before_run is not None:
                 before_run(label, i)
+            spec = spec_of(label)
             outcome = run_once(
                 unit,
                 spec.backend,

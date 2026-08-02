@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import math
 import os
 import shutil
@@ -32,6 +33,10 @@ UNIT_FILE = "unit.toml"
 SCRATCH_DIR = ".harness"   # log do verify; não conta como sujeira do repo-alvo
 DEFAULT_MAX_TURNS = 8
 HELD_IN = Path("benchmarks/held_in")   # unidades default do `harness improve`
+# Resposta default do `--resume`: abortar. Retomar um loop sem dizer o que
+# fazer não pode significar "continua sozinho" — quem foi chamado tem que
+# escolher explicitamente continuar.
+IMPROVE_ANSWER = '{"action":"abort"}'
 
 
 def _bootstrap() -> None:
@@ -412,9 +417,23 @@ def cmd_improve(args: argparse.Namespace) -> int:
 
     Sai 0 em qualquer veredito, inclusive escalação: "preciso de humano" é
     resposta do loop, não erro da CLI — mesma regra do `harness ab`.
+
+    `--resume <thread_id>` responde a escalação pendente daquela thread com o
+    `--answer` (JSON) e deixa o grafo seguir de onde parou.
     """
     from harness.graph.autopilot_graph import run_autopilot
     from harness.improve.target import CatalogError
+
+    answer = None
+    if args.resume:
+        try:
+            answer = json.loads(args.answer)
+        except json.JSONDecodeError as exc:
+            args.parser.error(f"--answer não é JSON: {exc}")
+        if not isinstance(answer, dict):
+            args.parser.error(f"--answer tem que ser um objeto JSON: {args.answer!r}")
+    elif args.answer != IMPROVE_ANSWER:
+        args.parser.error("--answer só faz sentido com --resume")
 
     try:
         units = _improve_units(args)
@@ -426,6 +445,8 @@ def cmd_improve(args: argparse.Namespace) -> int:
             backend=args.backend,
             model=args.model,
             n=args.n,
+            thread_id=args.resume,
+            resume=answer,
         )
     except (FileNotFoundError, ValueError, CatalogError) as exc:
         print(exc, file=sys.stderr)
@@ -442,7 +463,12 @@ def cmd_improve(args: argparse.Namespace) -> int:
         )
     if report.escalation:
         e = report.escalation
-        print(f"escalate {e['reason']} evidence={e['evidence']}", file=sys.stderr)
+        # `thread` na linha porque é o que o humano precisa digitar de volta:
+        # `harness improve --resume <thread> --answer '{...}'`.
+        print(
+            f"escalate {e['reason']} thread={report.thread_id} evidence={e['evidence']}",
+            file=sys.stderr,
+        )
     print(
         f"improve ciclos={report.cycles} mutações={len(report.results)} "
         f"intervenções={report.interventions} "
@@ -524,12 +550,18 @@ def build_parser() -> argparse.ArgumentParser:
                          help="teto de tempo do loop; estourou, escala pro humano")
     improve.add_argument("--unit", action="append", default=[],
                          help="unidade de avaliação (repetível); default: benchmarks/held_in/*")
-    improve.add_argument("--backend", default="mock",
-                         help="executor dos DOIS braços — o que muda entre eles é a config")
+    improve.add_argument("--backend", default=None,
+                         help="fixa o executor dos DOIS braços; default: quem escolhe é o "
+                              "router, lendo o config que a mutação acabou de mexer")
     improve.add_argument("--model", default=None)
     improve.add_argument("--n", type=int, default=None,
                          help="tentativas por braço (default: [improve].n_per_arm do catalog)")
-    improve.set_defaults(func=cmd_improve)
+    improve.add_argument("--resume", default=None, metavar="THREAD_ID",
+                         help="responde a escalação pendente da thread (o id sai no "
+                              "`escalate ... thread=` do stderr)")
+    improve.add_argument("--answer", default=IMPROVE_ANSWER, metavar="JSON",
+                         help=f"resposta do humano ao interrupt (default: {IMPROVE_ANSWER})")
+    improve.set_defaults(func=cmd_improve, parser=improve)
 
     bench = sub.add_parser("bench", help="mede o custo de uma operação do harness")
     bench.add_argument("what", choices=["provision"])

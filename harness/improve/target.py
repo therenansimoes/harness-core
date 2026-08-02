@@ -32,6 +32,13 @@ from harness.types import RunRow
 # Mora aqui (e não no grafo) porque quem monta a fila precisa dele.
 REJECTED = "REJECTED"
 
+# Experimento que começou e não terminou (deadline, erro, humano abortou). Não
+# é veredito da régua nem parede do genoma: é amostra que não existe. Fica no
+# ledger porque replay precisa saber que a mutação FOI aplicada um dia — mas
+# não conta como tentativa no prior (`with_ledger_priors` só olha KEEP e
+# INCONCLUSIVE): punir a regra por um deadline seria aprender com o relógio.
+ABORTED = "ABORTED"
+
 # Defaults do `[improve]`. Ficam aqui e não só no toml porque o catálogo é
 # mutável no genoma: arquivo sem a chave não pode significar "sem limite".
 DEFAULTS: dict[str, float] = {

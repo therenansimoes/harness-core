@@ -208,6 +208,20 @@ def revert(mutation: Mutation, root: Path | str | None = None) -> bool:
     return toggle(mutation, root, applied=False)
 
 
+def is_applied(mutation: Mutation, root: Path | str | None = None) -> bool:
+    """A mutação está no arquivo AGORA? Evidência de disco, não de memória.
+
+    Quem grava `reverted` no ledger de um experimento abortado não sabe, pela
+    trajetória, em que estado o toml parou (o `before_run` do A/B desliga e
+    liga a mutação run a run). Perguntar ao arquivo é a única resposta que não
+    é chute.
+    """
+    path = root_dir(root) / mutation.target_file
+    text = path.read_text(encoding="utf-8")
+    start, end = _locate(text, mutation.key, path)
+    return text[start:end] == mutation.after_raw
+
+
 def _write(path: Path, text: str) -> None:
     """Grava o toml inteiro de forma atômica: tmp irmão + `os.replace`.
 

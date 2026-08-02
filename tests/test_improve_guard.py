@@ -254,15 +254,19 @@ def test_deadline_no_meio_do_ab_aborta_reverte_e_escala(sandbox, monkeypatch):
 
     runs = [r for r in store.history(path=db(sandbox), limit=100) if r.run_id[:4] != "seed"]
     assert 0 < len(runs) < 12, "o A/B tem que ter começado e não ter terminado"
-    assert store.mutations(path=db(sandbox)) == []   # veredito só depois do resume
+    # A linha do ledger é gravada NA PARADA, não no resume: o humano pode nunca
+    # responder, e mutação aplicada sem rastro é o que o replay não pode ter.
+    parado = store.mutations(path=db(sandbox))
+    assert [(m.verdict, m.reverted, m.note) for m in parado] == [("ABORTED", True, "deadline")]
 
     fim = run_autopilot(
         sandbox / "data", units=[UNIT], root=sandbox, backend="mock",
         thread_id=report.thread_id, resume={"action": escalate.ABORT},
     )
 
+    assert len(store.mutations(path=db(sandbox))) == 1   # o resume não duplica
     linha = store.mutations(path=db(sandbox))[0]
-    assert (linha.verdict, linha.reverted, linha.note) == ("INCONCLUSIVE", True, "deadline")
+    assert (linha.verdict, linha.reverted, linha.note) == ("ABORTED", True, "deadline")
     assert fim.results[0]["arm_a"] == "0/0"    # braço parcial não vira amostra
     assert alvo.read_bytes() == antes
 
