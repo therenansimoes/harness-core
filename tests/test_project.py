@@ -279,5 +279,90 @@ def test_aceite7_work_path_intacto_quando_verify_falha():
     # deve ter sido copiado de volta pro work_path — só aplica se verify passa.
     assert not (wp / "AGENT_OUTPUT.txt").exists()
 
+    # D7: falha de verify não é veredito enquanto sobrar tentativa e tier —
+    # a unidade volta pra fila num rank acima (o que o aceite 7 garante é o
+    # work_path intacto, acima, não o estado final da linha).
     rows = project.read_queue(project.PROJECTS_ROOT / "a7_p1")
-    assert rows[0]["state"] == "failed"
+    assert rows[0]["state"] == "pending"
+    assert rows[0]["attempts"] == "1"
+
+
+# ------------------------------------------------------------------- D7 router
+
+
+def test_execute_grava_tier_e_class_nas_notes():
+    _add_project("d7_notes")
+    _enqueue("d7_notes", "u1", "faça algo\n", verify_text=ALWAYS_FAIL_VERIFY)
+
+    r = run_cli(["run", "--once", "--project", "d7_notes"])
+    assert r.returncode == 0, r.stdout + r.stderr
+
+    results = (project.PROJECTS_ROOT / "d7_notes" / "results.tsv").read_text().splitlines()
+    row_map = dict(zip(results[0].split("\t"), results[1].split("\t")))
+    assert "tier:" in row_map["notes"], row_map["notes"]
+    assert "class:" in row_map["notes"], row_map["notes"]
+    assert row_map["model"], row_map
+
+
+def test_execute_requeue_em_falha_com_attempts():
+    _add_project("d7_requeue")
+    _enqueue("d7_requeue", "u1", "faça algo\n", verify_text=ALWAYS_FAIL_VERIFY)
+    proj_dir = project.PROJECTS_ROOT / "d7_requeue"
+
+    r = run_cli(["run", "--once", "--project", "d7_requeue"])
+    assert r.returncode == 0, r.stdout + r.stderr
+
+    row = project.read_queue(proj_dir)[0]
+    assert row["state"] == "pending"
+    assert row["attempts"] == "1"
+    # prompt curto => haiku na 1a tentativa; a 2a já vem marcada um rank acima.
+    assert row["tier"] == "sonnet", row
+
+
+def test_execute_falha_definitiva_no_max_attempts():
+    _add_project("d7_max")
+    _enqueue("d7_max", "u1", "faça algo\n", verify_text=ALWAYS_FAIL_VERIFY)
+    proj_dir = project.PROJECTS_ROOT / "d7_max"
+
+    rows = project.read_queue(proj_dir)
+    rows[0]["attempts"] = "2"  # max_attempts=3 inclui a 1a: esta é a última
+    project.write_queue(proj_dir, rows)
+
+    r = run_cli(["run", "--once", "--project", "d7_max"])
+    assert r.returncode == 0, r.stdout + r.stderr
+
+    row = project.read_queue(proj_dir)[0]
+    assert row["state"] == "failed"
+    assert row["attempts"] == "2"
+
+
+def test_execute_tamper_nao_escala():
+    _add_project("d7_tamper")
+    proj_dir = project.PROJECTS_ROOT / "d7_tamper"
+    verify_target = proj_dir / "verify" / "0001.py"
+    _enqueue("d7_tamper", "u1", f"faça algo\nMOCK_TAMPER: {verify_target}\n")
+
+    r = run_cli(["run", "--once", "--project", "d7_tamper"])
+    assert r.returncode == 0, r.stdout + r.stderr
+
+    row = project.read_queue(proj_dir)[0]
+    assert row["state"] == "failed"
+    assert row["attempts"] == "0"
+
+
+def test_queue_tsv_legado_8_colunas_le():
+    """queue.tsv gravado antes do D7 (8 colunas) continua carregando."""
+    _add_project("d7_legado")
+    _enqueue("d7_legado", "u1", "faça algo\n")
+    proj_dir = project.PROJECTS_ROOT / "d7_legado"
+
+    legacy_header = project.QUEUE_HEADER[:8]
+    rows = project.read_queue(proj_dir)
+    lines = ["\t".join(legacy_header)]
+    lines += ["\t".join(r.get(c, "") for c in legacy_header) for r in rows]
+    (proj_dir / "queue.tsv").write_text("\n".join(lines) + "\n")
+
+    back = project.read_queue(proj_dir)
+    assert back[0]["id"] == "0001"
+    assert back[0]["attempts"] == ""
+    assert back[0]["tier"] == ""

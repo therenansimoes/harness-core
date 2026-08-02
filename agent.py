@@ -48,6 +48,19 @@ TIMEOUT_S = int(os.environ.get("HARNESS_TIMEOUT", "600"))
 TRACE_MAX_LINES = 400
 TRACE_MAX_FIELD = 2000
 
+
+def _model() -> str:
+    """MODEL/MAX_TURNS são lidos no IMPORT e este módulo fica cacheado entre
+    unidades do mesmo processo — sem estes dois getters a 2a task herdaria o
+    modelo escolhido pelo router na 1a. As constantes ficam (são alvo de A/B em
+    evolution/experiments_def/model_sonnet.toml); quem manda em runtime é o env."""
+    return os.environ.get("HARNESS_MODEL") or MODEL
+
+
+def _max_turns() -> int:
+    return int(os.environ.get("HARNESS_MAX_TURNS") or MAX_TURNS)
+
+
 # ------------------------------------------------------------------- resultado
 
 
@@ -170,9 +183,9 @@ def _run_cli(prompt: str, workspace: Path) -> AgentResult:
         "stream-json",
         "--verbose",
         "--model",
-        MODEL,
+        _model(),
         "--max-turns",
-        str(MAX_TURNS),
+        str(_max_turns()),
         "--allowed-tools",
         *ALLOWED_TOOLS,
         "--permission-mode",
@@ -257,10 +270,10 @@ def _run_api(prompt: str, workspace: Path) -> AgentResult:
     messages = [{"role": "user", "content": prompt}]
     t0, tokens, turns = time.time(), 0, 0
 
-    while turns < MAX_TURNS:
+    while turns < _max_turns():
         turns += 1
         resp = client.messages.create(
-            model=MODEL,
+            model=_model(),
             max_tokens=8192,
             system=_system_prompt(workspace),
             tools=[bash_tool],

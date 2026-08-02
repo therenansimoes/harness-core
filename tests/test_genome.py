@@ -285,6 +285,21 @@ def test_proposta_no_proprio_genome_toml_e_rejeitada():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_models_toml_e_router_sao_immutable():
+    """D7: quem escolhe o modelo está fora do alcance de quem é escolhido —
+    senão uma proposta se dá o tier caro e falseia o próprio A/B."""
+    for pid, (f, old, new) in (
+        ("g_router", ("router.py", "min_n", "min_n2")),
+        ("g_models", ("evolution/models.toml", "prior_floor", "# prior_floor")),
+    ):
+        rc, tmp, evolve, calls = run_cycle(pid, [(f, old, new)])
+        try:
+            _assert_rejeitada(rc, tmp, evolve, calls, [f])
+        finally:
+            unload(tmp)
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_genome_toml_editado_durante_a_run_e_tamper():
     """Tamper check: reescrever a régua no meio do exame também é violação."""
     def tamper(tmp):

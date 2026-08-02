@@ -23,6 +23,10 @@ immutable = [
     # propor ficam fora do alcance das propostas que eles mesmos geram (D6).
     "autopilot.py",
     "mockagent.py",
+    # quem ESCOLHE o modelo também não se muda: uma proposta que reescreve o
+    # router pode se dar o tier caro e falsear o próprio A/B (D7).
+    "router.py",
+    "evolution/models.toml",
     "evolution/catalog.toml",
     "benchmarks/sealed/**",
     "benchmarks/held_in/**",

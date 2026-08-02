@@ -444,7 +444,8 @@ def step_project(s: State) -> str:
     result = project.try_run_one(name, keep=False)
     if result == "ran":
         s.ran += 1
-    log_event(s, kind="project", result=result, code="", decision=name)
+    log_event(s, kind="project", result=result, code="", decision=name,
+              **{k: v for k, v in (project.LAST_RUN or {}).items()})
     return result
 
 

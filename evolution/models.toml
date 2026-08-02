@@ -1,0 +1,87 @@
+# models.toml — a régua do router (D7). Config, não código.
+#
+# O router é determinístico: soma pesos de sinais lidos do metadado da task
+# (prompt, verify, notes), classifica num tier por faixa de score, corrige com
+# o prior histórico (Wilson sobre o results.tsv do projeto) e escala um rank
+# por tentativa que falha. Nenhum LLM classificador no caminho.
+#
+# `kind` de cada sinal é código (dispatch em router.py); peso, valor e palavras
+# são config — é isso que um A/B pode mexer sem tocar em lógica. Kind
+# desconhecido derruba o load (fail-fast), não vira sinal silenciosamente nulo.
+
+version = 1
+default_tier = "sonnet"
+max_attempts  = 3      # inclui a 1a tentativa
+min_n         = 6      # amostra mínima p/ prior valer (mesmo MIN_N do score.py)
+prior_floor   = 0.50   # Wilson lower < floor  => sobe 1 rank
+prior_ceiling = 0.80   # tier abaixo com lower >= ceiling => desce 1 rank
+
+[[tier]]
+name = "haiku"
+rank = 0
+model = "claude-haiku-4-5-20251001"
+max_turns = 12
+est_cost_per_run = 0.05
+
+[[tier]]
+name = "sonnet"
+rank = 1
+model = "claude-sonnet-5"
+max_turns = 30
+est_cost_per_run = 0.45
+
+[[tier]]
+name = "opus"
+rank = 2
+model = "claude-opus-5"
+max_turns = 40
+est_cost_per_run = 2.00
+
+# score <= valor => esse tier (na ordem de rank). Acima do maior valor listado
+# => tier de maior rank. O topo NUNCA aparece aqui: ele é o "resto".
+[thresholds]
+haiku = 2
+sonnet = 6
+
+[[signal]]
+name = "prompt_long"
+kind = "prompt_chars_gt"
+value = 1500
+weight = 2
+
+[[signal]]
+name = "prompt_huge"
+kind = "prompt_chars_gt"
+value = 3000
+weight = 2
+
+[[signal]]
+name = "many_files"
+kind = "files_mentioned_gt"
+value = 2
+weight = 2
+
+[[signal]]
+name = "creates_files"
+kind = "regex_count_gt"
+value = 1
+pattern = "(?i)\\bcrie\\b|\\bcriar\\b"
+weight = 1
+
+[[signal]]
+name = "verify_rich"
+kind = "verify_lines_gt"
+value = 60
+weight = 1
+
+[[signal]]
+name = "judgment_words"
+kind = "keyword_any"
+weight = 3
+words = ["arquitetura", "refator", "decidir", "escolher", "trade-off", "design", "migrar", "esquema", "schema"]
+
+[[signal]]
+name = "mechanical_words"
+kind = "keyword_any"
+weight = -2
+words = ["renomear", "typo", "texto", "placeholder", "alt", "stub", "formatar", "robots.txt", "sitemap"]

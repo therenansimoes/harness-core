@@ -12,6 +12,7 @@ que restaura byte a byte.
 
 from __future__ import annotations
 
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -306,3 +307,33 @@ def test_autopilot_e_imutavel_no_genoma():
         ["autopilot.py", "mockagent.py", "evolution/catalog.toml"]
     )
     assert sorted(bad) == ["autopilot.py", "evolution/catalog.toml", "mockagent.py"]
+
+
+# ------------------------------------------------------------------- router
+
+
+def test_step_project_loga_tier(tmp_path, monkeypatch):
+    """O JSONL da sessão precisa dizer QUEM rodou a unidade — sem isso o custo
+    por tier vira arqueologia de results.tsv."""
+    monkeypatch.setattr(autopilot, "LOG_DIR", tmp_path / "log")
+
+    class FakeProject:
+        LAST_RUN = {"unit": "0001", "tier": "haiku", "class": "haiku", "score": 0,
+                    "attempt": 0, "success": False, "escalated": True}
+
+        @staticmethod
+        def try_run_one(name, keep):
+            return "ran"
+
+    monkeypatch.setattr(autopilot, "_project", lambda: FakeProject)
+    monkeypatch.setattr(autopilot, "spent_usd", lambda s: 0.0)
+
+    s = autopilot.State(session="s-tier", project="demo", wall_s=60, budget=1.0,
+                        max_iterations=1, self_every=3, probation_runs=1)
+    assert autopilot.step_project(s) == "ran"
+
+    ev = json.loads((tmp_path / "log" / "s-tier.jsonl").read_text().splitlines()[-1])
+    assert ev["kind"] == "project"
+    assert ev["tier"] == "haiku"
+    assert ev["attempt"] == 0
+    assert ev["escalated"] is True

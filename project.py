@@ -41,13 +41,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import graph  # noqa: E402
 import kpi  # noqa: E402
+import router  # noqa: E402
 
 ROOT = Path(__file__).parent.resolve()
 PROJECTS_ROOT = Path(os.environ.get("HARNESS_PROJECTS_ROOT", ROOT / "projects"))
 WS_ROOT = Path(os.environ.get("HARNESS_WS_ROOT", ROOT / ".harness_ws"))
 WS_IGNORE = shutil.ignore_patterns("node_modules", ".git", "__pycache__", "dist", ".astro", ".vercel", "*.pyc")
 
-QUEUE_HEADER = ["id", "state", "priority", "created", "claimed_at", "prompt_file", "verify", "notes"]
+# `attempts`/`tier` entraram no fim (D7, router): read_queue faz padding, então
+# queue.tsv legado de 8 colunas continua carregando — write_queue reescreve com 10.
+QUEUE_HEADER = ["id", "state", "priority", "created", "claimed_at", "prompt_file", "verify", "notes",
+                "attempts", "tier"]
 # Mesmo schema do results.tsv global (run_task.py); cada projeto grava no SEU
 # results.tsv, não no da raiz. `kpis` é a ÚNICA coluna que o KPI por projeto
 # usa (JSON compacto) — KPI novo no alvo não vira coluna nova aqui.
@@ -136,6 +140,23 @@ def _last_activity(proj_dir: Path) -> str:
     return lines[-1].split("\t", 1)[0]
 
 
+def _rows_of(proj_dir: Path) -> list[dict]:
+    """As linhas do results.tsv DO PROJETO, na ordem do arquivo (mesma leitura
+    de autopilot.project_rows). O router usa isso como prior histórico."""
+    path = proj_dir / "results.tsv"
+    if not path.exists():
+        return []
+    lines = [l for l in path.read_text(errors="replace").splitlines() if l.strip()]
+    if len(lines) < 2:
+        return []
+    header = lines[0].split("\t")
+    rows = []
+    for ln in lines[1:]:
+        cells = (ln.split("\t") + [""] * len(header))[: len(header)]
+        rows.append(dict(zip(header, cells)))
+    return rows
+
+
 def _append_result(proj_dir: Path, row: dict) -> None:
     path = proj_dir / "results.tsv"
     if not path.exists():
@@ -221,6 +242,11 @@ def _call_agent(prompt: str, ws: Path):
 
 # ----------------------------------------------------------------- execução
 
+# Última unidade executada neste processo — o autopilot loga isto no JSONL
+# (tier/classe/attempt) em vez de reconsultar o router, que daria duas fontes
+# de verdade sobre quem rodou o quê.
+LAST_RUN: dict = {}
+
 
 def _execute(proj_dir: Path, project_name: str, row: dict, all_rows: list[dict], keep: bool) -> bool:
     cfg = read_config(proj_dir)
@@ -240,14 +266,27 @@ def _execute(proj_dir: Path, project_name: str, row: dict, all_rows: list[dict],
     verify_path = proj_dir / row["verify"]
     pre_hash = _hash_file(verify_path)
 
+    # D7: quem paga a conta é escolhido aqui, por scoring determinístico sobre
+    # o metadado desta unidade + o histórico deste projeto. O agente só vê o
+    # resultado via env (agent._model()/_max_turns()).
+    rcfg = router.load_models()
+    sel = router.select(
+        prompt,
+        verify_path.read_text(errors="replace") if verify_path.exists() else "",
+        row.get("notes", ""),
+        attempt=int(row.get("attempts") or 0),
+        rows=_rows_of(proj_dir),
+        cfg=rcfg,
+    )
+
     run_id = f"{project_name}_{unit_id}_{uuid.uuid4().hex[:6]}"
-    prev_run_id, prev_trace_root = os.environ.get("HARNESS_RUN_ID"), os.environ.get("HARNESS_TRACE_ROOT")
-    os.environ["HARNESS_RUN_ID"] = run_id
-    os.environ["HARNESS_TRACE_ROOT"] = str(proj_dir / "runs")
+    overrides = {"HARNESS_RUN_ID": run_id, "HARNESS_TRACE_ROOT": str(proj_dir / "runs"), **router.env_for(sel)}
+    prev_env = {k: os.environ.get(k) for k in overrides}
+    os.environ.update(overrides)
     try:
         res = _call_agent(prompt, ws)
     finally:
-        for key, prev in (("HARNESS_RUN_ID", prev_run_id), ("HARNESS_TRACE_ROOT", prev_trace_root)):
+        for key, prev in prev_env.items():
             if prev is None:
                 os.environ.pop(key, None)
             else:
@@ -265,14 +304,17 @@ def _execute(proj_dir: Path, project_name: str, row: dict, all_rows: list[dict],
     except subprocess.TimeoutExpired:
         verify_ok, vnote = False, "verify:timeout"
 
+    # o prefixo tier:/class: é o que alimenta router.history_prior na próxima
+    # unidade desta classe — sem ele o prior não tem de onde sair.
+    routed = f"tier:{sel.tier.name}; class:{sel.task_class}"
     if tampered:
         # aceite 5: agent edita verify/<id>.py -> hard fail, independente do
         # returncode do verify (que já não é confiável).
         success = 0
-        notes = "; ".join(n for n in ("tamper:verify_modified", res.notes) if n)
+        notes = "; ".join(n for n in (routed, "tamper:verify_modified", res.notes) if n)
     else:
         success = 1 if verify_ok else 0
-        notes = "; ".join(n for n in (res.notes, vnote) if n)
+        notes = "; ".join(n for n in (routed, res.notes, vnote) if n)
 
     # KPI do alvo medido no ws (o que o agent entregou), antes de qualquer
     # cópia de volta. Projeto sem .harness/kpi.toml no work_path => {}.
@@ -289,7 +331,7 @@ def _execute(proj_dir: Path, project_name: str, row: dict, all_rows: list[dict],
             "timestamp": _now(),
             "harness_version": harness_version(),
             "backend": os.environ.get("HARNESS_BACKEND", "cli"),
-            "model": os.environ.get("HARNESS_MODEL", ""),
+            "model": sel.tier.model,
             "suite": "project",
             "task_id": f"{project_name}/{unit_id}",
             "success": success,
@@ -302,9 +344,30 @@ def _execute(proj_dir: Path, project_name: str, row: dict, all_rows: list[dict],
         },
     )
 
-    row["state"] = "done" if success else "failed"
+    # falha não é necessariamente veredito: se ainda há tentativa e há tier
+    # acima, a unidade volta pra fila JÁ marcada com o próximo rank (escalation
+    # por attempt). Tamper e teto de tentativas fecham em "failed".
+    escalated = False
+    if success:
+        row["state"] = "done"
+    elif router.should_escalate(notes, sel.attempt, sel, rcfg):
+        escalated = True
+        row["state"] = "pending"
+        row["claimed_at"] = ""
+        row["attempts"] = str(sel.attempt + 1)
+        row["tier"] = router.tier_by_rank(rcfg, sel.tier.rank + 1).name
+    else:
+        row["state"] = "failed"
+    row["attempts"] = str(row.get("attempts") or sel.attempt)
     row["notes"] = "; ".join(n for n in (row.get("notes", ""), notes) if n)
     write_queue(proj_dir, all_rows)
+
+    LAST_RUN.clear()
+    LAST_RUN.update({
+        "unit": unit_id, "tier": sel.tier.name, "class": sel.task_class,
+        "score": sel.score, "attempt": sel.attempt,
+        "success": bool(success), "escalated": escalated,
+    })
 
     if not keep:
         shutil.rmtree(ws, ignore_errors=True)
@@ -317,6 +380,7 @@ def _execute(proj_dir: Path, project_name: str, row: dict, all_rows: list[dict],
 def try_run_one(project_name: str, keep: bool) -> str:
     """Tenta executar 1 unidade pendente do projeto. Devolve 'ran', 'locked'
     (outro processo já tem o lock vivo) ou 'empty' (fila vazia/sem pending)."""
+    LAST_RUN.clear()
     proj_dir = PROJECTS_ROOT / project_name
     if not proj_dir.is_dir():
         return "missing"
