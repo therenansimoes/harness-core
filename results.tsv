@@ -60,3 +60,15 @@ timestamp	harness_version	backend	model	suite	task_id	success	seconds	tokens	cos
 2026-08-02T02:02:39+00:00	v0.2	cli	claude-haiku-4-5-20251001	fixed	task_03	1	28.9	2254	0.0625	8	
 2026-08-02T02:27:06+00:00	v0.2	cli	claude-haiku-4-5-20251001	judge	task_j_b2b	0	128.8	0	0.0000	0	cli_exit_1:; verify:ess_task_j_b2b_xsjfi2n8/.venv/bin/python: No module named pytest  JUDGE_RESULT={"target_ok": false, "full": {"passed": 0, "failed": 0, "errors": 0, "total": 0}}
 2026-08-02T02:42:18+00:00	v0.2	cli	claude-haiku-4-5-20251001	judge	task_j_b2b	0	39.8	2433	0.0994	13	error_max_turns; verify:ksum_success[1000000060-DE:11] 1 failed, 414 passed in 0.83s  JUDGE_RESULT={"target_ok": false, "full": {"passed": 414, "failed": 1, "errors": 0, "total": 415}}
+2026-08-02T02:50:51+00:00	v0.2	cli	claude-haiku-4-5-20251001	fixed	task_01	1	15.7	1369	0.0347	2	trace:runs/harness_task_01_iq2_r0g_/trace.jsonl
+2026-08-02T02:51:18+00:00	v0.2	cli	claude-haiku-4-5-20251001	fixed	task_02	1	27.0	2260	0.0575	5	trace:runs/harness_task_02_b0e4mv3t/trace.jsonl
+2026-08-02T02:51:44+00:00	v0.2	cli	claude-haiku-4-5-20251001	fixed	task_03	1	26.3	2193	0.0625	8	trace:runs/harness_task_03_ymd7g5ir/trace.jsonl
+2026-08-02T02:51:56+00:00	v0.2	cli	claude-haiku-4-5-20251001	fixed	task_01	1	11.8	1014	0.0323	2	trace:runs/harness_task_01_t654ix54/trace.jsonl
+2026-08-02T02:52:17+00:00	v0.2	cli	claude-haiku-4-5-20251001	fixed	task_02	1	20.7	1847	0.0515	4	trace:runs/harness_task_02_q9llp48e/trace.jsonl
+2026-08-02T02:52:46+00:00	v0.2	cli	claude-haiku-4-5-20251001	fixed	task_03	1	28.5	2365	0.0636	8	trace:runs/harness_task_03_bcw9g98f/trace.jsonl
+2026-08-02T02:52:58+00:00	v0.2	cli	claude-haiku-4-5-20251001	fixed	task_01	1	12.1	1047	0.0325	2	trace:runs/harness_task_01_80qjfgur/trace.jsonl
+2026-08-02T02:53:24+00:00	v0.2	cli	claude-haiku-4-5-20251001	fixed	task_02	1	26.5	1961	0.0588	6	trace:runs/harness_task_02_5174y_v6/trace.jsonl
+2026-08-02T02:53:54+00:00	v0.2	cli	claude-haiku-4-5-20251001	fixed	task_03	1	29.6	2145	0.0621	8	trace:runs/harness_task_03_12k7epzz/trace.jsonl
+2026-08-02T02:55:39+00:00	v0.2	cli	claude-haiku-4-5-20251001	fixed	task_02	1	29.2	2087	0.0598	6	trace:runs/harness_task_02_we6ou5o9/trace.jsonl
+2026-08-02T02:55:58+00:00	v0.2	cli	claude-haiku-4-5-20251001	fixed	task_02	1	19.0	1495	0.0523	5	trace:runs/harness_task_02_rwhi4vke/trace.jsonl
+2026-08-02T02:56:22+00:00	v0.2	cli	claude-haiku-4-5-20251001	fixed	task_02	1	23.2	1916	0.0519	4	trace:runs/harness_task_02_q4c701h7/trace.jsonl
