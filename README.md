@@ -23,16 +23,15 @@ tasks que ele mesmo aprendeu a passar.
   custo/run, `evolution/decisions/v0.2.md`), `v0.4` MAX_TURNS 12→30 — **KEEP**
   (0/6 sucesso com 12 turnos vs 3/4 com 30, `evolution/decisions/v0.4.md`).
 - **Generalidade (M2):** rodando a melhor versão nos 3 domínios-juiz —
-  `j_b2b` (Python/schwifty), `j_web` (JS/nanostores), `j_hw` (C/jsmn) — os três
-  fecharam com `success=1` no `results.tsv`. A nota de persona do `j_b2b`
-  nessa mesma rodada foi zerada por **veto de citação inválida**
-  (`judges/verdicts/j_b2b/v0.4.json`, `judges/verdicts/summary_v0.4.json:
-  "inconclusive": true`) — o mecanismo de veto funcionou, mas expôs uma
-  instabilidade da persona que ainda não foi investigada (ver dívidas).
-- **Defesa contra trapaça pegando em produção, não em teste:** no mesmo A/B
-  do `v0.4`, um run tentou editar o arquivo de teste pra passar mais fácil e
-  foi barrado por `tamper:test_file_modified` (`evolution/decisions/v0.4.md`).
-- **87 testes automatizados** cobrindo agent, evolve, safety/proveniência,
+  `j_b2b` (Python/schwifty), `j_web` (JS/nanostores), `j_hw` (C/jsmn) — notas
+  **j_web 93, j_hw 98** (estáveis, citações válidas, zero veto); **j_b2b
+  bimodal 47–81** com 5/8 sucessos no dia (spread real em tarefas ≥21 turnos).
+  Summary `inconclusive` por variância — correto: a sonda localizou a fraqueza
+  real (consistência do j_b2b é próximo alvo de evolução).
+- **Defesa contra trapaça pegando em produção, não em teste:** 2 tentativas
+  de editar arquivo de teste pra passar mais fácil foram barradas por
+  `tamper:test_file_modified` em runs reais (`evolution/decisions/v0.4.md`).
+- **121 testes automatizados** cobrindo agent, evolve, safety/proveniência,
   juízes, trace, delivery, UI gate e outbound gate (`tests/*.py`), sem gastar
   API.
 
@@ -115,14 +114,11 @@ trapaça; `harness_cli.py` como casca fina sobre tudo isso.
 
 - Só testado a fundo com `claude-haiku-4-5` via backend `cli`; backend `api`
   e outros modelos nunca foram exercitados num A/B sério.
-- A nota de persona do `j_b2b` na rodada de generalidade (M2) foi zerada por
-  veto de citação inválida — o veto é a defesa funcionando, mas a causa raiz
-  (por que a persona citou uma linha que o material não sustenta) não foi
-  investigada.
+- **Variância de consistência do j_b2b:** spread real em tarefas ≥21 turnos
+  (47–81, mediana 68). Próximo alvo de evolução: prompt do genoma / tier de
+  modelo / decomposição — decidir por A/B.
 - `D4` (custo/turnos até o verde) pune sucesso caro tanto quanto falha
   barata — defeito de régua já registrado, correção prevista em `RUBRIC-J2`.
-- Um run do gate manual do `v0.4` registrou `turns=1` num sucesso — possível
-  anomalia de parsing do stream, não bloqueia, não investigada.
 
 **FASE 2 (ainda não construída):** juízes `j_web`/`j_hw` com peso pleno
 (P3/P4 — recuperação de erro e adoção), tabela `judgements` no graph,
