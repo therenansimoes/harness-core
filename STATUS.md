@@ -19,8 +19,10 @@ Pacote `harness/` (núcleo, zero menção a vendor) sobre LangGraph; legado cong
 | PR-6 | routing/: kinds ortogonais + prior Wilson keyed (kind,tier,backend) — bug de chave do legado corrigido | **FEITO** merge `cb3f86c` |
 | PR-7 | Backend claude_code (CLI oficial) + slot harness.auth plugável | **FEITO** `a8e6717` |
 | PR-8 | A/B de backend rodado pelo próprio harness (`harness ab --dim backend`) | **FEITO** `bc0714e` |
-| PR-9 | autopilot_graph + improve/ (target, escalate via interrupt, intervention_rate) | andaime commitado; aceite NÃO cumprido — C1 (canal causal) é PR-9b bloqueante |
-| PR-10 | improve/replay (atribuição por mutação) + docs + publish | — |
+| PR-9 | autopilot_graph + improve/ (target, escalate via interrupt, intervention_rate) | **FEITO** `1760378` + PR-9b `af1787c` (canal causal provado: KEEP/DISCARD reais) |
+| PR-10 | improve/replay (atribuição c/ IC e confounders) + harness doctor + README/ARCHITECTURE/CONTRIBUTING | **FEITO** merges `ca19215`+`5fe035a` |
+
+**ESCADA COMPLETA (2026-08-02).** 402 testes; `harness doctor` 10 checks 0 falhas. Próximo: publicação (repo novo, commit único — plano na memory).
 
 Fiação feita (não é PR novo): o nó `route` do run_graph consome `routing/router.select()` no modo `auto` (`run_unit(route="auto")`, `harness run --route auto`), com escalação de tier por attempt; o modo `manual` — default, backend fixado pelo chamador — continua como era.
 
