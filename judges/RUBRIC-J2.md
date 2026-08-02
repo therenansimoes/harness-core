@@ -98,3 +98,7 @@ igual J1.
 - `judge_ok(rep)` (evolve.py, espelha `credit_ok`): promove só se
   `mediana_B >= mediana_A - 5` **E** `spread <= 25` **E** zero veto em
   qualquer ficha.
+
+---
+
+**NOTA DE CALIBRAGEM 2026-08-02:** os totais "(60)/(40)" sao nominais da trilha A. Na trilha B, D1/B1 sao mutuamente exclusivos e D3 e sempre descartado (nao ha suite colateral em projeto nascido do zero); o judge_score usa denominador DINAMICO (soma dos criterios nao-descartados), como ja implementado — round(numer/denom*100). Nao forcar soma 100 nominal.
