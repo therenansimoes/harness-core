@@ -45,6 +45,7 @@ DECISIONS_JSONL = ROOT / "evolution" / "decisions.jsonl"
 # O genome não é mais uma constante: quem define o que pode mudar é o toml.
 GENOME_TOML = ROOT / "evolution" / "genome.toml"
 GENOME_VIOLATION = "tamper:genome_violation"
+SANDBOX_TAMPER = "tamper:sandbox_immutable_modified"
 
 
 class InfraError(Exception):
@@ -143,6 +144,38 @@ def genome_files(genome: dict | None = None, root: Path | None = None) -> list[s
     return sorted(out)
 
 
+def runtime_files(root: Path | None = None) -> list[str]:
+    """O que a sandbox precisa para RODAR — genoma ou não.
+
+    Copiar só o genoma deixava a sandbox sem os módulos que o `run_task.py`
+    importa (`safety`, `score`, `kpi`, ...) e o ciclo morria em
+    ModuleNotFoundError, que é infra, não veredito. Aqui o critério é outro:
+    não é "o que pode mudar", é "o que precisa existir". Quem garante que o
+    imutável continua imutável lá dentro é o `sandbox_tamper`.
+
+    Deliberadamente raso: `*.py` e `*.toml` do topo, `prompts/**` inteiro e o
+    `genome.toml`. Sem rglob fora de `prompts/` — varrer o repo arrastaria
+    sandboxes, `.git` e `node_modules` junto.
+    """
+    base = root or ROOT
+    out: set[str] = set()
+
+    def add(p: Path) -> None:
+        if not p.is_file() or "__pycache__" in p.parts:
+            return
+        out.add(p.relative_to(base).as_posix())
+
+    for pat in ("*.py", "*.toml"):
+        for p in base.glob(pat):
+            add(p)
+    prompts = base / "prompts"
+    if prompts.is_dir():
+        for p in prompts.rglob("*"):
+            add(p)
+    add(base / "evolution" / "genome.toml")
+    return sorted(out)
+
+
 def genome_fingerprint(root: Path | None = None) -> dict:
     """SHA-256 do que define o genoma (hoje: o próprio genome.toml).
 
@@ -226,13 +259,38 @@ def build_sandbox(pid: str, to_version: str, changes: list[dict],
     if sandbox.exists():
         shutil.rmtree(sandbox)
     sandbox.mkdir(parents=True)
-    for f in genome_files(genome) + ["run_task.py"]:
+    for f in runtime_files():
+        if not (ROOT / f).exists():
+            continue
         dst = sandbox / f
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / f, dst)
     (sandbox / "harness_version.txt").write_text(to_version + "\n")
     diff_summary = " · ".join(apply_change(sandbox, c) for c in changes)
     return sandbox, diff_summary
+
+
+def sandbox_tamper(sandbox: Path, genome: dict | None = None) -> list[str]:
+    """Os arquivos NÃO-genoma que a sandbox mexeu — a contrapartida do runtime.
+
+    A sandbox recebe o runtime inteiro para conseguir importar o que precisa,
+    mas licença para mudar continua sendo só do genoma. Qualquer outro arquivo
+    com hash diferente do baseline é a candidata editando o que a julga —
+    e some da sandbox também conta como mexer.
+    """
+    mutable = set(genome_files(genome))
+    bad = []
+    for rel in runtime_files():
+        if rel in mutable:
+            continue
+        dst = sandbox / rel
+        if not dst.exists():
+            bad.append(rel)
+            continue
+        if hashlib.sha256(dst.read_bytes()).hexdigest() != \
+                hashlib.sha256((ROOT / rel).read_bytes()).hexdigest():
+            bad.append(rel)
+    return bad
 
 
 def run_suite(sandbox: Path, suite: str, repeat: int) -> int:
@@ -577,15 +635,20 @@ def write_decision(meta: dict, rep: dict, outcome: str, gid: int, diff_summary: 
     return out
 
 
-def reject_genome_violation(meta: dict, violations: list[str]) -> int:
+def reject_genome_violation(meta: dict, violations: list[str],
+                            violation: str = GENOME_VIOLATION) -> int:
     """DISCARD por genoma, no mesmo trilho de registro dos outros DISCARDs.
 
     Não roda suite e não chama juiz: proposta que toca a régua não é julgada
     pelo mérito, é recusada. Quem julga não se muda.
+
+    `violation` é o rótulo do gate — a mesma recusa serve para a proposta que
+    pede o que não pode (`GENOME_VIOLATION`) e para a sandbox que mexe no que
+    não podia (`SANDBOX_TAMPER`).
     """
     pid = meta["id"]
     va, vb = meta["from_version"], meta["to_version"]
-    reason = f"{GENOME_VIOLATION}: {', '.join(violations)}"
+    reason = f"{violation}: {', '.join(violations)}"
 
     graph.record_proposal(
         pid=pid, from_version=va, to_version_intended=vb,
@@ -597,8 +660,18 @@ def reject_genome_violation(meta: dict, violations: list[str]) -> int:
         scores_summary=json.dumps({"genome_violations": violations}, ensure_ascii=False),
         reason=reason,
         gates_json=json.dumps(
-            [{"name": GENOME_VIOLATION, "ok": False, "files": violations}], ensure_ascii=False
+            [{"name": violation, "ok": False, "files": violations}], ensure_ascii=False
         ),
+    )
+
+    razao = (
+        f"A proposta toca arquivo fora do genoma (`evolution/genome.toml`): "
+        f"{', '.join(violations)}.\n"
+        "Nenhuma suite rodou — não se julga pelo mérito uma mudança na régua."
+        if violation == GENOME_VIOLATION else
+        f"A sandbox reescreveu arquivo imutável enquanto rodava: "
+        f"{', '.join(violations)}.\n"
+        "Candidata que edita o que a julga não é julgada pelo mérito."
     )
 
     DECISIONS.mkdir(parents=True, exist_ok=True)
@@ -613,12 +686,11 @@ def reject_genome_violation(meta: dict, violations: list[str]) -> int:
 
 | Veredito | Gate |
 |---|---|
-| FAIL | {GENOME_VIOLATION} |
+| FAIL | {violation} |
 
 ## Razão
 
-A proposta toca arquivo fora do genoma (`evolution/genome.toml`): {', '.join(violations)}.
-Nenhuma suite rodou — não se julga pelo mérito uma mudança na régua.
+{razao}
 Baseline {va} permanece intacto.
 """
     (DECISIONS / f"{pid}.md").write_text(doc, encoding="utf-8")
@@ -631,7 +703,7 @@ Baseline {va} permanece intacto.
             "vb": vb,
             "accepted": False,
             "reason": reason,
-            "gates_failed": [GENOME_VIOLATION],
+            "gates_failed": [violation],
             "d_cost": None,
             "d_med": None,
             "judges_ok": None,
@@ -693,6 +765,13 @@ def cycle(proposal_path: Path, repeat: int, suite: str, force: bool,
     # rodava, a régua foi reescrita no meio do exame.
     if genome_fingerprint() != fingerprint:
         return reject_genome_violation(meta, ["evolution/genome.toml"])
+
+    # A sandbox roda com o runtime inteiro, mas só o genoma tinha licença de
+    # mudar lá dentro. Vem antes de qualquer gate de score: um número obtido
+    # depois de reescrever o avaliador não é número, é trapaça.
+    tampered = sandbox_tamper(sandbox, genome)
+    if tampered:
+        return reject_genome_violation(meta, tampered, SANDBOX_TAMPER)
 
     rows = tsv_rows()
     n_new = len(rows) - before
