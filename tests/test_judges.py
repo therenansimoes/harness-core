@@ -585,6 +585,186 @@ def test_build_summary_ignora_scores_none():
     assert summary["scores"]["j_web"] is None
 
 
+# ------------------------------------------------------- repeats intra-juiz
+
+# Scores determinísticos que synthetic_deterministic(i) produz, por índice:
+# D1 perde 5 por repetição (satura em 25), sobre 60 pontos de D1-D4.
+DRY_SCORES = [100, 92, 83, 75, 67, 58]
+
+
+def test_deterministic_score_so_olha_d1_d4():
+    """O que se repete em --repeats é o determinístico — a persona roda 1x,
+    sobre a run mediana, então ela não pode entrar na amostra."""
+    assert run_judge.deterministic_score(run_judge.synthetic_deterministic()) == 100
+    assert run_judge.deterministic_score(run_judge.synthetic_deterministic(2)) == 83
+    vetado = run_judge.synthetic_deterministic()
+    vetado["veto"] = True
+    assert run_judge.deterministic_score(vetado) == 0
+
+
+def test_aggregate_repeats_mediana_e_spread_intra():
+    agg = run_judge.aggregate_repeats([47, 81, 79])
+    assert agg["repeats"] == 3
+    assert agg["scores_runs"] == [47, 81, 79]
+    assert agg["median"] == 79
+    assert agg["spread_intra"] == 34
+    assert agg["unstable"] is True
+
+
+def test_aggregate_repeats_estavel_nao_marca_unstable():
+    agg = run_judge.aggregate_repeats([79, 81, 80])
+    assert agg["median"] == 80
+    assert agg["spread_intra"] == 2
+    assert agg["unstable"] is False
+
+
+def test_aggregate_repeats_limiar_e_exclusivo():
+    """spread_intra == 25 ainda é estável; unstable só a partir de > 25
+    (mesma convenção do spread ENTRE juízes)."""
+    assert run_judge.aggregate_repeats([60, 85])["unstable"] is False
+    assert run_judge.aggregate_repeats([60, 86])["unstable"] is True
+
+
+def test_median_run_index_com_n_impar_pega_a_run_da_mediana():
+    assert run_judge.median_run_index([100, 83, 92], [0.4, 0.4, 0.4]) == 2
+
+
+def test_median_run_index_com_n_par_desempata_pela_mais_barata():
+    """Com N par a mediana cai entre duas runs e nenhuma tem aquele score —
+    empate de distância vai pra mais barata."""
+    scores = [100, 92, 83, 75]  # mediana 87.5, empate entre 92 e 83
+    assert run_judge.median_run_index(scores, [0.40, 0.43, 0.42, 0.41]) == 2
+    assert run_judge.median_run_index(scores, [0.40, 0.41, 0.42, 0.43]) == 1
+
+
+def test_repeats_1_e_identico_ao_comportamento_atual():
+    """N=1 (default) não muda nem score nem ficha — só declara o que sempre
+    foi verdade (1 run, spread_intra 0)."""
+    base = run_judge.run_dry()
+    um = run_judge.run_dry(repeats=1)
+
+    ignorar = {"ts", "repeats", "scores_runs", "spread_intra", "unstable"}
+    assert {k: v for k, v in um.items() if k not in ignorar} == {
+        k: v for k, v in base.items() if k not in ignorar
+    }
+    assert um["repeats"] == 1
+    assert um["scores_runs"] == [DRY_SCORES[0]]
+    assert um["spread_intra"] == 0
+    assert um["unstable"] is False
+
+
+def test_dry_run_com_repeats_agrega_por_mediana():
+    """3 runs sintéticas distintas -> a ficha julgada é a da run MEDIANA
+    (D1 = 20, a do meio), não a melhor nem a média."""
+    verdict = run_judge.run_dry("j_b2b", repeats=3)
+
+    assert verdict["repeats"] == 3
+    assert verdict["scores_runs"] == DRY_SCORES[:3]
+    assert verdict["spread_intra"] == 17
+    assert verdict["unstable"] is False
+    assert verdict["judge_score"] is not None
+    assert verdict["deterministic"]["D1"] == 20  # run mediana (índice 1), não a 25 do índice 0
+    assert verdict["persona"]  # persona rodou (1x), sobre a run mediana
+
+
+def test_repeats_instavel_vira_abstencao_sem_chamar_persona():
+    """spread_intra > 25: o juiz não repete, então não vota. judge_score
+    None (não 0 — 0 seria "trabalho ruim") e persona nem é chamada."""
+    verdict = run_judge.run_dry("j_b2b", repeats=6)
+
+    assert verdict["unstable"] is True
+    assert verdict["spread_intra"] == DRY_SCORES[0] - DRY_SCORES[5]
+    assert verdict["judge_score"] is None
+    assert verdict["persona"] == {}
+    assert "se abstém" in verdict["unstable_reason"]
+    assert verdict["deterministic"] is not None  # rastro do que foi medido
+
+
+def test_summary_sem_intra_preserva_formato_antigo():
+    """N=1 não pode mudar o summary de quem já consome ele."""
+    summary = run_judge.build_summary({"j_b2b": 90, "j_web": 80, "j_hw": 70})
+    assert set(summary) == {"scores", "median", "spread", "inconclusive", "ts"}
+
+
+def test_summary_registra_juiz_unstable_em_vez_de_score():
+    """Abstenção: o instável sai da mediana ENTRE juízes (score None) e
+    aparece nominalmente em unstable_judges."""
+    intra = {
+        "j_b2b": {"repeats": 3, "scores_runs": [47, 81, 79], "spread_intra": 34, "unstable": True},
+        "j_web": {"repeats": 3, "scores_runs": [80, 82, 81], "spread_intra": 2, "unstable": False},
+        "j_hw": {"repeats": 3, "scores_runs": [70, 72, 71], "spread_intra": 2, "unstable": False},
+    }
+    summary = run_judge.build_summary({"j_b2b": None, "j_web": 81, "j_hw": 71}, intra)
+
+    assert summary["median"] == 76  # só j_web e j_hw
+    assert summary["unstable_judges"] == ["j_b2b"]
+    assert summary["scores"]["j_b2b"] is None
+    assert summary["inconclusive"] is True
+    assert summary["inconclusive_reason"] == ["variance_intra"]
+    assert summary["repeats"] == 3
+
+
+def test_summary_separa_discordancia_de_variancia_intra():
+    """As duas causas de dúvida viviam fundidas num `inconclusive` só."""
+    intra = {j: {"repeats": 3, "scores_runs": [], "spread_intra": 2, "unstable": False}
+             for j in ("j_b2b", "j_web", "j_hw")}
+    summary = run_judge.build_summary({"j_b2b": 95, "j_web": 60, "j_hw": 90}, intra)
+    assert summary["inconclusive"] is True
+    assert summary["inconclusive_reason"] == ["disagreement"]
+    assert summary["unstable_judges"] == []
+
+
+def test_all_judges_com_repeats_grava_intra_no_summary(tmp_path, monkeypatch):
+    verdicts_dir = tmp_path / "verdicts"
+    monkeypatch.setattr(run_judge, "VERDICTS_DIR", verdicts_dir)
+
+    summary = run_judge.run_all_judges(dry_run=True, repeats=3)
+
+    assert summary["repeats"] == 3
+    assert summary["unstable_judges"] == []
+    for judge_id in ("j_b2b", "j_web", "j_hw"):
+        assert summary["intra"][judge_id]["scores_runs"] == DRY_SCORES[:3]
+        loaded = json.loads((verdicts_dir / judge_id / f"{run_judge.harness_version()}.json").read_text())
+        assert loaded["repeats"] == 3
+        assert loaded["judge_score"] == summary["scores"][judge_id]
+
+    loaded_summary = json.loads((verdicts_dir / f"summary_{run_judge.harness_version()}.json").read_text())
+    assert loaded_summary["intra"] == summary["intra"]
+
+
+def test_all_judges_sem_repeats_nao_muda_summary(tmp_path, monkeypatch):
+    verdicts_dir = tmp_path / "verdicts"
+    monkeypatch.setattr(run_judge, "VERDICTS_DIR", verdicts_dir)
+
+    summary = run_judge.run_all_judges(dry_run=True)
+    assert "intra" not in summary and "repeats" not in summary
+
+
+def test_cli_repeats_via_subprocess():
+    """Wiring do CLI (subprocess de verdade -> escreve no repo real, limpa
+    no finally, mesmo padrão de test_judges_build)."""
+    out_dir = REPO / "judges" / "verdicts" / "j_b2b"
+    existia = out_dir.exists()
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(REPO / "judges" / "run_judge.py"), "--dry-run", "--repeats", "3"],
+            cwd=REPO, capture_output=True, text=True, timeout=60,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert '"repeats": 3' in proc.stdout
+        assert f'"scores_runs": [\n    {DRY_SCORES[0]},' in proc.stdout
+
+        ruim = subprocess.run(
+            [sys.executable, str(REPO / "judges" / "run_judge.py"), "--dry-run", "--repeats", "0"],
+            cwd=REPO, capture_output=True, text=True, timeout=60,
+        )
+        assert ruim.returncode != 0
+        assert "--repeats precisa ser >= 1" in ruim.stderr
+    finally:
+        if not existia:
+            shutil.rmtree(out_dir, ignore_errors=True)
+
+
 # ---------------------------------------------------------- verdicts timestamped
 
 

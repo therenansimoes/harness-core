@@ -19,3 +19,5 @@ Opus em 12min faz mudança ambiciosa e larga a suite vermelha. "Mantenha verde" 
 - Adotar via dev normal (não geração): fix da classe vacuous-pass (0 testes coletados = FALHA) e repeats intra-juiz com abstenção (design do v2).
 - Anti-tamper prompt (experimento paralelo à geração): REJEITADO — 5/6 vs 5/6, diff 0.
 - Gen5: mesma mutação auto-dirigida + gate intermediário entre fases. Só disparar após os dois fixes acima entrarem (senão a convergência re-diagnostica o que já sabemos).
+
+- Licao 2026-08-02 (custou ~$6): fan-out paralelo SEM teto de concorrencia esbarra em rate limit da conta e trava tudo (16 runs simultaneas = fila do lado da API). Paralelismo real exige max_workers (~6). "Exponencial" = paralelo COM cap, não all-at-once.

@@ -26,6 +26,12 @@ Fluxo real (§6 do SPEC-J1), por juiz:
 Este harness ainda não faz nenhuma chamada paga — o caminho real acima
 existe mas só foi exercitado com --dry-run / PERSONA_MOCK=1 até aqui.
 
+--repeats N repete só o passo determinístico (1-3) N vezes por juiz, em
+paralelo, agrega o score determinístico por MEDIANA e roda a persona uma vez
+só, sobre a run mediana. Se as N runs discordarem entre si (spread_intra >
+25), o juiz vira `unstable` e SE ABSTÉM: judge_score None, fora da mediana
+entre juízes. N=1 (default) é o comportamento de sempre.
+
 --all-judges roda os 3 em paralelo (real ou --dry-run) e agrega score por
 juiz + mediana + spread num summary em
 judges/verdicts/summary_<harness_version>.json. O paralelismo é por thread
@@ -60,6 +66,20 @@ REGISTRY = REPO_ROOT / "judges" / "registry.tsv"
 VERDICTS_DIR = REPO_ROOT / "judges" / "verdicts"
 RESULTS = REPO_ROOT / "results.tsv"
 SPREAD_INCONCLUSIVE_THRESHOLD = 25
+
+# Repetição intra-juiz (--repeats N). SPEC-J1 §8 já previa N>=3 com mediana;
+# até aqui a mediana existia só ENTRE juízes, sobre UMA amostra por juiz —
+# com o j_b2b bimodal (47/81 observados) isso é ruído institucionalizado.
+# O número que justifica o custo Nx não é a mediana (mede 41%->30% de flip),
+# é a ABSTENÇÃO: spread entre repetições > 25 => o juiz não repete, então ele
+# não vota (flip 5.9%, 43% das avaliações seguem conclusivas — medição do
+# candidato gen4/v2, arena/gen4/FEEDBACK-GEN4.md §2).
+SPREAD_INTRA_UNSTABLE_THRESHOLD = 25
+
+# --repeats N: quantas repetições do MESMO juiz rodam ao mesmo tempo. Cada
+# repetição é uma run paga inteira (run_task.py + verify.py), por isso o teto
+# baixo — e com --all-judges o total em voo é JUDGE_MAX_WORKERS x este.
+REPEAT_MAX_WORKERS = 3
 
 # --all-judges: quantos juízes rodam ao mesmo tempo. 3 = os 3 juízes da J1
 # hoje; teto baixo de propósito, cada juiz sobe um agente/subprocess pesado.
@@ -130,10 +150,17 @@ def read_registry_row(judge_id: str) -> dict:
 # ---------------------------------------------------------------- D1-D4
 
 
-def synthetic_deterministic() -> dict:
-    """Números sintéticos pro --dry-run — não reflete run nenhuma real."""
+def synthetic_deterministic(run_idx: int = 0) -> dict:
+    """Números sintéticos pro --dry-run — não reflete run nenhuma real.
+
+    `run_idx` injeta variação DETERMINÍSTICA por repetição (--repeats N), pra
+    o dry-run exercitar mediana/spread_intra/abstenção sem chamar API: a
+    penalidade em D1 cresce 5 por índice, saturando no peso de D1. Assim
+    N<=4 fica estável (spread <= 25) e N>=5 estoura o limiar e cai na
+    abstenção. `run_idx=0` devolve exatamente os números de antes."""
+    penalty = min(run_idx * 5, WEIGHTS["D1"])
     return {
-        "D1": WEIGHTS["D1"],
+        "D1": WEIGHTS["D1"] - penalty,
         "D2": WEIGHTS["D2"],
         "D3": WEIGHTS["D3"],
         "D4": WEIGHTS["D4"],
@@ -141,10 +168,59 @@ def synthetic_deterministic() -> dict:
         "evidence": {
             "target_test": "passed (sintético --dry-run)",
             "full_suite": "414 passed, 0 failed (sintético --dry-run)",
-            "cost_usd": 0.42,
+            "cost_usd": round(0.42 + run_idx * 0.01, 4),
             "turns": 4,
         },
     }
+
+
+def deterministic_score(deterministic: dict) -> int:
+    """Score 0-100 só da parte determinística (D1-D4), que é o que se repete
+    em --repeats N — a persona roda uma vez só, sobre a run mediana, então
+    ela não pode entrar na amostra que mede a variância do juiz."""
+    if deterministic.get("veto"):
+        return 0
+    numer = sum(deterministic[k] for k in ("D1", "D2", "D3", "D4"))
+    denom = sum(WEIGHTS[k] for k in ("D1", "D2", "D3", "D4"))
+    return round(numer / denom * 100) if denom > 0 else 0
+
+
+def aggregate_repeats(scores_runs: list[int]) -> dict:
+    """Agrega as N repetições do MESMO juiz: mediana + spread_intra (max-min)
+    + `unstable`. Função pura (sem I/O, sem relógio) de propósito — é o que os
+    testes exercitam sem pagar run nenhuma."""
+    median = statistics.median(scores_runs) if scores_runs else None
+    spread_intra = (max(scores_runs) - min(scores_runs)) if scores_runs else None
+    return {
+        "repeats": len(scores_runs),
+        "scores_runs": list(scores_runs),
+        "median": median,
+        "spread_intra": spread_intra,
+        "unstable": bool(spread_intra is not None and spread_intra > SPREAD_INTRA_UNSTABLE_THRESHOLD),
+    }
+
+
+def median_run_index(scores_runs: list[int], costs: list[float]) -> int:
+    """Índice da run MEDIANA — a que a persona vai julgar. Com N par a
+    mediana estatística cai entre duas runs e não existe run nenhuma com
+    aquele score: pega a mais próxima da mediana, e empate desempata pela
+    mais barata (menor cost_usd; empate nisso também, a primeira)."""
+    median = statistics.median(scores_runs)
+    return min(
+        range(len(scores_runs)),
+        key=lambda i: (abs(scores_runs[i] - median), costs[i], i),
+    )
+
+
+def with_repeats(verdict: dict, agg: dict) -> dict:
+    """Campos aditivos de --repeats no verdict (sempre presentes na trilha
+    result; com N=1 são repeats=1/spread_intra=0/unstable=False, o que
+    descreve o comportamento de sempre em vez de escondê-lo)."""
+    verdict["repeats"] = agg["repeats"]
+    verdict["scores_runs"] = agg["scores_runs"]
+    verdict["spread_intra"] = agg["spread_intra"]
+    verdict["unstable"] = agg["unstable"]
+    return verdict
 
 
 def compute_deterministic(
@@ -357,6 +433,38 @@ def build_infra_error_verdict(judge_id: str, reg: dict, row: dict | None) -> dic
     }
 
 
+def build_unstable_verdict(judge_id: str, reg: dict, agg: dict, deterministic: dict, cost_usd: float) -> dict:
+    """Abstenção por variância do próprio juiz: as N repetições discordaram
+    entre si mais que SPREAD_INTRA_UNSTABLE_THRESHOLD, então o juiz não tem
+    um número pra dar. `judge_score` fica None — mesma convenção do
+    infra_error: None sai da mediana ENTRE juízes em vez de contaminá-la
+    (0 significaria "trabalho ruim"). A persona NÃO é chamada: ela custa e
+    só serviria pra decorar um voto que não vai ser contado.
+
+    O `deterministic` da run mediana fica no verdict como evidência do que
+    foi medido — não pontua (judge_score é None), é rastro."""
+    verdict = {
+        "judge_id": judge_id,
+        "harness_version": harness_version(),
+        "rubric_version": reg["rubric_version"],
+        "base_sha": reg["base_sha"],
+        "sealed_sha256": reg["sealed_sha256"],
+        "deterministic": deterministic,
+        "persona": {},
+        "discarded": [],
+        "persona_vetoed": False,
+        "veto_reason": "",
+        "judge_score": None,
+        "unstable_reason": (
+            f"spread_intra={agg['spread_intra']} > {SPREAD_INTRA_UNSTABLE_THRESHOLD} "
+            f"em {agg['repeats']} repetições ({agg['scores_runs']}) — juiz se abstém"
+        ),
+        "cost_usd": cost_usd,
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    return with_repeats(verdict, agg)
+
+
 def build_dir_for(judge_id: str) -> Path:
     """Trilha build: `benchmarks/judge/<judge_id>/` (SEM o prefixo `task_`
     de propósito — é assim que `run_task.py` deixa de descobrir essas
@@ -540,26 +648,79 @@ def load_trace(notes: str) -> str:
     return "\n".join(f"{i}: {line}" for i, line in enumerate(lines, start=1))
 
 
-def run_real(judge_id: str = DEFAULT_JUDGE_ID) -> dict:
+def run_real(judge_id: str = DEFAULT_JUDGE_ID, repeats: int = 1) -> dict:
     """Roda run_task.py de verdade (agente real via `claude -p`, custo
     real) e monta a ficha a partir do resultado. Não exercitado neste PR
     (proibido chamar API paga) — implementado, não testado end-to-end.
 
+    Com `repeats` > 1 a parte DETERMINÍSTICA roda N vezes (em paralelo, cada
+    uma com workspace e results.tsv próprios); a persona roda UMA vez, sobre
+    a run mediana. Se as N runs discordarem demais entre si
+    (spread_intra > 25), o juiz se abstém e a persona nem é chamada."""
+    reg = read_registry_row(judge_id)
+    runs = _run_deterministic_repeats(judge_id, repeats)
+    try:
+        ok = [r for r in runs if not r.get("infra_error")]
+        if not ok:
+            # nenhuma repetição chegou a trabalhar: infra quebrada, não
+            # variância — mesmo curto-circuito de sempre.
+            return build_infra_error_verdict(judge_id, reg, runs[0].get("row"))
+
+        scores_runs = [deterministic_score(r["deterministic"]) for r in ok]
+        agg = aggregate_repeats(scores_runs)
+        costs = [r["cost_usd"] for r in ok]
+        run = ok[median_run_index(scores_runs, costs)]
+
+        if agg["unstable"]:
+            return build_unstable_verdict(judge_id, reg, agg, run["deterministic"], run["cost_usd"])
+
+        ficha = persona.call_persona(run["deterministic"], run["diff"], run["trace"], run["verify_out"])
+        persona_scored, discarded, persona_vetoed, veto_reason = validate_and_score_persona(
+            ficha, run["diff"], run["trace"]
+        )
+        verdict = build_verdict(
+            judge_id, reg, run["deterministic"], persona_scored, discarded, persona_vetoed,
+            veto_reason, run["cost_usd"],
+        )
+        return with_repeats(verdict, agg)
+    finally:
+        for r in runs:
+            if r.get("ws"):
+                shutil.rmtree(r["ws"], ignore_errors=True)
+
+
+def _run_deterministic_repeats(judge_id: str, repeats: int) -> list[dict]:
+    """As N repetições do determinístico. N=1 roda inline (nenhuma thread a
+    mais que antes); N>1 usa pool próprio — e como cada repetição já é
+    subprocess-bound e tem results.tsv/workspace exclusivos, elas não
+    compartilham nada mutável além do que merge_judge_results já serializa."""
+    def one(_i: int) -> dict:
+        tmp_dir = Path(tempfile.mkdtemp(prefix="harness_judge_results_"))
+        try:
+            return _run_deterministic_once(judge_id, tmp_dir / "results.tsv")
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    n = max(1, repeats)
+    if n == 1:
+        return [one(0)]
+    with ThreadPoolExecutor(max_workers=min(REPEAT_MAX_WORKERS, n)) as pool:
+        return list(pool.map(one, range(n)))
+
+
+def _run_deterministic_once(judge_id: str, results_path: Path) -> dict:
+    """UMA run determinística: agente + verify.py. Devolve o material bruto
+    (deterministic/diff/trace/verify_out/cost + o workspace, que fica de pé
+    — quem chamou decide qual run a persona julga e faz a limpeza), ou
+    `{"infra_error": True, ...}` quando o agente consumiu 0 tokens.
+
     O run_task.py deste juiz grava num results.tsv EXCLUSIVO (via
     HARNESS_RESULTS, mesmo padrão de experiment.run_task_launch): com
-    --all-judges paralelo, dois run_task.py coexistem e appends
-    intercalados no results.tsv do repo poderiam quebrar a leitura da
-    "última linha do task_id". As linhas voltam pro results.tsv do repo em
-    merge_judge_results(), sob lock — o histórico continua lá (é dele que
-    median_baseline_cost_turns vive)."""
-    tmp_dir = Path(tempfile.mkdtemp(prefix="harness_judge_results_"))
-    try:
-        return _run_real(judge_id, tmp_dir / "results.tsv")
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-
-
-def _run_real(judge_id: str, results_path: Path) -> dict:
+    --all-judges paralelo (e agora também com --repeats N), dois run_task.py
+    coexistem e appends intercalados no results.tsv do repo poderiam quebrar
+    a leitura da "última linha do task_id". As linhas voltam pro results.tsv
+    do repo em merge_judge_results(), sob lock — o histórico continua lá (é
+    dele que median_baseline_cost_turns vive)."""
     task_dir = task_dir_for(judge_id)
     task_id = f"task_{judge_id}"
 
@@ -606,8 +767,7 @@ def _run_real(judge_id: str, results_path: Path) -> dict:
         # D1-D4, judge_score fica None em vez de um 0 que pareceria "o
         # agente tentou e foi mal".
         shutil.rmtree(ws, ignore_errors=True)
-        reg = read_registry_row(judge_id)
-        return build_infra_error_verdict(judge_id, reg, row)
+        return {"infra_error": True, "row": row}
 
     cost_usd = float(row["cost_usd"]) if row else 0.0
     turns = int(row["turns"]) if row else 0
@@ -619,15 +779,14 @@ def _run_real(judge_id: str, results_path: Path) -> dict:
     trace = load_trace(row.get("notes", "") if row else "")
 
     deterministic = compute_deterministic(verify_result, tampered, cost_usd, turns, task_id)
-    ficha = persona.call_persona(deterministic, diff, trace, verify_out)
-    persona_scored, discarded, persona_vetoed, veto_reason = validate_and_score_persona(ficha, diff, trace)
-
-    shutil.rmtree(ws, ignore_errors=True)
-
-    reg = read_registry_row(judge_id)
-    return build_verdict(
-        judge_id, reg, deterministic, persona_scored, discarded, persona_vetoed, veto_reason, cost_usd
-    )
+    return {
+        "deterministic": deterministic,
+        "diff": diff,
+        "trace": trace,
+        "verify_out": verify_out,
+        "cost_usd": cost_usd,
+        "ws": ws,
+    }
 
 
 def merge_judge_results(results_path: Path) -> None:
@@ -668,18 +827,32 @@ def last_results_row(task_id: str, results_path: Path | None = None) -> dict | N
     return last
 
 
-def run_dry(judge_id: str = DEFAULT_JUDGE_ID) -> dict:
+def run_dry(judge_id: str = DEFAULT_JUDGE_ID, repeats: int = 1) -> dict:
+    """`repeats` N simula N runs determinísticas com scores DISTINTOS
+    (synthetic_deterministic(i)) e passa pelo mesmo agregador do caminho
+    real: mediana, spread_intra, abstenção. Serve pra provar formato e
+    wiring — não mede variância nenhuma, que é sintética aqui."""
     reg = read_registry_row(judge_id)
-    deterministic = synthetic_deterministic()
     os.environ.setdefault("PERSONA_MOCK", "1")
+
+    runs = [synthetic_deterministic(i) for i in range(max(1, repeats))]
+    scores_runs = [deterministic_score(d) for d in runs]
+    agg = aggregate_repeats(scores_runs)
+    costs = [d["evidence"]["cost_usd"] for d in runs]
+    deterministic = runs[median_run_index(scores_runs, costs)]
+    cost_usd = deterministic["evidence"]["cost_usd"]
+
+    if agg["unstable"]:
+        return build_unstable_verdict(judge_id, reg, agg, deterministic, cost_usd)
+
     diff = "schwifty/checksum/germany.py:1\n-        return checksum\n+        return super().reconcile(checksum)\n"
     trace = "trace.jsonl:1 DONE: corrigido Algorithm11.reconcile para delegar ao método base\n"
     ficha = persona.call_persona(deterministic, diff, trace, "78 passed\n414 passed")
     persona_scored, discarded, persona_vetoed, veto_reason = validate_and_score_persona(ficha, diff, trace)
-    return build_verdict(
-        judge_id, reg, deterministic, persona_scored, discarded, persona_vetoed, veto_reason,
-        deterministic["evidence"]["cost_usd"],
+    verdict = build_verdict(
+        judge_id, reg, deterministic, persona_scored, discarded, persona_vetoed, veto_reason, cost_usd,
     )
+    return with_repeats(verdict, agg)
 
 
 # --------------------------------------------------------- trilha build (J2)
@@ -885,8 +1058,8 @@ def run_all_judges_build(dry_run: bool) -> dict:
     """Espelha run_all_judges (mesmo paralelismo) pra trilha build — hoje só build_j_b2b em
     registry_build.tsv, mas generalizado do mesmo jeito (nada hardcoded
     além do default de compatibilidade)."""
-    scores = run_judges_parallel(all_build_judge_ids(), dry_run, track="build")
-    summary = build_summary(scores)
+    verdicts = run_judges_parallel(all_build_judge_ids(), dry_run, track="build")
+    summary = build_summary({judge_id: v["judge_score"] for judge_id, v in verdicts.items()})
     out = write_summary(summary, prefix="summary_build")
 
     print("\n--- resumo --all-judges (trilha build) ---")
@@ -903,60 +1076,97 @@ def run_all_judges_build(dry_run: bool) -> dict:
 # ------------------------------------------------------------------ --all-judges
 
 
-def run_one_quiet(judge_id: str, dry_run: bool, track: str = "result") -> tuple[dict, str]:
+def run_one_quiet(judge_id: str, dry_run: bool, track: str = "result", repeats: int = 1) -> tuple[dict, str]:
     """Roda um juiz e devolve (verdict, saída) em vez de imprimir — é o que
     o modo paralelo usa pra não intercalar linhas de dois juízes no stdout."""
     if track == "build":
         verdict = run_dry_build(judge_id) if dry_run else run_real_build(judge_id)
     else:
-        verdict = run_dry(judge_id) if dry_run else run_real(judge_id)
+        verdict = run_dry(judge_id, repeats) if dry_run else run_real(judge_id, repeats)
     out = write_verdict(verdict)
-    report = "\n".join([
+    lines = [
         json.dumps(verdict, indent=2, ensure_ascii=False),
         f"\nverdict gravado em {out}",
         f"judge_score = {verdict['judge_score']}",
-    ])
-    return verdict, report
+    ]
+    if verdict.get("unstable"):
+        lines.append(f"UNSTABLE (abstenção): {verdict['unstable_reason']}")
+    return verdict, "\n".join(lines)
 
 
-def run_one(judge_id: str, dry_run: bool, track: str = "result") -> dict:
-    verdict, report = run_one_quiet(judge_id, dry_run, track)
+def run_one(judge_id: str, dry_run: bool, track: str = "result", repeats: int = 1) -> dict:
+    verdict, report = run_one_quiet(judge_id, dry_run, track, repeats)
     print(report)
     return verdict
 
 
-def run_judges_parallel(judge_ids: list[str], dry_run: bool, track: str) -> dict[str, int | None]:
+def run_judges_parallel(judge_ids: list[str], dry_run: bool, track: str, repeats: int = 1) -> dict[str, dict]:
     """Roda os juízes da trilha em paralelo (thread basta: cada juiz é
     subprocess-bound — run_task.py/agent, accept.py, `claude -p`) e devolve
-    os scores na ordem do registry, determinística, independente de quem
+    os verdicts na ordem do registry, determinística, independente de quem
     terminou primeiro. A saída de cada juiz sai inteira, em ordem, no fim."""
     if not judge_ids:
         return {}
     with ThreadPoolExecutor(max_workers=min(JUDGE_MAX_WORKERS, len(judge_ids))) as pool:
-        futures = [pool.submit(run_one_quiet, judge_id, dry_run, track) for judge_id in judge_ids]
+        futures = [pool.submit(run_one_quiet, judge_id, dry_run, track, repeats) for judge_id in judge_ids]
         results = [f.result() for f in futures]
 
-    scores: dict[str, int | None] = {}
+    verdicts: dict[str, dict] = {}
     for judge_id, (verdict, report) in zip(judge_ids, results):
         print(report)
-        scores[judge_id] = verdict["judge_score"]
-    return scores
+        verdicts[judge_id] = verdict
+    return verdicts
 
 
-def build_summary(scores: dict[str, int | None]) -> dict:
+def intra_from_verdicts(verdicts: dict[str, dict]) -> dict[str, dict]:
+    """Recorte de --repeats de cada verdict, pro summary — só o que o
+    summary precisa pra registrar quem se absteve e por quê."""
+    return {
+        judge_id: {
+            "repeats": v.get("repeats", 1),
+            "scores_runs": v.get("scores_runs", []),
+            "spread_intra": v.get("spread_intra"),
+            "unstable": bool(v.get("unstable")),
+        }
+        for judge_id, v in verdicts.items()
+    }
+
+
+def build_summary(scores: dict[str, int | None], intra: dict[str, dict] | None = None) -> dict:
     """Agrega score por juiz: mediana + spread (max-min) sobre os scores
     não-None. spread > 25 marca `inconclusive` (juízes discordando demais
-    pra confiar num único número)."""
+    pra confiar num único número).
+
+    `intra` (o recorte de --repeats por juiz) separa as DUAS causas de
+    dúvida que antes viviam fundidas num `inconclusive` só: `disagreement`
+    (juízes divergem entre si) e `variance_intra` (o próprio juiz não
+    repete — abstenção, score já vem None e portanto fora da mediana).
+    Sem `intra` — o caso N=1 — o formato antigo sai igual, chave por chave."""
     values = [v for v in scores.values() if v is not None]
     median = statistics.median(values) if values else None
     spread = (max(values) - min(values)) if values else None
-    return {
+    disagreement = bool(spread is not None and spread > SPREAD_INCONCLUSIVE_THRESHOLD)
+    summary = {
         "scores": scores,
         "median": median,
         "spread": spread,
-        "inconclusive": bool(spread is not None and spread > SPREAD_INCONCLUSIVE_THRESHOLD),
+        "inconclusive": disagreement,
         "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
+    if intra is None:
+        return summary
+
+    unstable = sorted(j for j, r in intra.items() if r.get("unstable"))
+    reasons = (["disagreement"] if disagreement else []) + (["variance_intra"] if unstable else [])
+    summary["intra"] = intra
+    summary["repeats"] = max((r.get("repeats", 1) for r in intra.values()), default=1)
+    summary["unstable_judges"] = unstable
+    # abstenção é motivo de não decidir: quem se absteve saiu da mediana, e
+    # decidir com o que sobrou seria trocar "não sei" por um número menos
+    # amostrado. É o mecanismo que leva o flip a 5.9% (FEEDBACK-GEN4 §2).
+    summary["inconclusive"] = bool(disagreement or unstable)
+    summary["inconclusive_reason"] = reasons
+    return summary
 
 
 def write_summary(summary: dict, prefix: str = "summary") -> Path:
@@ -968,18 +1178,26 @@ def write_summary(summary: dict, prefix: str = "summary") -> Path:
     return out
 
 
-def run_all_judges(dry_run: bool) -> dict:
-    scores = run_judges_parallel(all_judge_ids(), dry_run, track="result")
-    summary = build_summary(scores)
+def run_all_judges(dry_run: bool, repeats: int = 1) -> dict:
+    verdicts = run_judges_parallel(all_judge_ids(), dry_run, track="result", repeats=repeats)
+    scores = {judge_id: v["judge_score"] for judge_id, v in verdicts.items()}
+    intra = intra_from_verdicts(verdicts) if repeats > 1 else None
+    summary = build_summary(scores, intra)
     out = write_summary(summary)
 
     print("\n--- resumo --all-judges ---")
     for judge_id, score in summary["scores"].items():
-        print(f"{judge_id}: {score}")
+        line = f"{judge_id}: {score}"
+        if intra is not None:
+            r = intra[judge_id]
+            line += f"  (n={r['repeats']} runs={r['scores_runs']} spread_intra={r['spread_intra']}"
+            line += " UNSTABLE/abstenção)" if r["unstable"] else ")"
+        print(line)
     print(f"median: {summary['median']}")
     print(f"spread: {summary['spread']}")
     if summary["inconclusive"]:
-        print("inconclusive: true (spread > 25)")
+        reason = ",".join(summary.get("inconclusive_reason") or ["disagreement"])
+        print(f"inconclusive: true ({reason})")
     print(f"summary gravado em {out}")
     return summary
 
@@ -1003,9 +1221,22 @@ def main() -> int:
         action="store_true",
         help=f"roda os juízes da trilha em paralelo (até {JUDGE_MAX_WORKERS} juntos) e agrega um summary",
     )
+    ap.add_argument(
+        "--repeats",
+        type=int,
+        default=1,
+        metavar="N",
+        help="repetições do MESMO juiz (só a parte determinística; persona roda 1x, sobre a run "
+             f"mediana). Agrega por mediana; spread_intra > {SPREAD_INTRA_UNSTABLE_THRESHOLD} => o juiz "
+             "se abstém. N=1 (default) é o comportamento de sempre. Custo cresce ~N vezes",
+    )
     a = ap.parse_args()
+    if a.repeats < 1:
+        raise SystemExit("--repeats precisa ser >= 1")
 
     if a.track == "build":
+        if a.repeats > 1:
+            raise SystemExit("--repeats só existe na trilha result (a trilha build não tem D1-D4 repetíveis)")
         judge_id = a.judge or DEFAULT_BUILD_JUDGE_ID
         if judge_id not in all_build_judge_ids():
             raise SystemExit(f"{judge_id} não é um judge_id da trilha build (judges/registry_build.tsv)")
@@ -1019,10 +1250,10 @@ def main() -> int:
     if judge_id not in all_judge_ids():
         raise SystemExit(f"{judge_id} não é um judge_id da trilha J1 (judges/registry.tsv)")
     if a.all_judges:
-        run_all_judges(a.dry_run)
+        run_all_judges(a.dry_run, repeats=a.repeats)
         return 0
 
-    run_one(judge_id, a.dry_run)
+    run_one(judge_id, a.dry_run, repeats=a.repeats)
     return 0
 
 
