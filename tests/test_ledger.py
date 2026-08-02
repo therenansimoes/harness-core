@@ -1,7 +1,7 @@
 import pytest
 
 from harness.ledger import store
-from harness.types import RunRow
+from harness.types import MutationRow, RunRow
 
 
 @pytest.fixture
@@ -89,3 +89,20 @@ def test_filters_and_order(data_dir):
     assert [r.run_id for r in store.history(backend="mock", kind="code")] == ["a"]
     assert [r.run_id for r in store.history(project="q")] == ["c"]
     assert len(store.history(limit=1)) == 1
+
+
+def _mut(i: int, rule: str = "floor_up") -> MutationRow:
+    return MutationRow(f"m{i:04d}", rule, "KEEP", "1/6", "4/6", store.now_iso(), False)
+
+
+def test_mutations_sem_teto_le_o_historico_inteiro(data_dir):
+    """`limit=None` = todas. O guard de config sujo pergunta "este id já foi
+    julgado?", e a janela default responderia "não" para tudo que envelheceu."""
+    for i in range(600):
+        store.record_mutation(_mut(i))
+
+    assert len(store.mutations()) == 500              # janela default
+    assert len(store.mutations(limit=None)) == 600
+    assert store.mutations(limit=None)[-1].mutation_id == "m0000"
+    assert len(store.mutations(rule_id="floor_up", limit=None)) == 600
+    assert store.mutations(rule_id="outra", limit=None) == []

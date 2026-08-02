@@ -158,14 +158,24 @@ def record_mutation(row: MutationRow, path: Path | None = None) -> bool:
 
 
 def mutations(
-    rule_id: str | None = None, limit: int = 500, path: Path | None = None
+    rule_id: str | None = None, limit: int | None = 500, path: Path | None = None
 ) -> list[MutationRow]:
-    """Mutações mais recentes primeiro (ordem de gravação)."""
+    """Mutações mais recentes primeiro (ordem de gravação). `limit=None` = todas.
+
+    Sem teto é para quem pergunta sobre o histórico INTEIRO, e não sobre a
+    janela recente: "este `mutation_id` já foi julgado?" respondida por uma
+    janela erra por omissão — o veredito antigo cai fora e a mutação parece
+    pendente. Prior e listagem continuam com teto: lá a janela é o que se quer.
+    """
     clause = " WHERE rule_id = ?" if rule_id is not None else ""
-    params: list[object] = ([rule_id] if rule_id is not None else []) + [limit]
+    params: list[object] = [rule_id] if rule_id is not None else []
+    ceiling = ""
+    if limit is not None:
+        ceiling = " LIMIT ?"
+        params.append(limit)
     with connect(path) as conn:
         rows = conn.execute(
-            f"SELECT * FROM mutations{clause} ORDER BY rowid DESC LIMIT ?", params
+            f"SELECT * FROM mutations{clause} ORDER BY rowid DESC{ceiling}", params
         ).fetchall()
     return [_mutation(r) for r in rows]
 
@@ -185,6 +195,21 @@ def get_node(
     with connect(path) as conn:
         row = _select_node(conn, run_id, node, attempt)
     return json.loads(row["payload"]) if row is not None else None
+
+
+def node_payloads(node: str, path: Path | None = None) -> list[dict]:
+    """Payloads de TODAS as passagens por um nó, na ordem de gravação.
+
+    `get_node` responde por `(run_id, node, attempt)`; esta é a pergunta
+    inversa — quem passou por este nó, em qualquer thread. É o que o guard de
+    config sujo precisa: mutação aplicada e nunca julgada não tem linha em
+    `mutations` (o crash foi antes do `record`), só o marcador do nó.
+    """
+    with connect(path) as conn:
+        rows = conn.execute(
+            "SELECT payload FROM node_events WHERE node = ? ORDER BY rowid", (node,)
+        ).fetchall()
+    return [json.loads(r["payload"]) for r in rows]
 
 
 def record_run_once(

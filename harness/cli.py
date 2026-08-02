@@ -1,4 +1,5 @@
-"""CLI do harness. `harness run` / `harness ab` / `harness improve` / `harness backends`."""
+"""CLI do harness. `harness run` / `ab` / `improve` / `replay` / `doctor` /
+`backends` / `bench`."""
 
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ from pathlib import Path
 
 from harness.ab import ArmSpec, run_ab
 from harness.backends import registry
+from harness.improve.replay import DEFAULT_LIMIT
 from harness.ledger import store
 from harness.routing import ROUTE_AUTO, ROUTE_MANUAL, ROUTE_MODES, router
 from harness.ruler.gate import Decision, gate
@@ -426,13 +428,18 @@ def cmd_improve(args: argparse.Namespace) -> int:
 
     answer = None
     if args.resume:
+        raw = args.answer if args.answer is not None else IMPROVE_ANSWER
         try:
-            answer = json.loads(args.answer)
+            answer = json.loads(raw)
         except json.JSONDecodeError as exc:
             args.parser.error(f"--answer não é JSON: {exc}")
         if not isinstance(answer, dict):
-            args.parser.error(f"--answer tem que ser um objeto JSON: {args.answer!r}")
-    elif args.answer != IMPROVE_ANSWER:
+            args.parser.error(f"--answer tem que ser um objeto JSON: {raw!r}")
+    elif args.answer is not None:
+        # Sentinela None, e não comparação com o texto do default: com
+        # `!= IMPROVE_ANSWER` quem digitasse exatamente o JSON default sem
+        # `--resume` tinha a flag ignorada em silêncio — e flag ignorada em
+        # silêncio é a que faz o humano achar que respondeu à escalação.
         args.parser.error("--answer só faz sentido com --resume")
 
     try:
@@ -475,6 +482,93 @@ def cmd_improve(args: argparse.Namespace) -> int:
         f"intervention_rate={report.intervention_rate:.2f} (n={report.runs_window})"
     )
     return 0
+
+
+def _fmt_window(succ: int, n: int, ci: tuple[float, float]) -> str:
+    return f"{succ}/{n} [{ci[0]:.2f},{ci[1]:.2f}]"
+
+
+def _attribution_lines(att) -> list[str]:
+    """Três linhas: o que era a mutação, as duas janelas, o que confunde.
+
+    A terceira sai SEMPRE, mesmo com zero: "confounders=0" é informação (a
+    janela está limpa), e omitir a linha faria o leitor achar que ninguém olhou.
+    """
+    chave = " ".join(
+        f"{name}={value}"
+        for name, value in zip(("kind", "tier", "backend"), att.key)
+        if value
+    )
+    delta = "n/a" if att.delta is None else f"{att.delta:+.2f}"
+    leitura = (
+        "sem amostra" if att.delta is None
+        else "separados" if att.separated
+        else "sobrepostos"
+    )
+    nomes = " ".join(
+        f"{c.mutation_id}:{c.rule_id}@{c.applied_at}" for c in att.confounders
+    )
+    return [
+        f"mut {att.mutation_id} {att.rule_id} {att.verdict} "
+        f"{'revertida' if att.reverted else 'mantida'} "
+        f"exp={att.n_experiment} {chave or 'chave=-'}",
+        f"antes {_fmt_window(att.succ_before, att.n_before, att.ci_before)} "
+        f"depois {_fmt_window(att.succ_after, att.n_after, att.ci_after)} "
+        f"delta={delta} intervalos={leitura}",
+        f"confounders={len(att.confounders)}" + (f" {nomes}" if nomes else ""),
+    ]
+
+
+def cmd_replay(args: argparse.Namespace) -> int:
+    """Atribuição por mutação: quanto do delta o histórico sustenta.
+
+    Sai 0 com qualquer número, inclusive delta n/a: "não tenho amostra depois"
+    é resposta honesta do replay, não erro da CLI. Só mutação inexistente sai 1.
+
+    `--limit` vale nos dois modos, com o MESMO número: o `--list` é como se
+    descobre o id, e listar com um teto e atribuir com outro faz o `--list`
+    mostrar id que o `--mutation` jura não existir.
+    """
+    from harness.improve.replay import ReplayError, replay
+
+    if args.list:
+        rows = store.mutations(limit=args.limit)
+        for m in rows:
+            print(
+                f"{m.mutation_id} {m.applied_at} {m.rule_id} {m.verdict} "
+                f"a={m.arm_a} b={m.arm_b} "
+                f"{'revertida' if m.reverted else 'mantida'}"
+                + (f" ({m.note})" if m.note else "")
+            )
+        # No teto, `mutações=N` seria lido como "o ledger tem N": dizer que a
+        # lista bateu no limite é a diferença entre truncar e mentir.
+        teto = " (teto do --limit; pode haver mais)" if len(rows) == args.limit else ""
+        print(f"mutações={len(rows)}{teto}")
+        return 0
+
+    if not args.mutation:
+        args.parser.error("informe --mutation <id> (ou --list para ver os ids)")
+    try:
+        att = replay(args.mutation, limit=args.limit)
+    except ReplayError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    for line in _attribution_lines(att):
+        print(line)
+    return 0
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """Diagnóstico local. Exit 1 só com FALHA: aviso é o mundo, não o harness."""
+    from harness import doctor
+
+    result = doctor.checks()
+    for c in result:
+        print(f"{c.status:<5} {c.name:<20} {c.detail}")
+    bad = doctor.failures(result)
+    avisos = sum(1 for c in result if c.status == doctor.WARN)
+    print(f"doctor checks={len(result)} falhas={len(bad)} avisos={avisos}")
+    return 1 if bad else 0
 
 
 def _pct(values: list[float], q: int) -> float:
@@ -559,9 +653,25 @@ def build_parser() -> argparse.ArgumentParser:
     improve.add_argument("--resume", default=None, metavar="THREAD_ID",
                          help="responde a escalação pendente da thread (o id sai no "
                               "`escalate ... thread=` do stderr)")
-    improve.add_argument("--answer", default=IMPROVE_ANSWER, metavar="JSON",
-                         help=f"resposta do humano ao interrupt (default: {IMPROVE_ANSWER})")
+    improve.add_argument("--answer", default=None, metavar="JSON",
+                         help=f"resposta do humano ao interrupt, só com --resume "
+                              f"(default: {IMPROVE_ANSWER})")
     improve.set_defaults(func=cmd_improve, parser=improve)
+
+    replay = sub.add_parser("replay", help="atribui delta do histórico a uma mutação")
+    replay.add_argument("--mutation", default=None, metavar="ID",
+                        help="id da mutação (os ids saem no --list)")
+    replay.add_argument("--list", action="store_true",
+                        help="lista as mutações do ledger com veredito")
+    replay.add_argument("--limit", type=int, default=DEFAULT_LIMIT, metavar="N",
+                        help=f"teto de linhas lidas do ledger, nos DOIS modos "
+                             f"(default {DEFAULT_LIMIT})")
+    replay.set_defaults(func=cmd_replay, parser=replay)
+
+    doctor = sub.add_parser(
+        "doctor", help="diagnóstico local: backends, genoma, config, dados, tracing"
+    )
+    doctor.set_defaults(func=cmd_doctor, parser=doctor)
 
     bench = sub.add_parser("bench", help="mede o custo de uma operação do harness")
     bench.add_argument("what", choices=["provision"])
