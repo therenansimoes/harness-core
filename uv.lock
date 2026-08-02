@@ -408,14 +408,16 @@ wheels = [
 name = "harness-core"
 version = "0.5.0"
 source = { editable = "." }
+dependencies = [
+    { name = "langgraph" },
+    { name = "langgraph-checkpoint-sqlite" },
+]
 
 [package.optional-dependencies]
 deepagents = [
     { name = "deepagents" },
     { name = "langchain" },
     { name = "langchain-ollama" },
-    { name = "langgraph" },
-    { name = "langgraph-checkpoint-sqlite" },
 ]
 
 [package.dev-dependencies]
@@ -428,8 +430,8 @@ requires-dist = [
     { name = "deepagents", marker = "extra == 'deepagents'", specifier = "==0.7.1" },
     { name = "langchain", marker = "extra == 'deepagents'", specifier = "==1.3.14" },
     { name = "langchain-ollama", marker = "extra == 'deepagents'", specifier = "==1.1.0" },
-    { name = "langgraph", marker = "extra == 'deepagents'", specifier = "==1.2.10" },
-    { name = "langgraph-checkpoint-sqlite", marker = "extra == 'deepagents'", specifier = "==3.1.1" },
+    { name = "langgraph", specifier = "==1.2.10" },
+    { name = "langgraph-checkpoint-sqlite", specifier = "==3.1.1" },
 ]
 provides-extras = ["deepagents"]
 
