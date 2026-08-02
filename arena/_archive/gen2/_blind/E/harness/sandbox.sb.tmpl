@@ -1,0 +1,10 @@
+(version 1)
+; Seatbelt profile (macOS sandbox-exec) restricting the agent's write surface
+; and killing network access. Template: {{WRITE_DIR}} is substituted at runtime.
+(allow default)
+(deny network*)
+(deny file-write*)
+(allow file-write* (subpath "{{WRITE_DIR}}"))
+(allow file-write* (subpath "/private/tmp"))
+(allow file-write* (subpath "/tmp"))
+(allow file-write* (regex #"/dev/null$"))

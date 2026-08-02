@@ -1,0 +1,12 @@
+[
+  { "id": 1, "name": "Wireless Mouse", "category": "electronics", "price": 29.99, "stock": 12 },
+  { "id": 2, "name": "USB-C Hub", "category": "electronics", "price": 45.50, "stock": 7 },
+  { "id": 3, "name": "Mechanical Keyboard", "category": "electronics", "price": 89.00, "stock": 3 },
+  { "id": 4, "name": "Ceramic Mug", "category": "kitchen", "price": 12.00, "stock": 40 },
+  { "id": 5, "name": "French Press", "category": "kitchen", "price": 32.75, "stock": 15 },
+  { "id": 6, "name": "Cutting Board", "category": "kitchen", "price": 18.20, "stock": 22 },
+  { "id": 7, "name": "Yoga Mat", "category": "fitness", "price": 24.99, "stock": 18 },
+  { "id": 8, "name": "Dumbbell Set", "category": "fitness", "price": 65.00, "stock": 9 },
+  { "id": 9, "name": "Resistance Bands", "category": "fitness", "price": 15.30, "stock": 30 },
+  { "id": 10, "name": "Desk Lamp", "category": "electronics", "price": 22.40, "stock": 25 }
+]

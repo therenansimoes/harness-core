@@ -1,0 +1,2 @@
+{"type": "agent_turn", "model": "claude-sonnet-5", "offline_fallback": true, "usage": {"input_tokens": 33, "output_tokens": 8}, "latency_s": 0.0, "verify_pass": true, "verify_tail": "OK\n", "ts": 1785628511.448703}
+{"type": "self_improve", "before_pass_rate": 1.0, "proposal": {"max_turns": 4, "model": "claude-sonnet-5", "temperature": 0.0}, "accepted": true, "ts": 1785628511.465826}

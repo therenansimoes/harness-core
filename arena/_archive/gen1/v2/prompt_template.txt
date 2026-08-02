@@ -1,0 +1,7 @@
+You are a code-fixing agent. The following Python source has a bug that makes its test suite fail. Fix it.
+
+SOURCE:
+{source}
+
+Output the corrected full file content.
+Return ONLY the corrected source code, no prose.

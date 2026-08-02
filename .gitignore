@@ -12,3 +12,4 @@ channel/whatsapp/node_modules/
 node_modules/
 projects/*/ui/report.json
 projects/*/ui/test-results/
+test-results/

@@ -1,0 +1,132 @@
+[
+  {
+    "persona": "p1",
+    "candidato": "A",
+    "execucao": {
+      "comando": "python3 harness.py --repo /tmp/p1judge/A/bench --test-cmd \"sh run.sh\" --max-turns 8   (rerun sem --test-cmd, plumbing default, tambem testado)",
+      "saida_resumida": "{\"success\": false, \"turns\": 1, \"total_cost_usd\": 0.0, \"total_tokens\": 0}; trace.jsonl: {\"turn\":1,\"action\":{\"type\":\"done\"},\"verified\":false,\"tests_passed\":false}. offline_candidates() so enumera *.py; bench nao tem nenhum .py -> harness desiste na 1a iteracao sem propor edit algum. Pos-execucao, ./run.sh no bench ainda imprime 'FAIL category filter: ... returned 0 items (expected 4)'. Teste adversarial: adicionando test_fake.py com 'assert True' (sem tocar server.js) e rodando SEM --test-cmd, harness reporta success=true (falso positivo) mesmo com o bug real intacto.",
+      "exit_code": 1,
+      "segundos": 0.3
+    },
+    "notas": {
+      "generalidade_transplante": 4,
+      "trabalho_util_real": 0,
+      "verificacao_confiavel": 1,
+      "custo_eficiencia": 2
+    },
+    "citacao_evidencia": {
+      "generalidade_transplante": "policy.py::_candidate_files faz Path(task_dir).rglob('*.py') — bench e 100% Node.js (server.js, data.json, test/verify.js), zero .py, entao nenhuma edicao e sequer proposta. A tem --repo/--test-cmd e verify.py::_is_test_file reconhece .test.js/.spec.js (unico dos 5 com essa plumbing), mas isso nao compensa a busca de edicao restrita a Python: mesmo apontado corretamente para 'sh run.sh', trace.jsonl turn=1 action=done, verified=false.",
+      "trabalho_util_real": "sh /tmp/p1judge/A/bench/run.sh apos a execucao ainda imprime 'FAIL category filter: /api/products?category=electronics returned 0 items (expected 4)\\n1 check(s) failed.' — bug identico ao estado inicial, nenhuma linha de server.js foi tocada.",
+      "verificacao_confiavel": "Com --repo (sem --test-cmd explicito) o fallback e pytest puro. Injetando test_fake.py (assert True) no bench sem alterar server.js: harness.py imprime {\"success\": true, ...} e trace.jsonl grava verified=true, tests_passed=true — falso positivo: o gate aceitou 'verde' num projeto cujo bug real (filtro de categoria) continua quebrado.",
+      "custo_eficiencia": "trace.jsonl: cost_usd=0.0, tokens=0, wall_time_s=0.2621 (backend offline). Custo zero mas tambem entrega zero — falha rapida sem burn de recursos, porem sem nenhuma tentativa real de corrigir o defeito."
+    },
+    "veredito_veto": {
+      "aplicado": false,
+      "motivo": null
+    }
+  },
+  {
+    "persona": "p1",
+    "candidato": "B",
+    "execucao": {
+      "comando": "python3 harness.py /tmp/p1judge/B/bench --max-turns 8",
+      "saida_resumida": "{\"success\": false, \"turns\": 1, \"total_cost_usd\": 0.0, \"total_tokens\": 0}; trace.jsonl: {\"turn\":1,\"action\":{\"type\":\"done\"},\"verified\":false,\"tests_passed\":false}. verify.py::run_tests roda hardcoded [python3, -m, pytest, -q, --tb=short] no bench — nao existe test_cmd override na CLI (so 'task_dir' posicional). Pos-execucao, ./run.sh no bench continua FAIL. Teste adversarial: test_fake.py com 'assert True' faz harness reportar success=true mesmo com o bug real intacto.",
+      "exit_code": 1,
+      "segundos": 0.2
+    },
+    "notas": {
+      "generalidade_transplante": 1,
+      "trabalho_util_real": 0,
+      "verificacao_confiavel": 1,
+      "custo_eficiencia": 2
+    },
+    "citacao_evidencia": {
+      "generalidade_transplante": "harness.py so aceita 'task_dir' posicional (sem --repo/--test-cmd); verify.py linha 33: rc, out, err = safe_run([binary, '-m', 'pytest', '-q', '--tb=short'], cwd=task_dir) — hardcoded para pytest, sem forma de apontar para './run.sh' ou 'node test/verify.js'. policy.py::_candidate_files so faz Path(task_dir).glob('*.py'); bench nao tem nenhum .py.",
+      "trabalho_util_real": "sh /tmp/p1judge/B/bench/run.sh apos a execucao ainda imprime a mesma falha de filtro de categoria; server.js identico ao estado inicial (nenhuma edicao foi feita, action=done na 1a volta).",
+      "verificacao_confiavel": "Injetando /tmp/p1judge/adv/bench/test_fake.py ('def test_always_true(): assert True') sem tocar server.js: harness.py imprime {\"success\": true,...}, trace.jsonl grava verified=true, tests_passed=true — false positivo confirmado; o gate nunca consulta o criterio real da bancada (./run.sh), so pytest cego no diretorio.",
+      "custo_eficiencia": "trace.jsonl: cost_usd=0.0, tokens=0, wall_time_s=0.1765, backend=offline. Zero custo mas tambem zero trabalho util — desiste na primeira volta."
+    },
+    "veredito_veto": {
+      "aplicado": false,
+      "motivo": null
+    }
+  },
+  {
+    "persona": "p1",
+    "candidato": "C",
+    "execucao": {
+      "comando": "python3 harness.py /tmp/p1judge/C/bench --max-turns 8",
+      "saida_resumida": "{\"success\": false, \"turns\": 1, \"total_cost_usd\": 0.0, \"total_tokens\": 0}; trace.jsonl: {\"turn\":1,\"action\":{\"type\":\"done\"},\"verified\":false,\"tests_passed\":false}. Mesma arquitetura de B: verify.py roda pytest hardcoded, policy.py so busca *.py. Pos-execucao, ./run.sh no bench continua FAIL identico ao estado inicial.",
+      "exit_code": 1,
+      "segundos": 0.2
+    },
+    "notas": {
+      "generalidade_transplante": 1,
+      "trabalho_util_real": 0,
+      "verificacao_confiavel": 1,
+      "custo_eficiencia": 2
+    },
+    "citacao_evidencia": {
+      "generalidade_transplante": "verify.py linha 33 identica a B: safe_run([binary,'-m','pytest','-q','--tb=short'], cwd=task_dir), sem --test-cmd na CLI (so 'task_dir' posicional). policy.py::_candidate_files usa Path(task_dir).glob('*.py') — bench Node.js nao produz nenhum candidato de edicao.",
+      "trabalho_util_real": "sh /tmp/p1judge/C/bench/run.sh apos a execucao ainda imprime 'FAIL category filter: ... returned 0 items (expected 4)' — nenhuma alteracao em server.js.",
+      "verificacao_confiavel": "Mesmo padrao de verify.py de B (pytest hardcoded, sem qualquer conexao com o criterio real da bancada); pela identidade estrutural confirmada via diff (verify.py de C reconhecido como variante da mesma classe pytest-only), o mesmo teste adversarial de test_fake.py se aplica: qualquer pytest trivial no diretorio destrava verified=true sem o bug real ser corrigido.",
+      "custo_eficiencia": "trace.jsonl: cost_usd=0.0, tokens=0, wall_time_s=0.1493, backend=offline. Falha rapida e barata, mas sem entrega."
+    },
+    "veredito_veto": {
+      "aplicado": false,
+      "motivo": null
+    }
+  },
+  {
+    "persona": "p1",
+    "candidato": "D",
+    "execucao": {
+      "comando": "python3 harness.py /tmp/p1judge/D/bench --max-turns 8",
+      "saida_resumida": "{\"success\": false, \"turns\": 1, \"total_cost_usd\": 0.0, \"total_tokens\": 0}; trace.jsonl: {\"turn\":1,\"action\":{\"type\":\"done\"},\"verified\":false,\"tests_passed\":false}. Mesma arquitetura de B/C: verify.py roda pytest hardcoded, policy.py so busca *.py. Pos-execucao, ./run.sh no bench continua FAIL identico ao estado inicial.",
+      "exit_code": 1,
+      "segundos": 0.2
+    },
+    "notas": {
+      "generalidade_transplante": 1,
+      "trabalho_util_real": 0,
+      "verificacao_confiavel": 1,
+      "custo_eficiencia": 2
+    },
+    "citacao_evidencia": {
+      "generalidade_transplante": "verify.py linha 33 identica a B/C: safe_run([binary,'-m','pytest','-q','--tb=short'], cwd=task_dir), CLI so aceita 'task_dir' posicional. policy.py::_candidate_files usa Path(task_dir).glob('*.py') — zero candidatos no bench Node.js.",
+      "trabalho_util_real": "sh /tmp/p1judge/D/bench/run.sh apos a execucao ainda imprime a mesma falha de filtro de categoria; server.js sem alteracao.",
+      "verificacao_confiavel": "verify.py de D e a mesma classe pytest-hardcoded (confirmado por diff estrutural contra B); o mesmo ataque de test_fake.py ('assert True') destrava verified=true sem o bug real ser corrigido, pois o gate nunca executa o criterio declarado da bancada (./run.sh).",
+      "custo_eficiencia": "trace.jsonl: cost_usd=0.0, tokens=0, wall_time_s=0.1481, backend=offline. Falha rapida e barata, mas sem entrega."
+    },
+    "veredito_veto": {
+      "aplicado": false,
+      "motivo": null
+    }
+  },
+  {
+    "persona": "p1",
+    "candidato": "E",
+    "execucao": {
+      "comando": "python3 harness.py /tmp/p1judge/E/bench --max-turns 8",
+      "saida_resumida": "{\"success\": false, \"turns\": 1, \"total_cost_usd\": 0.0, \"total_tokens\": 0}; trace.jsonl: {\"turn\":1,\"action\":{\"type\":\"done\"},\"verified\":false,\"tests_passed\":false}. Mesma arquitetura de B/C/D: verify.py roda pytest hardcoded, policy.py so busca *.py. Pos-execucao, ./run.sh no bench continua FAIL identico ao estado inicial.",
+      "exit_code": 1,
+      "segundos": 0.2
+    },
+    "notas": {
+      "generalidade_transplante": 1,
+      "trabalho_util_real": 0,
+      "verificacao_confiavel": 1,
+      "custo_eficiencia": 2
+    },
+    "citacao_evidencia": {
+      "generalidade_transplante": "verify.py linha 33 identica a B/C/D: safe_run([binary,'-m','pytest','-q','--tb=short'], cwd=task_dir), CLI so aceita 'task_dir' posicional. policy.py::_candidate_files usa Path(task_dir).glob('*.py') — zero candidatos no bench Node.js.",
+      "trabalho_util_real": "sh /tmp/p1judge/E/bench/run.sh apos a execucao ainda imprime a mesma falha de filtro de categoria; server.js sem alteracao.",
+      "verificacao_confiavel": "verify.py de E e a mesma classe pytest-hardcoded (confirmado por diff estrutural contra B); o mesmo ataque de test_fake.py ('assert True') destrava verified=true sem o bug real ser corrigido, pois o gate nunca executa o criterio declarado da bancada (./run.sh).",
+      "custo_eficiencia": "trace.jsonl: cost_usd=0.0, tokens=0, wall_time_s=0.1463, backend=offline. Falha rapida e barata, mas sem entrega."
+    },
+    "veredito_veto": {
+      "aplicado": false,
+      "motivo": null
+    }
+  }
+]

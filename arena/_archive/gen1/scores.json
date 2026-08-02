@@ -1,0 +1,71 @@
+{
+  "generation": 1,
+  "rubric_version": 1,
+  "deadline_s": 300,
+  "blind_map": {"A": "v4", "B": "v1", "C": "v5", "D": "v3", "E": "v2"},
+  "judges": ["arquiteto", "cetico_qa", "produto", "seguranca_eficiencia"],
+  "notes_on_process": [
+    "Cegueira vazou: _blind usou symlink e `ls -la` revela o alvo. Juiz de seguranca reportou e declarou ter descartado. Corrigido em blind.sh (copia real) para gen2.",
+    "Prazo de 300s nao pegou em ninguem: todos sairam entre 78s e 143s com exit_code 0. Sonda subutilizada.",
+    "Nenhum veto aplicado. Duas quase-violacoes viraram penalidade e afiacao de regra (ver rubric_v2_changes)."
+  ],
+  "criteria_weights": {
+    "progresso": 20, "arquitetura": 15, "verificabilidade": 15,
+    "utilidade": 10, "seguranca_eficiencia": 10, "deterministico": 30
+  },
+  "variants": {
+    "v3": {
+      "blind": "D", "rank": 1, "final": 78.75,
+      "banca": {"progresso_mediana": 7.25, "arquitetura": 7.5, "verificabilidade": 7.0, "utilidade": 7.0, "seguranca_eficiencia": 6.5, "subtotal": 49.75},
+      "deterministico": {"executa": 12, "teste_verde": 8, "volume": 4.5, "eficiencia": 4.5, "penalidade": 0, "subtotal": 29},
+      "telemetria": {"custo_usd": 0.813, "turnos": 21, "wall_s": 142, "arquivos": 10, "linhas": 443},
+      "veredito": "Unico com rejeicao de gate real gravada no artefato (self_improve_log.jsonl) com rollback. Unico que muta o proprio codigo-fonte, nao um JSON. Unico que coloca o verificador sob a invariante de safety. Fixture entregue quebrada e reproduzivel.",
+      "furos": ["guard_path usa abspath, nao realpath: escape por symlink comprovado", "guard_command e denylist de substring sobre argv ja montado: nao cobre `python3 -c`", "agente le a dica no comentario `# BUG: should be a + b`", "apply_change por str.replace, uma unica mutacao possivel"]
+    },
+    "v1": {
+      "blind": "B", "rank": 2, "final": 78.5,
+      "banca": {"progresso_mediana": 7.5, "arquitetura": 8.0, "verificabilidade": 6.0, "utilidade": 6.5, "seguranca_eficiencia": 7.0, "subtotal": 49.5},
+      "deterministico": {"executa": 12, "teste_verde": 8, "volume": 5, "eficiencia": 4, "penalidade": 0, "subtotal": 29},
+      "telemetria": {"custo_usd": 0.841, "turnos": 22, "wall_s": 143, "arquivos": 18, "linhas": 458},
+      "veredito": "Melhor arquitetura do lote. Unico gate hermetico: mede baseline e candidato em copytree para tempdir, entao a medicao nunca contamina a fixture. policy.py plugavel por protocolo de acao JSON. check_path com Path.resolve resiste a symlink.",
+      "furos": ["propose_change tem ponto fixo: 6 execucoes, 6 aceites de mudanca nula, zero rejeicoes", "cost_usd/tokens no schema do trace e nenhum chamador preenche: sempre 0.0", "check_command e codigo morto", "`import trace` sombreia modulo da stdlib", "verify.py hardcoda python3 em vez de sys.executable"]
+    },
+    "v2": {
+      "blind": "E", "rank": 3, "final": 65.5,
+      "banca": {"progresso_mediana": 7.0, "arquitetura": 6.0, "verificabilidade": 5.0, "utilidade": 6.0, "seguranca_eficiencia": 6.0, "subtotal": 42.5},
+      "deterministico": {"executa": 8, "teste_verde": 7, "volume": 3.5, "eficiencia": 4.5, "penalidade": 0, "subtotal": 23},
+      "telemetria": {"custo_usd": 0.731, "turnos": 17, "wall_s": 115, "arquivos": 9, "linhas": 354},
+      "veredito": "Maior cobertura de marcos por linha escrita (212 linhas, um arquivo, zero deps). Reset de fixture dentro do medidor. Melhor trace do lote: tokens, backend, wall e sha1 da saida do verificador.",
+      "furos": ["`python3 harness.py run`, o primeiro comando do README, falha e CORROMPE a workspace escrevendo '# no fix found' sobre o fonte, saindo com rc=0", "gate aceita empate (>=/<=) e o candidato ja esta no template: no-op aprovado", "stub casa padrao no proprio prompt que a auto-melhoria edita: acoplamento circular"]
+    },
+    "v5": {
+      "blind": "C", "rank": 4, "final": 50.5,
+      "banca": {"progresso_mediana": 5.5, "arquitetura": 5.0, "verificabilidade": 4.0, "utilidade": 4.5, "seguranca_eficiencia": 5.0, "subtotal": 34.0},
+      "deterministico": {"executa": 12, "teste_verde": 4, "volume": 4, "eficiencia": 2.5, "penalidade": -6, "subtotal": 16.5},
+      "telemetria": {"custo_usd": 0.862, "turnos": 25, "wall_s": 136, "arquivos": 12, "linhas": 361},
+      "veredito": "Motor real: o juiz cetico reverteu os bugs a mao e o mecanismo discriminou corretamente. Unica tentativa de politica aprendida do trace (ordem de estrategias por historico de vitorias).",
+      "furos": ["fixture entregue JA CORRIGIDA: 9/9 linhas do trace com changed_file:false e passed:true. Verde sem trabalho.", "propose_order travado em no-op permanente porque credita vitorias a quem nao mudou nada", "nenhum caminho de LLM: o agente sao tres str.replace", "mais caro da geracao e 4o lugar"],
+      "penalidade_motivo": "NOTES cita o trace.jsonl como evidencia de '3 tasks solved'; o trace entregue nao contem nenhum registro de estrategia que tenha alterado arquivo. Executou de verdade, entao nao e fabricacao: e leitura errada do proprio trace. Penalidade -6, sem veto."
+    },
+    "v4": {
+      "blind": "A", "rank": 5, "final": 35.5,
+      "banca": {"progresso_mediana": 4.0, "arquitetura": 3.0, "verificabilidade": 3.0, "utilidade": 3.0, "seguranca_eficiencia": 3.5, "subtotal": 23.5},
+      "deterministico": {"executa": 12, "teste_verde": 2, "volume": 3, "eficiencia": 3, "penalidade": -8, "subtotal": 12},
+      "telemetria": {"custo_usd": 0.567, "turnos": 12, "wall_s": 78, "arquivos": 7, "linhas": 302},
+      "veredito": "Nao existe loop: main() chama agent_turn uma vez e max_turns nunca e lido. O agente offline e a resposta literal da tarefa. O gate re-roda o oraculo sobre um sandbox que a proposta nao toca: causalmente incapaz de rejeitar.",
+      "furos": ["teste passa mesmo com sandbox/solution.py DELETADO (comprovado pelo juiz cetico)", "subprocess sem timeout executando codigo do modelo: unico da geracao", "escape de sandbox por symlink (abspath nao resolve)", "save_config contorna o proprio safe_write com um comentario justificando"],
+      "penalidade_motivo": "README.md:23 afirma 'Reject path is exercised too'; NOTES.md:34 diz 'No real gate rejection has been observed'. O NOTES esta honesto, o README mente. A regra v1 so previa veto para NOTES contradizendo o artefato. Penalidade -8 e regra ampliada na v2."
+    }
+  },
+  "dispersao": {"min": 35.5, "max": 78.75, "amplitude": 43.25, "discrimina": true},
+  "sobreviventes": ["v3", "v1", "v2"],
+  "empate_tecnico": "v3 (78.75) e v1 (78.5) estao dentro do ruido. Ambos sao pais; crossover entre eles e o operador obvio da gen2.",
+  "custo_geracao_usd": {"construtores": 3.81, "banca": "4 juizes"},
+  "rubric_v2_changes": [
+    "Veto passa a cobrir QUALQUER artefato publicado (README, docstring), nao so NOTES.md.",
+    "Evidencia citada precisa existir no artefato: citar um trace que nao sustenta a alegacao vira item deterministico verificavel.",
+    "Novo criterio deterministico: o artefato contem uma REJEICAO gravada produzida por proposta genuinamente pior.",
+    "Novo criterio deterministico: fixture entregue no estado quebrado; primeiro comando do README faz trabalho visivel e nao corrompe estado.",
+    "Gate que aceita empate deixa de contar como gate."
+  ]
+}
