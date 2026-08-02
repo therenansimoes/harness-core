@@ -224,9 +224,12 @@ a métrica de autonomia mora fora do que ela mede.
 `harness improve` sem `--unit` usa `benchmarks/held_in/*/unit.toml`; enquanto
 esse diretório não tiver unidades no formato novo, passe `--unit` (repetível).
 
-`harness replay` (atribuição de delta por mutação) e `harness doctor`
-(preflight de todos os backends + tamper + tracing desligado) chegam em PR-10,
-num PR paralelo a este — por isso não têm exemplo aqui.
+`harness replay --list` mostra as mutações julgadas; `harness replay
+--mutation <id>` imprime o delta atribuído com intervalo de Wilson por janela
+e nomeia os *confounders* (outras mutações KEEP no meio — atribuição honesta
+diz o que não consegue separar). `harness doctor` roda o diagnóstico completo:
+preflight de todos os backends, genoma/tamper, tracing desligado, configs
+parseáveis.
 
 ## Régua e genoma
 
