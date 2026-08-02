@@ -45,6 +45,7 @@ import kpi  # noqa: E402
 ROOT = Path(__file__).parent.resolve()
 PROJECTS_ROOT = Path(os.environ.get("HARNESS_PROJECTS_ROOT", ROOT / "projects"))
 WS_ROOT = Path(os.environ.get("HARNESS_WS_ROOT", ROOT / ".harness_ws"))
+WS_IGNORE = shutil.ignore_patterns("node_modules", ".git", "__pycache__", "dist", ".astro", ".vercel", "*.pyc")
 
 QUEUE_HEADER = ["id", "state", "priority", "created", "claimed_at", "prompt_file", "verify", "notes"]
 # Mesmo schema do results.tsv global (run_task.py); cada projeto grava no SEU
@@ -232,7 +233,7 @@ def _execute(proj_dir: Path, project_name: str, row: dict, all_rows: list[dict],
     ws = WS_ROOT / f"{project_name}_{unit_id}_{uuid.uuid4().hex[:8]}"
     ws.mkdir(parents=True, exist_ok=True)
     if work_path.is_dir():
-        shutil.copytree(work_path, ws, dirs_exist_ok=True)
+        shutil.copytree(work_path, ws, dirs_exist_ok=True, ignore=WS_IGNORE)
 
     prompt_path = proj_dir / row["prompt_file"]
     prompt = prompt_path.read_text() if prompt_path.exists() else ""
@@ -280,7 +281,7 @@ def _execute(proj_dir: Path, project_name: str, row: dict, all_rows: list[dict],
     if success:
         # resultado só é aplicado de volta se verify passou (aceite 7: se
         # falhar, work_path fica intacto — só descartamos o ws).
-        shutil.copytree(ws, work_path, dirs_exist_ok=True)
+        shutil.copytree(ws, work_path, dirs_exist_ok=True, ignore=WS_IGNORE)
 
     _append_result(
         proj_dir,
