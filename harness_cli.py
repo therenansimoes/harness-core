@@ -253,6 +253,8 @@ def cmd_verify(a: argparse.Namespace) -> int:
             print(f"  - {viol}")
     if v["new_unregistered_checks"]:
         print(f"checks novos não registrados: {', '.join(v['new_unregistered_checks'])}")
+    if v["ui_vacuous"]:
+        print(f"ui_gate:vacuous — {v['ui_vacuous_reason']} (conta como reprovação)")
     print(f"delivery_success: {v['delivery_success']}")
     return 0 if v["delivery_success"] == 1 else 1
 
@@ -313,6 +315,11 @@ def cmd_ui_test(a: argparse.Namespace) -> int:
     if not result["ran"]:
         print(f"UI não rodou: {result['reason']}")
         return 2
+    if result["total"] == 0:
+        # Suite que roda e não coleta teste nenhum sairia com 0/0 == verde.
+        # Vacuous pass: sem veredito não há aprovação.
+        print("ui_gate:vacuous — suite de UI rodou e coletou 0 testes (0/0 não é verde)")
+        return 2
     for test in result["tests"]:
         status = "PASS" if test["ok"] else "FAIL"
         motivo = f" — {test['reason']}" if test["reason"] else ""
@@ -326,6 +333,11 @@ def cmd_ui_baseline(a: argparse.Namespace) -> int:
     result = delivery.run_ui_suite(project, update_baseline=True)
     if not result["ran"]:
         print(f"UI não rodou: {result['reason']}")
+        return 2
+    if result["total"] == 0:
+        # Registrar "baseline atualizada" com 0 checks grava um ato de governança
+        # que não cobre nada — e depois todo mundo lê isso como baseline válida.
+        print("ui_gate:vacuous — 0 checks coletados; baseline NÃO foi registrada")
         return 2
     project_name = project.name
     detail = a.note or "atualização manual de baseline"

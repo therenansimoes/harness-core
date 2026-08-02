@@ -322,6 +322,19 @@ def verify(project: Path, session_id: str, skip_ui: bool = False) -> dict:
     acc_ok = sum(1 for r in acc if r["ok"])
     ui_ok = ui["ran"] and ui["passed"] == ui["total"] and ui["total"] > 0
     ui_falhou = ui["ran"] and not ui_ok
+    # VACUOUS PASS: o gate estava LIGADO e mesmo assim não produziu veredito —
+    # não rodou (npx ausente, timeout, saída ilegível) ou rodou e coletou 0
+    # testes. Ausência de falha não é verde: senão basta quebrar o Playwright
+    # para toda entrega visual ficar verde sozinha. Suite ligada que não julga
+    # nada é REPROVAÇÃO explícita, com nota própria.
+    ui_vacuous = ui_on and (not ui["ran"] or ui["total"] == 0)
+    ui_vacuous_reason = ""
+    if ui_vacuous:
+        ui_vacuous_reason = (
+            ui["reason"] or "suite de UI não rodou"
+            if not ui["ran"]
+            else "suite de UI rodou e coletou 0 testes"
+        )
 
     total = len(reg) + len(acc) + (ui["total"] if ui["ran"] else 0)
     passed = reg_ok + acc_ok + (ui["passed"] if ui["ran"] else 0)
@@ -335,6 +348,8 @@ def verify(project: Path, session_id: str, skip_ui: bool = False) -> dict:
         "ui_enabled": ui_on,
         "ui_ok": ui_ok,
         "ui_failed": ui_falhou,
+        "ui_vacuous": ui_vacuous,
+        "ui_vacuous_reason": ui_vacuous_reason,
         "regression_passed": reg_ok,
         "regression_total": len(reg),
         "acceptance_passed": acc_ok,
@@ -349,11 +364,15 @@ def verify(project: Path, session_id: str, skip_ui: bool = False) -> dict:
         # regression apagado é falha mesmo que todo o resto passe — senão o
         # caminho mais fácil para "ficar verde" seria apagar o check.
         # UI agora conta: se a suite rodou e falhou, não há entrega bem-sucedida.
+        # E gate ligado que não julgou nada (ui_vacuous) reprova igual — verde
+        # silencioso por ausência de teste é a falha que este campo existe para
+        # não cometer.
         "delivery_success": int(
             not violacoes
             and reg_ok == len(reg)
             and acc_ok == len(acc)
             and not ui_falhou
+            and not ui_vacuous
             and total > 0
         ),
     }
@@ -403,6 +422,10 @@ def needs_human_ui(project: Path, session_id: str, v: dict, ui_declared: bool) -
         # Falha de UI é ambígua: pode ser regressão real ou mudança de layout
         # intencional que só precisa de baseline nova. A máquina não distingue.
         return True, "suite de UI falhou — bug real ou baseline desatualizada?"
+    if v.get("ui_vacuous"):
+        # Gate ligado sem veredito: a máquina não tem o que decidir, e fingir
+        # verde seria pior do que chamar o dono.
+        return True, f"ui_gate:vacuous — {v.get('ui_vacuous_reason') or 'gate de UI não julgou nada'}"
     if ui_declared and not v["ui"]["ran"]:
         return True, f"UI declarada mas não verificável: {v['ui']['reason']}"
     return False, ""
@@ -418,6 +441,11 @@ def decide_next_action(v: dict, abertos: list[str], needs_human: bool,
         return "continue_delivery"
     if v["acceptance_passed"] < v["acceptance_total"]:
         return "continue_delivery"
+    if v.get("ui_vacuous"):
+        # Não é trabalho de entrega que falta: é o gate que não julgou. Quem
+        # resolve isso é o dono (instalar/consertar o Playwright, escrever spec
+        # de UI), não mais uma volta do worker.
+        return "await_renan"
     if v["ui_failed"] and not needs_human:
         return "continue_delivery"
     if needs_human or abertos:
@@ -510,6 +538,8 @@ def post_work(project: Path, session_id: str, actor: str = "cli") -> dict:
     issues += [f"regression: {r['name']} — {r['reason']}" for r in v["regression"] if not r["ok"]]
     issues += [f"acceptance: {r['name']} — {r['reason']}" for r in v["acceptance"] if not r["ok"]]
     issues += [f"ui: {t['name']} — {t['reason']}" for t in v["ui"]["tests"] if not t["ok"]]
+    if v["ui_vacuous"]:
+        issues.append(f"ui_gate:vacuous — {v['ui_vacuous_reason']}")
     issues += [f"brief não marcado: {b}" for b in abertos]
     if human:
         issues.append(f"needs_human_ui_review: {motivo_human}")
@@ -602,7 +632,7 @@ Este é o eixo de ENTREGA. Não se mistura com o score de laboratório do harnes
 
 ## UI automática ({v['ui_passed']}/{v['ui_total']}) — Playwright
 
-{("_Não rodou: " + v['ui']['reason'] + "_") if not v['ui']['ran'] else ""}
+{("**ui_gate:vacuous** — gate ligado sem veredito: " + v['ui_vacuous_reason'] + ". Conta como REPROVAÇÃO, não como verde.") if v.get('ui_vacuous') else (("_Não rodou: " + v['ui']['reason'] + "_") if not v['ui']['ran'] else "")}
 
 | | check | motivo |
 |---|---|---|
