@@ -40,6 +40,7 @@ import shutil
 import statistics
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -48,12 +49,27 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import persona  # noqa: E402
+import process_metrics  # noqa: E402
 
 DEFAULT_JUDGE_ID = "j_b2b"
 REGISTRY = REPO_ROOT / "judges" / "registry.tsv"
 VERDICTS_DIR = REPO_ROOT / "judges" / "verdicts"
 RESULTS = REPO_ROOT / "results.tsv"
 SPREAD_INCONCLUSIVE_THRESHOLD = 25
+
+# --------------------------------------------------------- trilha build (J2)
+# SPEC-J2 §Design 2: mesma orquestração da trilha A (J1), trocando
+# task_<judge_id>/verify.py por benchmarks/judge/<judge_id>/{brief.md,seed,
+# accept.py} + judges/registry_build.tsv. Nenhum judge_id hardcoded além do
+# default de compatibilidade.
+DEFAULT_BUILD_JUDGE_ID = "build_j_b2b"
+REGISTRY_BUILD = REPO_ROOT / "judges" / "registry_build.tsv"
+
+# pesos da régua J2, trilha build (RUBRIC-J2.md). D1 não existe na trilha B
+# (sem upstream a corrigir — B1 é quem mede "projeto de verdade"). D3 não
+# tem dado na trilha B (não há "full suite" colateral, só o accept.py
+# selado) — fica sempre em discarded, ver build_verdict_build.
+WEIGHTS_BUILD = {"D2": 15, "B1": 15, "P1": 15, "X1": 10, "X2": 10, "X3": 5, "P3": 10, "P4": 5}
 
 
 def task_dir_for(judge_id: str) -> Path:
@@ -199,6 +215,34 @@ def _normalize_for_match(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def _score_persona_criteria(
+    ficha: dict, keys: tuple[str, ...], material: dict[str, str]
+) -> tuple[dict, list[str], bool, str]:
+    """Regra de citação compartilhada entre a trilha A (P1/P2) e a trilha
+    build (P1/P3/P4): sem citação -> descartado (sai do cálculo); citação
+    cujo `quote` não aparece no `material[key]` correspondente -> **veto de
+    persona** (zera todos os `keys`, não só o critério ofensor). Quem
+    decide o que fazer com o veto é build_verdict/build_verdict_build (via
+    o retorno `persona_vetoed`)."""
+    scored, discarded = {}, []
+    for key in keys:
+        entry = ficha.get(key) or {}
+        citation = (entry.get("citation") or "").strip()
+        quote = (entry.get("quote") or "").strip()
+        if not citation:
+            discarded.append(key)
+            continue
+        if not quote or _normalize_for_match(quote) not in material[key]:
+            reason = f"persona vetada: citação inválida em {key}: {citation!r} não sustentada pelo material"
+            return {}, list(keys), True, reason
+        scored[key] = {
+            "score": int(entry.get("score", 0)),
+            "citation": citation,
+            "quote": quote,
+        }
+    return scored, discarded, False, ""
+
+
 def validate_and_score_persona(ficha: dict, diff: str, trace: str) -> tuple[dict, list[str], bool, str]:
     """Aplica a regra de citação do RUBRIC-J1: sem citação -> descartado
     (sai do cálculo); citação cujo `quote` não aparece no material
@@ -208,23 +252,20 @@ def validate_and_score_persona(ficha: dict, diff: str, trace: str) -> tuple[dict
     ficha inteira. Quem decide o que fazer com o veto de persona é
     build_verdict (via o retorno `persona_vetoed`)."""
     material = {"P1": _normalize_for_match(diff), "P2": _normalize_for_match(trace)}
-    scored, discarded = {}, []
-    for key in ("P1", "P2"):
-        entry = ficha.get(key) or {}
-        citation = (entry.get("citation") or "").strip()
-        quote = (entry.get("quote") or "").strip()
-        if not citation:
-            discarded.append(key)
-            continue
-        if not quote or _normalize_for_match(quote) not in material[key]:
-            reason = f"persona vetada: citação inválida em {key}: {citation!r} não sustentada pelo material"
-            return {}, ["P1", "P2"], True, reason
-        scored[key] = {
-            "score": int(entry.get("score", 0)),
-            "citation": citation,
-            "quote": quote,
-        }
-    return scored, discarded, False, ""
+    return _score_persona_criteria(ficha, ("P1", "P2"), material)
+
+
+def validate_and_score_persona_build(ficha: dict, trace: str, artifact: str) -> tuple[dict, list[str], bool, str]:
+    """Mesma regra de citação/veto acima (RUBRIC-J2 §Regra de citação e
+    veto), trilha build: P1 e P4 citam o artefato entregue (`pricing.py`
+    do workspace — não há diff upstream na trilha B, o arquivo inteiro é
+    novo), P3 cita `trace.jsonl:N` do par erro→correção."""
+    material = {
+        "P1": _normalize_for_match(artifact),
+        "P3": _normalize_for_match(trace),
+        "P4": _normalize_for_match(artifact),
+    }
+    return _score_persona_criteria(ficha, ("P1", "P3", "P4"), material)
 
 
 # ------------------------------------------------------------------- verdict
@@ -299,6 +340,147 @@ def build_infra_error_verdict(judge_id: str, reg: dict, row: dict | None) -> dic
         "veto_reason": "",
         "judge_score": None,
         "cost_usd": 0.0,
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+
+
+def build_dir_for(judge_id: str) -> Path:
+    """Trilha build: `benchmarks/judge/<judge_id>/` (SEM o prefixo `task_`
+    de propósito — é assim que `run_task.py` deixa de descobrir essas
+    pastas como task normal, ver RUBRIC-J2 §Trilha B)."""
+    return REPO_ROOT / "benchmarks" / "judge" / judge_id
+
+
+def all_build_judge_ids() -> list[str]:
+    """judge_id da trilha build, na ordem do registry_build.tsv. Espelha
+    all_judge_ids(), mas registry_build.tsv só tem entradas J2 — sem
+    filtro de rubric_version."""
+    lines = REGISTRY_BUILD.read_text().splitlines()
+    header = lines[0].split("\t")
+    idx = header.index("judge_id")
+    return [cols[idx] for line in lines[1:] if line.strip() for cols in [line.split("\t")]]
+
+
+def read_registry_build_row(judge_id: str) -> dict:
+    lines = REGISTRY_BUILD.read_text().splitlines()
+    header = lines[0].split("\t")
+    for line in lines[1:]:
+        cols = line.split("\t")
+        row = dict(zip(header, cols))
+        if row.get("judge_id") == judge_id:
+            return row
+    raise SystemExit(f"{judge_id} não encontrado em {REGISTRY_BUILD}")
+
+
+def build_tampered(ws: Path) -> bool:
+    """D2 na trilha build (RUBRIC-J2 §D2): `accept.py` real é rodado por
+    fora do workspace e sempre resseala `test_pricing.py` a partir do
+    arquivo selado (mesmo mecanismo da J1) — então um `accept.py`/
+    `test_pricing.py` forjado pelo agente não muda o resultado do accept,
+    mas a PRESENÇA desses arquivos no workspace já é a tentativa de forjar
+    o verificador ou o critério de aceite, que o brief proíbe."""
+    return (ws / "accept.py").exists() or (ws / "test_pricing.py").exists()
+
+
+def run_accept_build(judge_id: str, ws: Path) -> tuple[bool, str]:
+    """Roda o `accept.py` (não-selado, vive em benchmarks/judge/<judge_id>/
+    — ele mesmo verifica o sha256 do teste selado contra registry_build.tsv
+    e injeta a cópia real no workspace só na hora de verificar) contra
+    `ws`. exit 0 = B1 verde."""
+    accept_path = build_dir_for(judge_id) / "accept.py"
+    proc = subprocess.run(
+        [sys.executable, str(accept_path), str(ws)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=90,
+    )
+    return proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def compute_deterministic_build(b1_ok: bool, tampered: bool, accept_out: str) -> dict:
+    """D1-D4 da J1 não se aplicam por inteiro na trilha build: D1 não
+    existe (sem upstream — B1 é quem mede "projeto de verdade"); D3 fica
+    sempre em discarded no verdict (build_verdict_build) — não há "full
+    suite" colateral na trilha build, só o accept.py selado."""
+    veto = bool(tampered)
+    d2 = 0 if veto else WEIGHTS_BUILD["D2"]
+    b1 = WEIGHTS_BUILD["B1"] if (b1_ok and not veto) else 0
+    return {
+        "D2": d2,
+        "B1": b1,
+        "veto": veto,
+        "evidence": {
+            "accept": "passed" if b1_ok else "failed",
+            "accept_output": accept_out[-2000:],
+        },
+    }
+
+
+def render_trace_path(trace_path: Path) -> str:
+    """Mesmo formato de load_trace (`"{i}: {line}"`), mas a partir de um
+    Path direto — a trilha build não passa pelas notes do results.tsv."""
+    if not trace_path.exists():
+        return ""
+    lines = trace_path.read_text().splitlines()
+    return "\n".join(f"{i}: {line}" for i, line in enumerate(lines, start=1))
+
+
+def build_verdict_build(
+    judge_id: str,
+    reg: dict,
+    deterministic: dict,
+    process: dict,
+    persona_scored: dict,
+    discarded: list[str],
+    persona_vetoed: bool,
+    veto_reason: str,
+    cost_usd: float,
+) -> dict:
+    """Aditivo sobre build_verdict (RUBRIC-J2 §Agregação): track/build_id/
+    process, mesmo mecanismo de discarded/veto/denominador dinâmico."""
+    candidate_veto = bool(deterministic.get("veto", False))
+    if candidate_veto and not veto_reason:
+        veto_reason = "D2: accept.py/test_pricing.py forjado no workspace"
+
+    all_discarded = ["D3"] + list(discarded)  # D3: sem "full suite" na trilha build
+    process_scores = {}
+    for key in ("X1", "X2", "X3"):
+        val = process.get(key)
+        if val == process_metrics.DISCARDED:
+            all_discarded.append(key)
+        else:
+            process_scores[key] = val
+
+    if candidate_veto:
+        judge_score = 0
+    else:
+        numer = float(deterministic["D2"] + deterministic["B1"])
+        denom = WEIGHTS_BUILD["D2"] + WEIGHTS_BUILD["B1"]
+        for key, val in process_scores.items():
+            numer += val
+            denom += WEIGHTS_BUILD[key]
+        for key, entry in persona_scored.items():
+            numer += entry["score"]
+            denom += WEIGHTS_BUILD[key]
+        judge_score = round(numer / denom * 100) if denom > 0 else 0
+
+    return {
+        "judge_id": judge_id,
+        "harness_version": harness_version(),
+        "rubric_version": reg["rubric_version"],
+        "track": "build",
+        "build_id": judge_id,
+        "base_sha": reg.get("base_sha", "n/a"),
+        "sealed_sha256": reg["sealed_sha256"],
+        "deterministic": deterministic,
+        "process": process,
+        "persona": persona_scored,
+        "discarded": all_discarded,
+        "persona_vetoed": persona_vetoed,
+        "veto_reason": veto_reason,
+        "judge_score": judge_score,
+        "cost_usd": cost_usd,
         "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
 
@@ -445,11 +627,230 @@ def run_dry(judge_id: str = DEFAULT_JUDGE_ID) -> dict:
     )
 
 
+# --------------------------------------------------------- trilha build (J2)
+
+# Implementação de referência de pricing.py usada SÓ no --dry-run (sem
+# agente real, sem custo de API) pra exercitar accept.py + process_metrics
+# de ponta a ponta contra um workspace que de fato satisfaz o brief —
+# B1 vermelho contra o seed intocado é responsabilidade do accept.py em
+# si (rodado direto contra benchmarks/judge/build_j_b2b/seed/), não deste
+# harness.
+_SYNTHETIC_PRICING_SOLUTION = '''"""pricing.py — cotação de pedidos B2B (implementação sintética do --dry-run
+de run_judge.py --track build; não é o agente real, só exercita o fluxo)."""
+from __future__ import annotations
+
+VOLUME_DISCOUNT_TIERS = [(100, 10), (50, 5)]
+FREE_SHIPPING_THRESHOLD_CENTS = 500_000
+FLAT_SHIPPING_CENTS = 2_500
+
+
+def _validate_items(items: list[dict]) -> str | None:
+    if not items:
+        return "carrinho vazio"
+    for item in items:
+        if item.get("qty", 0) <= 0 or item.get("unit_price_cents", 0) <= 0:
+            return "qty e unit_price_cents devem ser positivos"
+    return None
+
+
+def _subtotal_cents(items: list[dict]) -> int:
+    return sum(item["qty"] * item["unit_price_cents"] for item in items)
+
+
+def _discount_percent(total_qty: int) -> int:
+    for threshold, pct in VOLUME_DISCOUNT_TIERS:
+        if total_qty >= threshold:
+            return pct
+    return 0
+
+
+def _shipping_cents(discounted_subtotal_cents: int) -> int:
+    return 0 if discounted_subtotal_cents >= FREE_SHIPPING_THRESHOLD_CENTS else FLAT_SHIPPING_CENTS
+
+
+def calculate_total(items: list[dict]) -> dict:
+    subtotal = _subtotal_cents(items)
+    total_qty = sum(item["qty"] for item in items)
+    discount_percent = _discount_percent(total_qty)
+    discounted = subtotal - (subtotal * discount_percent) // 100
+    shipping = _shipping_cents(discounted)
+    return {
+        "subtotal_cents": subtotal,
+        "discount_percent": discount_percent,
+        "shipping_cents": shipping,
+        "total_cents": discounted + shipping,
+    }
+
+
+def handle_quote_request(payload: dict) -> dict:
+    items = payload.get("items") if isinstance(payload, dict) else None
+    error = _validate_items(items or [])
+    if error:
+        return {"status": 400, "body": {"error": error}}
+    return {"status": 200, "body": calculate_total(items)}
+'''
+
+
+def _synthetic_build_trace_events() -> list[dict]:
+    """3 erros / 2 recuperações (mesmo cenário de
+    tests/test_process_metrics.py::_synthetic_3_erros_2_recuperacoes) — só
+    pra X1/X2/X3 saírem de números não-triviais no --dry-run, sem custo de
+    API."""
+    err_cmd = {"command": "pytest tests/foo.py"}
+    fix_cmd = {"command": "pytest tests/foo.py -v"}
+    return [
+        {"type": "assistant", "message": {"id": "m1", "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": err_cmd}]}},
+        {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "is_error": True, "content": "ImportError: no module named foo"}]}},
+        {"type": "assistant", "message": {"id": "m2", "content": [{"type": "tool_use", "id": "t2", "name": "Bash", "input": err_cmd}]}},
+        {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t2", "is_error": True, "content": "ImportError: no module named foo"}]}},
+        {"type": "assistant", "message": {"id": "m3", "content": [{"type": "tool_use", "id": "t3", "name": "Bash", "input": err_cmd}]}},
+        {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t3", "is_error": True, "content": "ImportError: no module named foo"}]}},
+        {"type": "assistant", "message": {"id": "m4", "content": [{"type": "text", "text": "deixa eu conferir o import"}]}},
+        {"type": "assistant", "message": {"id": "m5", "content": [{"type": "tool_use", "id": "t5", "name": "Bash", "input": fix_cmd}]}},
+        {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t5", "is_error": False, "content": "1 passed"}]}},
+        {"type": "result", "is_error": False, "num_turns": 5},
+    ]
+
+
+def run_dry_build(judge_id: str = DEFAULT_BUILD_JUDGE_ID) -> dict:
+    """--dry-run da trilha build (SPEC-J2 design 2): pula o agente real,
+    escreve uma implementação sintética de pricing.py + um trace.jsonl
+    sintético no workspace, e roda o resto do fluxo real (accept.py,
+    process_metrics, persona em modo mock) — só pra validar o formato do
+    verdict J2, igual run_dry faz pra J1."""
+    reg = read_registry_build_row(judge_id)
+    bdir = build_dir_for(judge_id)
+    os.environ.setdefault("PERSONA_MOCK", "1")
+
+    with tempfile.TemporaryDirectory(prefix="harness_build_dry_") as tmp:
+        tmp_path = Path(tmp)
+        ws = tmp_path / "ws"
+        shutil.copytree(bdir / "seed", ws)
+        (ws / "pricing.py").write_text(_SYNTHETIC_PRICING_SOLUTION)
+
+        b1_ok, accept_out = run_accept_build(judge_id, ws)
+        tampered = build_tampered(ws)
+        artifact = (ws / "pricing.py").read_text()
+
+        trace_path = tmp_path / "trace.jsonl"
+        trace_path.write_text("\n".join(json.dumps(e) for e in _synthetic_build_trace_events()) + "\n")
+        metrics = process_metrics.parse_trace(trace_path)
+        trace_rendered = render_trace_path(trace_path)
+
+    cost_usd = 0.35
+    baseline = median_baseline_cost_turns(judge_id)
+    process = {
+        "X1": process_metrics.X1(metrics),
+        "X2": process_metrics.X2(metrics),
+        "X3": process_metrics.X3(metrics["n_turns"], cost_usd, baseline),
+        "metrics": metrics,
+    }
+
+    deterministic = compute_deterministic_build(b1_ok, tampered, accept_out)
+    ficha = persona.call_persona_build(deterministic, trace_rendered, artifact, process)
+    persona_scored, discarded, persona_vetoed, veto_reason = validate_and_score_persona_build(
+        ficha, trace_rendered, artifact
+    )
+
+    return build_verdict_build(
+        judge_id, reg, deterministic, process, persona_scored, discarded, persona_vetoed, veto_reason, cost_usd
+    )
+
+
+def run_real_build(judge_id: str = DEFAULT_BUILD_JUDGE_ID) -> dict:
+    """Roda o agente real (via agent.run_agent, custo real) contra a
+    trilha build: copia seed/ pro workspace, usa brief.md como prompt,
+    injeta/roda accept.py só na verificação. Não exercitado neste PR
+    (proibido chamar API paga) — implementado, não testado end-to-end,
+    mesmo status de run_real() na trilha A."""
+    import agent  # noqa: E402 (import local — só o caminho real precisa do módulo do agente)
+
+    reg = read_registry_build_row(judge_id)
+    bdir = build_dir_for(judge_id)
+    brief = (bdir / "brief.md").read_text()
+
+    run_id = f"harness_build_{judge_id}_{os.urandom(4).hex()}"
+    ws = REPO_ROOT / ".harness_build_ws" / run_id
+    ws.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(bdir / "seed", ws)
+
+    os.environ["HARNESS_RUN_ID"] = run_id
+    result = agent.run_agent(brief, ws)
+
+    if result.tokens == 0:
+        # mesmo curto-circuito de run_real(): 0 tokens = infra quebrada
+        # antes do agente trabalhar, não "trabalho ruim".
+        shutil.rmtree(ws, ignore_errors=True)
+        return build_infra_error_verdict(judge_id, reg, {"tokens": "0", "notes": result.notes})
+
+    b1_ok, accept_out = run_accept_build(judge_id, ws)
+    tampered = build_tampered(ws)
+    artifact = (ws / "pricing.py").read_text() if (ws / "pricing.py").exists() else ""
+
+    metrics = {
+        "n_turns": result.turns, "n_tool_calls": 0, "n_tool_errors": 0, "n_recovered": 0,
+        "n_thrash": 0, "n_help_requests": 0, "stop_reason": "success" if result.ok else "error",
+    }
+    trace_rendered = ""
+    if result.trace_path:
+        trace_full = REPO_ROOT / result.trace_path
+        if trace_full.exists():
+            metrics = process_metrics.parse_trace(trace_full)
+            trace_rendered = render_trace_path(trace_full)
+
+    cost_usd = result.cost_usd
+    baseline = median_baseline_cost_turns(judge_id)
+    process = {
+        "X1": process_metrics.X1(metrics),
+        "X2": process_metrics.X2(metrics),
+        "X3": process_metrics.X3(metrics["n_turns"], cost_usd, baseline),
+        "metrics": metrics,
+    }
+
+    deterministic = compute_deterministic_build(b1_ok, tampered, accept_out)
+    ficha = persona.call_persona_build(deterministic, trace_rendered, artifact, process)
+    persona_scored, discarded, persona_vetoed, veto_reason = validate_and_score_persona_build(
+        ficha, trace_rendered, artifact
+    )
+
+    shutil.rmtree(ws, ignore_errors=True)
+
+    return build_verdict_build(
+        judge_id, reg, deterministic, process, persona_scored, discarded, persona_vetoed, veto_reason, cost_usd
+    )
+
+
+def run_all_judges_build(dry_run: bool) -> dict:
+    """Espelha run_all_judges pra trilha build — hoje só build_j_b2b em
+    registry_build.tsv, mas generalizado do mesmo jeito (nada hardcoded
+    além do default de compatibilidade)."""
+    scores: dict[str, int | None] = {}
+    for judge_id in all_build_judge_ids():
+        verdict = run_one(judge_id, dry_run, track="build")
+        scores[judge_id] = verdict["judge_score"]
+
+    summary = build_summary(scores)
+    out = write_summary(summary, prefix="summary_build")
+
+    print("\n--- resumo --all-judges (trilha build) ---")
+    for judge_id, score in summary["scores"].items():
+        print(f"{judge_id}: {score}")
+    print(f"median: {summary['median']}")
+    print(f"spread: {summary['spread']}")
+    if summary["inconclusive"]:
+        print("inconclusive: true (spread > 25)")
+    print(f"summary gravado em {out}")
+    return summary
+
+
 # ------------------------------------------------------------------ --all-judges
 
 
-def run_one(judge_id: str, dry_run: bool) -> dict:
-    verdict = run_dry(judge_id) if dry_run else run_real(judge_id)
+def run_one(judge_id: str, dry_run: bool, track: str = "result") -> dict:
+    if track == "build":
+        verdict = run_dry_build(judge_id) if dry_run else run_real_build(judge_id)
+    else:
+        verdict = run_dry(judge_id) if dry_run else run_real(judge_id)
     out = write_verdict(verdict)
     print(json.dumps(verdict, indent=2, ensure_ascii=False))
     print(f"\nverdict gravado em {out}")
@@ -473,9 +874,11 @@ def build_summary(scores: dict[str, int | None]) -> dict:
     }
 
 
-def write_summary(summary: dict) -> Path:
+def write_summary(summary: dict, prefix: str = "summary") -> Path:
+    """`prefix` default preserva o nome de arquivo de sempre (trilha A);
+    a trilha build usa `summary_build` pra não pisar no summary da J1."""
     VERDICTS_DIR.mkdir(parents=True, exist_ok=True)
-    out = VERDICTS_DIR / f"summary_{harness_version()}.json"
+    out = VERDICTS_DIR / f"{prefix}_{harness_version()}.json"
     out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
     return out
 
@@ -501,22 +904,40 @@ def run_all_judges(dry_run: bool) -> dict:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="orquestra a avaliação de um juiz (FASE 1)")
+    ap = argparse.ArgumentParser(description="orquestra a avaliação de um juiz (FASE 1 + trilha build/J2)")
     ap.add_argument("--dry-run", action="store_true", help="pula run_task.py/persona real; monta verdict sintético")
     ap.add_argument(
-        "--judge",
-        default=DEFAULT_JUDGE_ID,
-        choices=all_judge_ids(),
-        help="qual juiz rodar (default: j_b2b, compatibilidade)",
+        "--track",
+        default="result",
+        choices=["result", "build"],
+        help="trilha J1 'result' (default, compatibilidade) ou trilha build 'build' (SPEC-J2 design 2)",
     )
-    ap.add_argument("--all-judges", action="store_true", help="roda os 3 juízes em sequência e agrega um summary")
+    ap.add_argument(
+        "--judge",
+        default=None,
+        help="qual judge_id rodar (default: j_b2b em --track result, build_j_b2b em --track build)",
+    )
+    ap.add_argument("--all-judges", action="store_true", help="roda os juízes da trilha em sequência e agrega um summary")
     a = ap.parse_args()
 
+    if a.track == "build":
+        judge_id = a.judge or DEFAULT_BUILD_JUDGE_ID
+        if judge_id not in all_build_judge_ids():
+            raise SystemExit(f"{judge_id} não é um judge_id da trilha build (judges/registry_build.tsv)")
+        if a.all_judges:
+            run_all_judges_build(a.dry_run)
+            return 0
+        run_one(judge_id, a.dry_run, track="build")
+        return 0
+
+    judge_id = a.judge or DEFAULT_JUDGE_ID
+    if judge_id not in all_judge_ids():
+        raise SystemExit(f"{judge_id} não é um judge_id da trilha J1 (judges/registry.tsv)")
     if a.all_judges:
         run_all_judges(a.dry_run)
         return 0
 
-    run_one(a.judge, a.dry_run)
+    run_one(judge_id, a.dry_run)
     return 0
 
 

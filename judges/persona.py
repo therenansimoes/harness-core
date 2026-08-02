@@ -134,6 +134,113 @@ def call_persona(deterministic: dict, diff: str, trace: str, test_output: str) -
     return ficha
 
 
+# ------------------------------------------------------- trilha build (J2)
+
+PROMPT_TEMPLATE_BUILD = """Você é um juiz sênior avaliando um projeto construído do zero a partir de um \
+brief, segundo o RUBRIC-J2 (régua em judges/RUBRIC-J2.md do harness-core, trilha B).
+
+## Resultado determinístico (já calculado — você não decide isso, só comenta)
+{deterministic}
+
+## Métricas de processo (já calculadas — X1/X2/X3 não são seus, só P3/P4 abaixo)
+{process}
+
+## Artefato entregue (pricing.py do workspace)
+{artifact}
+
+## Trace de execução do agente
+{trace}
+
+Avalie SOMENTE os três critérios abaixo. Antes de pontuar, escreva o \
+raciocínio em texto puro (sem markdown), uma linha por critério, no \
+formato "Evidência P1: <arquivo:linha> — <o que essa linha mostra>" / \
+"Evidência P3: <trace.jsonl:N> — <o que essa linha mostra>" / "Evidência \
+P4: <arquivo:linha> — <o que essa linha mostra>" — só cite o que está \
+literalmente no material acima. Depois desse raciocínio, na última parte \
+da resposta, escreva SÓ o JSON puro (sem markdown, sem texto depois \
+dele), exatamente neste formato:
+
+{{
+  "P1": {{"score": <inteiro 0-15>, "citation": "<arquivo:linha do artefato>", "quote": "<trecho exato citado>"}},
+  "P3": {{"score": <inteiro 0-10>, "citation": "<trace.jsonl:N>", "quote": "<trecho exato citado>"}},
+  "P4": {{"score": <inteiro 0-5>, "citation": "<arquivo:linha do artefato>", "quote": "<trecho exato citado>"}}
+}}
+
+Critérios:
+- P1 — Qualidade do artefato no idioma do domínio (peso 15): o código usa \
+vocabulário e forma do domínio (aqui: cotação B2B — desconto por volume, \
+frete, validação de carrinho), não um esqueleto genérico. Cite arquivo:linha \
+do artefato acima.
+- P3 — Qualidade da recuperação (peso 10): leia os pares erro→correção do \
+trace e qualifique COMO o agente recuperou (diagnóstico e ajuste direcionado \
+vs. tentativa cega repetida). Cite trace.jsonl:N do par erro→correção.
+- P4 — Qualidade do artefato final (peso 5): o arquivo entregue implementa o \
+brief de ponta a ponta. Cite arquivo:linha do artefato acima.
+
+Se você não consegue citar um arquivo:linha ou trace.jsonl:N REAL — que \
+exista literalmente no material acima — para um critério, deixe "citation" \
+como string vazia e não pontue esse critério. Uma citação que o material \
+acima não sustenta zera a ficha inteira: não invente.
+"""
+
+
+def mock_ficha_build() -> dict:
+    """Ficha sintética da trilha build — sem chamada nenhuma. Usada em
+    PERSONA_MOCK=1 (--dry-run --track build)."""
+    return {
+        "P1": {
+            "score": 12,
+            "citation": "pricing.py:1",
+            "quote": "def handle_quote_request(payload: dict) -> dict:",
+        },
+        "P3": {
+            "score": 7,
+            "citation": "trace.jsonl:9",
+            "quote": "1 passed",
+        },
+        "P4": {
+            "score": 4,
+            "citation": "pricing.py:1",
+            "quote": "def calculate_total(items: list[dict]) -> dict:",
+        },
+    }
+
+
+def build_prompt_build(deterministic: dict, trace: str, artifact: str, process: dict) -> str:
+    return PROMPT_TEMPLATE_BUILD.format(
+        deterministic=json.dumps(deterministic, ensure_ascii=False, indent=2),
+        process=json.dumps(process, ensure_ascii=False, indent=2, default=str),
+        artifact=artifact.strip() or "(artefato vazio)",
+        trace=trace.strip() or "(trace vazio)",
+    )
+
+
+def call_persona_build(deterministic: dict, trace: str, artifact: str, process: dict) -> dict:
+    """Devolve {"P1": {...}, "P3": {...}, "P4": {...}} (RUBRIC-J2, trilha
+    build). PERSONA_MOCK=1 pula tudo abaixo — mesmo protocolo de
+    call_persona, adaptado pros critérios da trilha B."""
+    if os.environ.get("PERSONA_MOCK") == "1":
+        return mock_ficha_build()
+
+    prompt = build_prompt_build(deterministic, trace, artifact, process)
+    cmd = ["claude", "-p", prompt, "--output-format", "json", "--model", MODEL]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT_S)
+
+    try:
+        data = json.loads(proc.stdout)
+        ficha = extract_ficha_json(data.get("result", ""))
+        if not all(key in ficha for key in ("P1", "P3", "P4")):
+            raise ValueError(f"persona: ficha build sem P1/P3/P4: {ficha}")
+    except (json.JSONDecodeError, ValueError) as exc:
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"persona: claude -p falhou (exit {proc.returncode}): {proc.stderr[-300:]}"
+            ) from exc
+        raise
+
+    return ficha
+
+
 if __name__ == "__main__":
     if "--mock" in sys.argv:
         os.environ["PERSONA_MOCK"] = "1"
