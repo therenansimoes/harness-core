@@ -19,16 +19,25 @@ RÉGUA DE SUCCESS (D2, 2026-08-02): quem decide sobre success é intervalo de
 Wilson, não diferença bruta de acertos nem juiz-LLM. `decide_ab` devolve
 KEEP/DISCARD/INCONCLUSIVE; INCONCLUSIVE nunca promove. Com N pequeno, 5/6 vs
 4/6 é ruído — a régua diz isso em vez de fingir veredito.
+
+RÉGUA DE KPI (D4b, 2026-08-02): a coluna `kpis` do results.tsv entra no A/B por
+`kpi_report` — mediana por lado e limiar de 5%, sem teste estatístico. Com o N
+de uma suite não há amostra para intervalo em variável contínua; fingir um
+seria pior que dizer "mediana caiu 12%". Qualquer KPI WORSE bloqueia o merge:
+success igual com KPI pior é regressão, não empate.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import os
 import statistics
 from collections import defaultdict
 from pathlib import Path
+
+import kpi
 
 # evolve.py roda a candidata contra o mesmo results.tsv; HARNESS_RESULTS permite
 # apontar para outro log (sandbox, teste) sem duplicar lógica de score.
@@ -43,7 +52,11 @@ GAIN_PCT = 0.10      # ganho mínimo para creditar melhora (10%)
 IMBALANCE = 1.5      # N de um lado > 1.5x o outro = amostra desbalanceada
 Z = 1.96             # 95% — z do intervalo de Wilson
 
+KPI_MIN_N = 3        # valores válidos por lado para um KPI ter veredito
+KPI_FLAT_PCT = 0.05  # |delta| abaixo disso é ruído de medição, não sinal
+
 KEEP, DISCARD, INCONCLUSIVE = "KEEP", "DISCARD", "INCONCLUSIVE"
+BETTER, WORSE, FLAT = "BETTER", "WORSE", "FLAT"
 
 
 def wilson_interval(successes: int, n: int, z: float = Z) -> tuple[float, float]:
@@ -94,6 +107,104 @@ def decide_ab(succ_a: int, n_a: int, succ_b: int, n_b: int) -> dict:
     return {**out, "verdict": INCONCLUSIVE,
             "reason": f"intervalos de Wilson se sobrepõem "
                       f"(A [{ci_a[0]:.2f},{ci_a[1]:.2f}] vs B [{ci_b[0]:.2f},{ci_b[1]:.2f}])"}
+
+
+def kpi_values(rows: list[dict]) -> dict[str, list[float]]:
+    """{nome: [valores válidos]} a partir da coluna `kpis` das linhas.
+
+    Linha sem a coluna (results.tsv anterior ao D4a), com célula vazia ou com
+    JSON quebrado vale {} — o A/B não pode morrer porque um log velho não tinha
+    KPI. NaN é "não medido" e some da lista: entrar como 0 inventaria queda."""
+    out: dict[str, list[float]] = defaultdict(list)
+    for r in rows:
+        raw = (r.get("kpis") or "").strip()
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        for name, value in data.items():
+            try:
+                v = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isnan(v) or math.isinf(v):
+                continue
+            out[str(name)].append(v)
+    return dict(out)
+
+
+def kpi_report(rows_a: list[dict], rows_b: list[dict],
+               directions: dict[str, str] | None = None) -> dict:
+    """Compara os KPIs de dois lados: mediana + limiar, e um veredito por KPI.
+
+    Mediana (não média) porque uma run truncada distorce a média de um N de
+    suite. Sem intervalo de confiança: com 6 valores por lado em variável
+    contínua, qualquer CI seria decoração. O limiar de 5% é o que separa
+    "mediu diferente" de "mudou".
+
+    KPI presente em um lado só é ignorado (não há comparação a fazer, e tratar
+    ausência como zero fabricaria regressão). Menos de KPI_MIN_N valores
+    válidos em qualquer lado => FLAT com reason de n — a comparação aparece no
+    relatório, mas não move o gate.
+
+    `directions` vem do kpi.toml do alvo (kpi.load_directions); nome ausente =
+    "up" (maior é melhor).
+    """
+    directions = directions or {}
+    va, vb = kpi_values(rows_a), kpi_values(rows_b)
+
+    report: dict[str, dict] = {}
+    for name in sorted(set(va) & set(vb)):
+        xs, ys = va[name], vb[name]
+        direction = directions.get(name, kpi.DEFAULT_DIRECTION)
+        med_a, med_b = statistics.median(xs), statistics.median(ys)
+        entry = {
+            "name": name,
+            "n_a": len(xs),
+            "n_b": len(ys),
+            "median_a": med_a,
+            "median_b": med_b,
+            "direction": direction,
+            "delta": None,
+            "verdict": FLAT,
+            "reason": "",
+        }
+        if len(xs) < KPI_MIN_N or len(ys) < KPI_MIN_N:
+            entry["reason"] = (f"valores válidos insuficientes "
+                               f"(A={len(xs)} B={len(ys)}, mínimo {KPI_MIN_N} por lado)")
+            report[name] = entry
+            continue
+        if med_a == 0:
+            entry["reason"] = "mediana A = 0 — delta relativo indefinido"
+            report[name] = entry
+            continue
+
+        d = (med_b - med_a) / abs(med_a)
+        entry["delta"] = d
+        if abs(d) < KPI_FLAT_PCT:
+            entry["reason"] = f"variação {d:+.1%} abaixo do limiar de {KPI_FLAT_PCT:.0%}"
+        else:
+            improved = d > 0 if direction == kpi.UP else d < 0
+            entry["verdict"] = BETTER if improved else WORSE
+            entry["reason"] = (f"mediana {med_a:g} -> {med_b:g} ({d:+.1%}, "
+                               f"direction={direction})")
+        report[name] = entry
+
+    worse = [n for n, e in report.items() if e["verdict"] == WORSE]
+    return {
+        "kpis": report,
+        "worse": worse,
+        # regressão de KPI bloqueia promoção mesmo com success igual (D4b).
+        "blocked": bool(worse),
+        "only_a": sorted(set(va) - set(vb)),
+        "only_b": sorted(set(vb) - set(va)),
+        "min_n": KPI_MIN_N,
+        "flat_pct": KPI_FLAT_PCT,
+    }
 
 
 def load() -> list[dict]:
@@ -167,7 +278,8 @@ def delta(a: float, b: float) -> tuple[float, str]:
     return d, f"{d:+.1%}"
 
 
-def ab_report(rows: list[dict], va: str, vb: str) -> dict:
+def ab_report(rows: list[dict], va: str, vb: str,
+              directions: dict[str, str] | None = None) -> dict:
     """Veredito estruturado — MESMA lógica de gates que o --ab imprime.
 
     evolve.py consome isto. Existe para que o loop de evolução use ESTE juiz e
@@ -194,6 +306,13 @@ def ab_report(rows: list[dict], va: str, vb: str) -> dict:
     # normal com N de suite) não credita nada sozinho.
     verdict = decide_ab(A["pass"], A["n"], B["pass"], B["n"])
 
+    # KPI do alvo (D4b): entra como gate de não-regressão. Um KPI WORSE barra o
+    # merge sozinho — o harness pode ficar igual em success e ter piorado o que
+    # o projeto mede.
+    kpis = kpi_report(ra, rb, directions)
+    kpi_gate = ("sem regressão de KPI"
+                + (f" (WORSE: {', '.join(kpis['worse'])})" if kpis["worse"] else ""))
+
     gates = [
         ("success não caiu", B["rate"] >= A["rate"]),
         ("success limpo não caiu", B["rate_valid"] >= A["rate_valid"]),
@@ -204,6 +323,7 @@ def ab_report(rows: list[dict], va: str, vb: str) -> dict:
         ("truncamento não aumentou", B["trunc_rate"] <= A["trunc_rate"]),
         (f"ganho normalizado >={GAIN_PCT:.0%} (mediana s OU custo/run)", faster or cheaper),
         ("sem regressão grave no outro eixo (<+10%)", (d_med < 0.10) and (d_cost < 0.10)),
+        (kpi_gate, not kpis["blocked"]),
     ]
     return {
         "version_a": va,
@@ -215,6 +335,7 @@ def ab_report(rows: list[dict], va: str, vb: str) -> dict:
         "d_tok": d_tok,
         "verdict": verdict["verdict"],
         "wilson": verdict,
+        "kpi": kpis,
         "gates": [{"name": n, "ok": bool(ok)} for n, ok in gates],
         "failed": [n for n, ok in gates if not ok],
         "imbalanced": imbalanced,
@@ -222,8 +343,9 @@ def ab_report(rows: list[dict], va: str, vb: str) -> dict:
     }
 
 
-def do_ab(rows: list[dict], va: str, vb: str) -> int:
-    rep = ab_report(rows, va, vb)
+def do_ab(rows: list[dict], va: str, vb: str,
+          directions: dict[str, str] | None = None) -> int:
+    rep = ab_report(rows, va, vb, directions)
     A, B = rep["a"], rep["b"]
     d_med, d_cost = rep["d_med"], rep["d_cost"]
     s_med, s_cost = f"{d_med:+.1%}", f"{d_cost:+.1%}"
@@ -240,6 +362,18 @@ def do_ab(rows: list[dict], va: str, vb: str) -> int:
     w = rep["wilson"]
     print(f"  Wilson 95%   A [{w['ci_a'][0]:.2f},{w['ci_a'][1]:.2f}] "
           f"B [{w['ci_b'][0]:.2f},{w['ci_b'][1]:.2f}]   -> {w['verdict']} ({w['reason']})")
+
+    k = rep["kpi"]
+    if k["kpis"] or k["only_a"] or k["only_b"]:
+        print("\n  KPI (mediana A -> B, limiar "
+              f"{k['flat_pct']:.0%}, mínimo {k['min_n']} valores/lado)")
+        for e in k["kpis"].values():
+            d = f"{e['delta']:+.1%}" if e["delta"] is not None else "n/a"
+            print(f"    {e['name']:<18} {e['median_a']:>10.4g} -> {e['median_b']:<10.4g} "
+                  f"{d:>7}  n={e['n_a']}/{e['n_b']}  [{e['verdict']}] {e['reason']}")
+        for side, names in (("só em A", k["only_a"]), ("só em B", k["only_b"])):
+            if names:
+                print(f"    ignorados ({side}): {', '.join(names)}")
 
     if A["rate"] != A["rate_valid"] or B["rate"] != B["rate_valid"]:
         print(
@@ -273,7 +407,13 @@ def main() -> int:
     rows = load()
 
     if a.ab:
-        return do_ab(rows, *a.ab)
+        # direction dos KPIs: kpi.toml do alvo. HARNESS_KPI_ROOT aponta pro
+        # repo medido quando ele não é o diretório do results.tsv; ausente =>
+        # {} e todo KPI vale "up" (maior é melhor).
+        directions = kpi.load_directions(
+            os.environ.get("HARNESS_KPI_ROOT", RESULTS.parent)
+        )
+        return do_ab(rows, *a.ab, directions=directions)
 
     key = (
         (lambda r: (r["harness_version"], r["suite"], r["task_id"]))

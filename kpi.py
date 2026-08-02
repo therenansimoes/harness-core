@@ -9,6 +9,12 @@ Formato (`.harness/kpi.toml`, no repo-alvo):
     [kpi.testes_verdes]
     cmd = "python3 -m pytest -q 2>&1 | tail -1 | grep -oE '[0-9]+ passed' | cut -d' ' -f1"
     timeout_s = 120        # opcional, default 60
+    direction = "up"       # opcional, default "up" (maior é melhor)
+
+`direction` não muda a coleta — só o A/B (score.kpi_report) sabe o que é
+"melhor". "up" = maior é melhor (testes verdes, cobertura); "down" = menor é
+melhor (linhas, tempo de build, warnings). Valor desconhecido cai em "up" com
+aviso no stderr: adivinhar sentido em silêncio vira gate invertido.
 
 Contrato do comando: roda com o workspace do alvo como cwd e imprime UM número
 (float parseável) na ÚLTIMA linha do stdout. exit != 0, timeout ou parse falho
@@ -31,10 +37,12 @@ from math import nan
 from pathlib import Path
 
 DEFAULT_TIMEOUT_S = 60
+UP, DOWN = "up", "down"
+DEFAULT_DIRECTION = UP
 
 
 def load_kpis(repo_path) -> dict[str, dict]:
-    """Lê `<repo_path>/.harness/kpi.toml` -> {nome: {cmd, timeout_s}}.
+    """Lê `<repo_path>/.harness/kpi.toml` -> {nome: {cmd, timeout_s, direction}}.
 
     Ausente, ilegível ou sem tabela `[kpi.*]` => {} (KPI é opcional; um alvo
     sem kpi.toml não pode quebrar a run). Entrada sem `cmd` é ignorada com
@@ -57,8 +65,21 @@ def load_kpis(repo_path) -> dict[str, dict]:
             timeout_s = float(spec.get("timeout_s", DEFAULT_TIMEOUT_S))
         except (TypeError, ValueError):
             timeout_s = float(DEFAULT_TIMEOUT_S)
-        out[str(name)] = {"cmd": str(spec["cmd"]), "timeout_s": timeout_s}
+        direction = str(spec.get("direction", DEFAULT_DIRECTION)).strip().lower()
+        if direction not in (UP, DOWN):
+            print(f"kpi: [kpi.{name}] direction={spec.get('direction')!r} desconhecido, "
+                  f"usando {DEFAULT_DIRECTION!r} ({path})", file=sys.stderr)
+            direction = DEFAULT_DIRECTION
+        out[str(name)] = {
+            "cmd": str(spec["cmd"]), "timeout_s": timeout_s, "direction": direction,
+        }
     return out
+
+
+def load_directions(repo_path) -> dict[str, str]:
+    """{nome: "up"|"down"} do kpi.toml do alvo — o que o A/B precisa saber para
+    decidir o sinal de um delta. Alvo sem kpi.toml => {} (tudo default "up")."""
+    return {name: spec["direction"] for name, spec in load_kpis(repo_path).items()}
 
 
 def parse_value(stdout: str) -> float:

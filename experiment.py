@@ -45,6 +45,7 @@ from pathlib import Path
 ROOT = Path(__file__).parent.resolve()
 sys.path.insert(0, str(ROOT))
 
+import kpi  # noqa: E402
 import score  # noqa: E402
 
 EXPERIMENTS_DIR = ROOT / "evolution" / "experiments"
@@ -55,6 +56,7 @@ EXPERIMENTS_DIR = ROOT / "evolution" / "experiments"
 RESULTS_HEADER = [
     "timestamp", "harness_version", "backend", "model", "suite",
     "task_id", "success", "seconds", "tokens", "cost_usd", "turns", "notes",
+    "kpis",
 ]
 
 
@@ -226,26 +228,54 @@ _OUTCOME = {
 }
 
 
-def decide(agg: dict, decision_rule: dict) -> dict:
+def task_directions(task: str) -> dict[str, str]:
+    """`direction` de cada KPI do alvo. run_task.py monta o workspace a partir
+    de `<task>/fixtures`, então é lá que mora o `.harness/kpi.toml` que foi
+    medido. Sem esse arquivo => {} e todo KPI vale "up" (maior é melhor)."""
+    return kpi.load_directions(ROOT / task / "fixtures")
+
+
+def decide(agg: dict, decision_rule: dict, runs: list[dict] | None = None,
+           directions: dict[str, str] | None = None) -> dict:
     """Veredito do experimento — quem decide é a régua de Wilson do score.py.
 
     O runner não tem juiz próprio (nem LLM, nem diferença bruta de sucessos):
     um harness com dois juízes não tem juiz. `decision_rule` sobrevive só como
     metadado do TOML (min_diff_successes é legado da régua anterior).
+
+    KPI (D4b): `runs` traz a coluna `kpis` de cada run; qualquer KPI WORSE
+    bloqueia a promoção, com `kpi_regression:<nome>` na razão. `verdict` segue
+    sendo o do Wilson (o que a régua de success viu, para o artefato não
+    apagar essa leitura); quem muda é `outcome`.
     """
     w = score.decide_ab(
         agg["A"]["successes"], agg["A"]["n"],
         agg["B"]["successes"], agg["B"]["n"],
     )
+    runs = runs or []
+    kpis = score.kpi_report(
+        [r for r in runs if r.get("arm") == "A"],
+        [r for r in runs if r.get("arm") == "B"],
+        directions,
+    )
+    outcome, reason, rule = _OUTCOME[w["verdict"]], w["reason"], "wilson"
+    if kpis["blocked"]:
+        outcome = "rejeitar"
+        rule = "wilson+kpi"
+        reason = (f"regressão de KPI ({', '.join(kpis['worse'])}) — "
+                  f"bloqueia promoção; Wilson sobre success: {w['reason']}")
     return {
-        "outcome": _OUTCOME[w["verdict"]],
+        "outcome": outcome,
         "verdict": w["verdict"],
-        "reason": w["reason"],
-        "rule": "wilson",
+        "reason": reason,
+        "rule": rule,
         "min_n": w["min_n"],
         "ci_a": list(w["ci_a"]),
         "ci_b": list(w["ci_b"]),
         "diff_successes": agg["B"]["successes"] - agg["A"]["successes"],
+        "kpi": kpis,
+        "kpi_blocked": kpis["blocked"],
+        "blocked_by": [f"kpi_regression:{n}" for n in kpis["worse"]],
     }
 
 
@@ -295,7 +325,7 @@ def run_experiment(cfg: dict, parallel: bool | None = None) -> dict:
         remove_worktree(wt_b)
 
     agg = aggregate(runs)
-    decision = decide(agg, cfg["decision_rule"])
+    decision = decide(agg, cfg["decision_rule"], runs, task_directions(task))
     return {
         "name": name,
         "task": task,
@@ -398,7 +428,7 @@ def _run_experiment_parallel(cfg: dict) -> dict:
     runs.sort(key=lambda r: (r["pair_index"], r["arm"]))
     total_cost = sum(r["cost_usd"] for r in runs)
     agg = aggregate(runs)
-    decision = decide(agg, cfg["decision_rule"])
+    decision = decide(agg, cfg["decision_rule"], runs, task_directions(task))
     return {
         "name": name,
         "task": task,
@@ -445,6 +475,12 @@ def print_table(result: dict) -> None:
     print(f"\nWilson 95%  A [{d['ci_a'][0]:.2f},{d['ci_a'][1]:.2f}]  B [{d['ci_b'][0]:.2f},{d['ci_b'][1]:.2f}] "
           f"· diff de sucessos (B-A): {d['diff_successes']} -> {d['outcome'].upper()}")
     print(f"  {d['reason']}")
+    for e in d.get("kpi", {}).get("kpis", {}).values():
+        delta = f"{e['delta']:+.1%}" if e["delta"] is not None else "n/a"
+        print(f"  KPI {e['name']:<16} {e['median_a']:>10.4g} -> {e['median_b']:<10.4g} "
+              f"{delta:>7}  n={e['n_a']}/{e['n_b']}  [{e['verdict']}]")
+    if d.get("blocked_by"):
+        print(f"  BLOQUEADO por KPI: {', '.join(d['blocked_by'])}")
 
 
 def render_draft(result: dict) -> str:
@@ -481,6 +517,29 @@ def render_draft(result: dict) -> str:
         f"diff de sucessos (B-A) = {d['diff_successes']} -> **{d['outcome'].upper()}** "
         f"({d['verdict']}) — {d['reason']}.",
         "",
+    ]
+    kpi_block = d.get("kpi") or {}
+    if kpi_block.get("kpis"):
+        lines += [
+            f"KPI do alvo (mediana por braço, limiar {kpi_block['flat_pct']:.0%}, "
+            f"mínimo {kpi_block['min_n']} valores válidos por braço):",
+            "",
+        ]
+        for e in kpi_block["kpis"].values():
+            delta = f"{e['delta']:+.1%}" if e["delta"] is not None else "n/a"
+            lines.append(
+                f"- `{e['name']}` ({e['direction']}): {e['median_a']:.4g} -> "
+                f"{e['median_b']:.4g} ({delta}, n={e['n_a']}/{e['n_b']}) "
+                f"-> **{e['verdict']}** — {e['reason']}."
+            )
+        lines.append("")
+    if d.get("blocked_by"):
+        lines += [
+            f"Promoção BLOQUEADA por regressão de KPI: {', '.join(d['blocked_by'])}. "
+            "KPI pior barra o merge mesmo com success indistinguível.",
+            "",
+        ]
+    lines += [
         "## Draft — NÃO é decisão final",
         "",
         "Este arquivo é gerado por experiment.py. O runner nunca edita o genoma "
