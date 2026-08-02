@@ -1,11 +1,11 @@
 {
   "scores": {
-    "j_b2b": 94,
-    "j_web": 94,
-    "j_hw": 94
+    "j_b2b": 47,
+    "j_web": 93,
+    "j_hw": 98
   },
-  "median": 94,
-  "spread": 0,
-  "inconclusive": false,
-  "ts": "2026-08-02T03:44:55+00:00"
+  "median": 93,
+  "spread": 51,
+  "inconclusive": true,
+  "ts": "2026-08-02T03:54:53+00:00"
 }

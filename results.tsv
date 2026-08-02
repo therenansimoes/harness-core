@@ -83,3 +83,8 @@ timestamp	harness_version	backend	model	suite	task_id	success	seconds	tokens	cos
 2026-08-02T03:32:29+00:00	v0.4	cli	claude-haiku-4-5-20251001	judge	task_j_b2b	1	155.2	188	0.5237	1	trace:runs/harness_task_j_b2b_gp04m5hx/trace.jsonl
 2026-08-02T03:34:19+00:00	v0.4	cli	claude-haiku-4-5-20251001	judge	task_j_web	1	83.1	5625	0.1389	17	trace:runs/harness_task_j_web_tc095hzd/trace.jsonl
 2026-08-02T03:37:01+00:00	v0.4	cli	claude-haiku-4-5-20251001	judge	task_j_hw	1	139.3	10676	0.2245	31	error_max_turns; trace:runs/harness_task_j_hw_3qutxy_l/trace.jsonl
+2026-08-02T03:49:08+00:00	v0.4	cli	claude-haiku-4-5-20251001	judge	task_j_b2b	0	133.1	10002	0.3746	31	error_max_turns; verify:ksum_success[1000000060-DE:11] 1 failed, 414 passed in 0.67s  JUDGE_RESULT={"target_ok": false, "full": {"passed": 414, "failed": 1, "errors": 0, "total": 415}}; trace:runs/harness_task_j_b2b_0y8p41wd/trace.jsonl
+2026-08-02T03:51:29+00:00	v0.4	cli	claude-haiku-4-5-20251001	judge	task_j_web	1	102.1	6901	0.1800	24	trace:runs/harness_task_j_web_69_mqz44/trace.jsonl
+2026-08-02T03:54:33+00:00	v0.4	cli	claude-haiku-4-5-20251001	judge	task_j_hw	1	152.3	7640	0.3438	31	error_max_turns; trace:runs/harness_task_j_hw_knki4juz/trace.jsonl
+2026-08-02T03:57:21+00:00	v0.4	cli	claude-haiku-4-5-20251001	fixed	task_j_b2b	1	98.0	7494	0.1862	22	trace:runs/harness_task_j_b2b_evzu_vqw/trace.jsonl
+2026-08-02T03:59:36+00:00	v0.4	cli	claude-haiku-4-5-20251001	fixed	task_j_b2b	0	120.8	8910	0.2338	29	tamper:test_file_modified; trace:runs/harness_task_j_b2b_rfgbqsmy/trace.jsonl

@@ -22,6 +22,9 @@ O projeto patinou por meta-recursão: arena (agentes construindo harnesses conco
 
 ## Dívidas conhecidas
 
+- Verdicts em `judges/verdicts/<juiz>/<versão>.json` são SOBRESCRITOS a cada re-run da mesma versão — viola o "nunca reescreva verdict" da régua; o histórico sobrevive só no graph (`judgements`, dedupe por ts). Fix: nome com timestamp. (2026-08-02)
+- j_b2b tem ~75% de sucesso por run (variância real do haiku em 21+ turns) — avaliação de juiz precisa de repeats N≥3 com mediana, como a SPEC-J1 §8 já previa; run única gera spread falso. (2026-08-02)
+
 - Só testado com `claude-haiku-4-5`; backend `api` nunca exercitado.
 - 2 runs com `cli_exit_1` silencioso no results.tsv (2026-08-01 15:57/58) — causa não investigada.
 - Gate do evolve não tem tamper check nem safety allowlist (mecanismos existem provados na gen3).
@@ -65,4 +68,4 @@ Sequência que protege o investimento: (1) juiz j_b2b rodando honesto ← estamo
 
 Uma linha no `results.tsv` onde o harness melhorou código que ele não escreveu, com verify passando em cópia limpa.
 
-**✅ ATINGIDO (2026-08-02, v0.4, commit 8e145d9):** `results.tsv` linha `v0.4 judge task_j_b2b success=1` — bug real do schwifty corrigido, 415 testes do upstream verdes, 0 regressões, verdict 58→**81**. Caminho: M0 (v0.2=58, D1=0) → v0.3 trace (KEEP, +0.9% custo) → v0.4 MAX_TURNS 12→30 (A/B: 0/6 vs 3/4). Defeito de régua registrado: D4 pune sucesso caro vs falha barata (X3 da J2 corrige). Próximo marco: M2 = nota nos 3 juízes (generalidade).
+**✅ ATINGIDO (2026-08-02, v0.4, commit 8e145d9):** `results.tsv` linha `v0.4 judge task_j_b2b success=1` — bug real do schwifty corrigido, 415 testes do upstream verdes, 0 regressões, verdict 58→**81**. Caminho: M0 (v0.2=58, D1=0) → v0.3 trace (KEEP, +0.9% custo) → v0.4 MAX_TURNS 12→30 (A/B: 0/6 vs 3/4). Defeito de régua registrado: D4 pune sucesso caro vs falha barata (X3 da J2 corrige). **M2 medido (2026-08-02):** j_web **93**, j_hw **98** (estáveis, citações válidas, zero veto), j_b2b **bimodal 47–81** (5/8 sucessos no dia; 2 tentativas de trapaça pegas pelo tamper check). Summary `inconclusive` por spread — correto: a sonda localizou a fraqueza real (consistência em tarefas ≥21 turnos). Próximo alvo de evolução: consistência do j_b2b (prompt do genoma / tier de modelo / decomposição — decidir por A/B). Próximo marco: M3 = repo publicável.
