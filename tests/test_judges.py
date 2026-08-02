@@ -19,6 +19,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "judges"))
@@ -281,6 +283,33 @@ def test_extract_ficha_json_ignora_cot_antes_do_json():
     ficha = persona.extract_ficha_json(result_text)
     assert ficha["P1"]["score"] == 12
     assert ficha["P2"]["citation"] == "trace.jsonl:1"
+
+
+def test_extract_ficha_json_com_json_citado_na_evidencia():
+    """JSON citado como evidência antes da ficha final deve ser ignorado;
+    deve extrair a ficha final mesmo quando houver múltiplos '{' no texto."""
+    result_text = (
+        "Evidência P1: germany.py:1 — usa reconcile do domínio.\n"
+        "A resposta anterior foi: {\"status\": 200, \"body\": "
+        "{\"checksum\": \"ABC123\", \"expected\": \"ABC124\"}} — isso está errado.\n"
+        "Evidência P2: trace.jsonl:1 — bate com o DONE.\n"
+        '{"P1": {"score": 12, "citation": "germany.py:1", "quote": "x"}, '
+        '"P2": {"score": 8, "citation": "trace.jsonl:1", "quote": "y"}}'
+    )
+    ficha = persona.extract_ficha_json(result_text)
+    assert ficha["P1"]["score"] == 12
+    assert ficha["P2"]["citation"] == "trace.jsonl:1"
+
+
+def test_extract_ficha_json_sem_json_valido_levanta_erro():
+    """Quando nenhum '{' no texto é decodificável como ficha válida,
+    deve levantar JSONDecodeError."""
+    result_text = (
+        "Evidência P1: germany.py:1 — usa reconcile do domínio.\n"
+        "Nenhum JSON válido aqui."
+    )
+    with pytest.raises(json.JSONDecodeError):
+        persona.extract_ficha_json(result_text)
 
 
 def _patch_subprocess_run(monkeypatch, returncode: int, stdout: str, stderr: str = ""):

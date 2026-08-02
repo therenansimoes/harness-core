@@ -95,13 +95,34 @@ def build_prompt(deterministic: dict, diff: str, trace: str, test_output: str) -
 def extract_ficha_json(result_text: str) -> dict:
     """O prompt agora pede raciocínio (CoT — evidência por critério) ANTES
     do JSON final, então `result` não é mais JSON puro de ponta a ponta.
-    Acha o primeiro `{` e decodifica a partir dali, ignorando texto solto
-    depois do objeto (raw_decode não exige que a string acabe no `}`)."""
-    start = result_text.find("{")
-    if start == -1:
+    Tenta raw_decode de TODOS os '{' DE TRÁS PRA FRENTE, tentando cada
+    candidato até achar um com estrutura de ficha válida (qualquer objeto
+    com chave começando com "P" e valor dict com "score")."""
+    candidates = []
+    pos = 0
+    while True:
+        pos = result_text.find("{", pos)
+        if pos == -1:
+            break
+        candidates.append(pos)
+        pos += 1
+
+    if not candidates:
         raise json.JSONDecodeError("nenhum '{' encontrado no result", result_text, 0)
-    obj, _ = json.JSONDecoder().raw_decode(result_text, start)
-    return obj
+
+    # Tenta de trás pra frente
+    for start in reversed(candidates):
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(result_text, start)
+            # Validar: qualquer chave começando com "P" com valor dict contendo "score"
+            for key, val in obj.items():
+                if key.startswith("P") and isinstance(val, dict) and "score" in val:
+                    return obj
+        except json.JSONDecodeError:
+            continue
+
+    # Se chegou aqui, nenhum candidato validou — levantar erro
+    raise json.JSONDecodeError("nenhum '{' decodificável com estrutura de ficha", result_text, 0)
 
 
 def call_persona(deterministic: dict, diff: str, trace: str, test_output: str) -> dict:
