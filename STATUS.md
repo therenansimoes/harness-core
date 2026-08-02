@@ -1,6 +1,6 @@
 # STATUS — fonte de verdade do harness-core
 
-**Atualizado:** 2026-08-02. Este arquivo substitui PLAN.md, FAST_START.md e generative-project.md como norte. Eles ficam como referência histórica — não seguir mais.
+**Atualizado:** 2026-08-02 (noite — escada D0–D6 completa). Este arquivo substitui PLAN.md, FAST_START.md e generative-project.md como norte. Eles ficam como referência histórica — não seguir mais.
 
 ## Visão (destino, confirmada pelo Renan em 2026-08-01)
 
@@ -22,8 +22,7 @@ O projeto patinou por meta-recursão: arena (agentes construindo harnesses conco
 
 ## Dívidas conhecidas
 
-- Verdicts em `judges/verdicts/<juiz>/<versão>.json` são SOBRESCRITOS a cada re-run da mesma versão — viola o "nunca reescreva verdict" da régua; o histórico sobrevive só no graph (`judgements`, dedupe por ts). Fix: nome com timestamp. (2026-08-02)
-- j_b2b tem ~75% de sucesso por run (variância real do haiku em 21+ turns) — avaliação de juiz precisa de repeats N≥3 com mediana, como a SPEC-J1 §8 já previa; run única gera spread falso. (2026-08-02)
+- Dívidas da era dos juízes (verdicts sobrescritos, variância j_b2b) arquivadas com o attic/ — não se aplicam ao método atual.
 
 - Só testado com `claude-haiku-4-5`; backend `api` nunca exercitado.
 - 2 runs com `cli_exit_1` silencioso no results.tsv (2026-08-01 15:57/58) — causa não investigada.
@@ -34,13 +33,15 @@ O projeto patinou por meta-recursão: arena (agentes construindo harnesses conco
 | # | Degrau | Aceite verificável | Executor |
 |---|---|---|---|
 | D0 | ~~Descartar gen5~~ FEITO (revert e1a2bb6, 174 testes verdes) | — | mechanic |
-| D1 | Congelar `judges/` e `arena/` em `attic/`; extrair verify do `task_j_b2b` → `benchmarks/held_in/task_oss_b2b/`; métricas X1/X2/X3 → `metrics/process.py`; `evolve.py` sem import de judges | `rg -l "judges/" *.py` vazio; suite held_in grava em results.tsv | mechanic |
-| D2 | Régua: `score.py` com Wilson, `MIN_N=6`, KEEP/DISCARD/INCONCLUSIVE; `experiment.py` consome | 5/6 vs 4/6 → INCONCLUSIVE; 6/6 vs 1/6 → KEEP; 3/3 vs 0/3 → INCONCLUSIVE | builder |
-| D3 | `profile.py` (self-adaptive): detecta stack/comandos determinístico, lê CLAUDE.md do alvo, escreve `.harness/profile.toml`, injeta no prompt. Antes: researcher levanta prior art (aider repo-map, mise/devbox etc.) | roda contra 2 repos; comando de teste detectado executa e sai 0 | builder |
-| D4 | KPI: `.harness/kpi.toml` + coleta pós-run → colunas `kpi_*` em results.tsv e graph | 3 runs demo com kpi_* preenchido; `score.py --ab` compara por KPI | builder |
-| D5 | Genoma 360: `evolution/genome.toml` (mutáveis: agent.py, prompts/, profile.py; blocklist: evolve.py, score.py, safety.py, sealed/) | proposta em score.py falha `tamper:genome_violation`; em prompts/ passa | builder |
-| D6 | `autopilot`: fila → run → KPI → revert se regride; propostas de catálogo determinístico do erro dominante | 20min sem intervenção, ≥5 linhas em results.tsv, zero escrita fora do workspace | builder |
+| D1 | ~~Congelar `judges/` e `arena/` em `attic/`; extrair verify do `task_j_b2b` → `benchmarks/held_in/task_oss_b2b/`; métricas X1/X2/X3 → `metrics/process.py`; `evolve.py` sem import de judges~~ FEITO (04d8090 + da8a0a8) | `rg -l "judges/" *.py` vazio; suite held_in grava em results.tsv | mechanic |
+| D2 | ~~Régua: `score.py` com Wilson, `MIN_N=6`, KEEP/DISCARD/INCONCLUSIVE; `experiment.py` consome~~ FEITO (merge 5832e46, 3 casos de aceite batem) | 5/6 vs 4/6 → INCONCLUSIVE; 6/6 vs 1/6 → KEEP; 3/3 vs 0/3 → INCONCLUSIVE | builder |
+| D3 | ~~`profile.py` (self-adaptive): detecta stack/comandos determinístico, lê CLAUDE.md do alvo, escreve `.harness/profile.toml`, injeta no prompt. Antes: researcher levanta prior art (aider repo-map, mise/devbox etc.)~~ FEITO (merge 9ad4554, detecta e executa test_cmd) | roda contra 2 repos; comando de teste detectado executa e sai 0 | builder |
+| D4 | ~~KPI: `.harness/kpi.toml` + coleta pós-run → colunas `kpi_*` em results.tsv e graph~~ FEITO (D4a merge 99ef96f coleta; D4b merge cc29726 kpi_report + gate kpi_regression) | 3 runs demo com kpi_* preenchido; `score.py --ab` compara por KPI | builder |
+| D5 | ~~Genoma 360: `evolution/genome.toml` (mutáveis: agent.py, prompts/, profile.py; blocklist: evolve.py, score.py, safety.py, sealed/)~~ FEITO (merge cdefb26, tamper:genome_violation) | proposta em score.py falha `tamper:genome_violation`; em prompts/ passa | builder |
+| D6 | ~~`autopilot`: fila → run → KPI → revert se regride; propostas de catálogo determinístico do erro dominante~~ FEITO (merge c7d1911, aceite mock 20min: 7 runs fila + 2 self, zero escrita fora do ROOT) | 20min sem intervenção, ≥5 linhas em results.tsv, zero escrita fora do workspace | builder |
 | D7 | Prova em código de terceiro: +3 tasks held-out de repos OSS distintos | 3 verifies red no base, green pós-run em cópia limpa | builder |
+
+Pós-escada (2026-08-02): 1º projeto real registrado — `projects/website-faz-rogers` (site da fazenda, Astro 5, 13 tasks na fila, verify próprio + 5 KPIs). Pendências antes da 1ª rodada real: (a) sandbox do evolve não copia o fecho de runtime (safety.py etc.) — toda proposta morre em InfraError, fix em decisão no architect; (b) copytree do project.py sem ignore copia node_modules por task — idem. D7 (3 tasks held-out de OSS) continua aberto.
 
 Riscos vigiados: KPI gameável (KPI calculado fora do genoma + held-out selado), genoma 360 se auto-quebrar (blocklist + worktree + revert por regressão), autonomia sem teto (budget $ e wall-clock por SIGTERM no config). NÃO construir: satélites, Docker, vector DB/GraphRAG/Mem0, credit assignment por módulo, multi-projeto real (só com 2º projeto), qualquer volta de arena.
 
