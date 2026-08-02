@@ -96,3 +96,9 @@ timestamp	harness_version	backend	model	suite	task_id	success	seconds	tokens	cos
 2026-08-02T05:40:08+00:00	v0.4	cli	claude-haiku-4-5-20251001	judge	task_j_b2b	1	131.2	10100	0.2503	31	error_max_turns; trace:runs/harness_task_j_b2b_sed69t9t/trace.jsonl
 2026-08-02T05:50:56+00:00	v0.4	cli	claude-haiku-4-5-20251001	judge	task_j_b2b	1	176.3	7728	0.2906	22	trace:runs/harness_task_j_b2b_sxsswjbg/trace.jsonl
 2026-08-02T05:54:39+00:00	v0.4	cli	claude-haiku-4-5-20251001	judge	task_j_b2b	1	200.1	10531	0.3172	31	error_max_turns; trace:runs/harness_task_j_b2b_d3y34zjh/trace.jsonl
+2026-08-02T09:08:13+00:00	v0.4	cli	claude-haiku-4-5-20251001	fixed	task_j_b2b	1	121.2	8368	0.2118	26	trace:runs/harness_task_j_b2b_19v6re8l/trace.jsonl
+2026-08-02T09:11:19+00:00	v0.4	cli	claude-haiku-4-5-20251001	fixed	task_j_b2b	1	122.1	9203	0.2355	31	error_max_turns; trace:runs/harness_task_j_b2b_mf9xp3z1/trace.jsonl
+2026-08-02T09:12:57+00:00	v0.4	cli	claude-haiku-4-5-20251001	fixed	task_j_b2b	0	153.8	9590	0.3689	31	tamper:test_file_modified; trace:runs/harness_task_j_b2b_5uqrc4qw/trace.jsonl
+2026-08-02T09:13:15+00:00	v0.4	cli	claude-haiku-4-5-20251001	fixed	task_j_b2b	1	98.4	7160	0.2149	31	error_max_turns; trace:runs/harness_task_j_b2b_xxsrg2po/trace.jsonl
+2026-08-02T09:17:17+00:00	v0.4	cli	claude-haiku-4-5-20251001	fixed	task_j_b2b	1	136.7	9904	0.2645	31	error_max_turns; trace:runs/harness_task_j_b2b_4p4nm81b/trace.jsonl
+2026-08-02T09:17:24+00:00	v0.4	cli	claude-haiku-4-5-20251001	fixed	task_j_b2b	1	116.3	7736	0.2347	31	error_max_turns; trace:runs/harness_task_j_b2b_qhe4z5go/trace.jsonl
