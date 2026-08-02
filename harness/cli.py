@@ -14,8 +14,10 @@ import time
 import tomllib
 import uuid
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
+from harness.ab import ArmSpec, run_ab
 from harness.backends import registry
 from harness.ledger import store
 from harness.ruler.gate import Decision, gate
@@ -27,6 +29,7 @@ from harness.workspace.provision import dispose, provision
 
 UNIT_FILE = "unit.toml"
 SCRATCH_DIR = ".harness"   # log do verify; não conta como sujeira do repo-alvo
+DEFAULT_MAX_TURNS = 8
 
 
 def _bootstrap() -> None:
@@ -139,22 +142,48 @@ def _exit_reason(result: ExecResult, decision: Decision) -> str:
     return decision.reason          # revert carrega kpi_regression:… / tamper:…
 
 
-def cmd_run(args: argparse.Namespace) -> int:
-    unit = load_unit(Path(args.unit))
-    backend = registry.get_backend(args.backend)
-    if args.model is not None and hasattr(backend, "model"):
+class PreflightError(RuntimeError):
+    """Backend indisponível: nada executou, então não há linha honesta pro ledger."""
+
+
+@dataclass(frozen=True)
+class RunOutcome:
+    """O que um run produziu. A `Decision` viaja junto porque `RunRow` só guarda
+    o `exit_reason`, que colapsa a ação da régua (`revert` e `retry` viram uma
+    causa só) — quem imprime precisa dos dois."""
+
+    row: RunRow
+    decision: Decision
+
+
+def run_once(
+    unit: UnitSpec,
+    backend_name: str,
+    model: str | None = None,
+    *,
+    repo: str | None = None,
+    project: str | None = None,
+    tier: str | None = None,
+    max_turns: int = DEFAULT_MAX_TURNS,
+) -> RunOutcome:
+    """Um run ponta a ponta: executa, verifica, mede KPI e passa pelo gate.
+
+    Não grava no ledger — quem chama escolhe o banco (o A/B passa o `data_dir`
+    do experimento) e o momento.
+    """
+    backend = registry.get_backend(backend_name)
+    if model is not None and hasattr(backend, "model"):
         # Backend model-selectable checa o modelo pedido no próprio preflight.
-        backend.model = args.model
+        backend.model = model
 
     pre = backend.preflight()
     if not pre.ok:
-        print(f"preflight falhou para {args.backend}: {pre.reason}", file=sys.stderr)
-        return 1
+        raise PreflightError(f"preflight falhou para {backend_name}: {pre.reason}")
 
     run_id = uuid.uuid4().hex[:12]
     t0 = time.monotonic()
-    with _workspace(args.repo, run_id) as ws:
-        if args.repo is None:
+    with _workspace(repo, run_id) as ws:
+        if repo is None:
             # tmpdir nasce vazio; no --repo os arquivos já são do repo-alvo.
             seed_workspace(unit, ws)
         sec_provision = time.monotonic() - t0
@@ -165,8 +194,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             ExecRequest(
                 prompt=unit.prompt,
                 workspace=ws,
-                model=args.model,
-                max_turns=args.max_turns,
+                model=model,
+                max_turns=max_turns,
                 trace_path=ws / "trace.jsonl",
             )
         )
@@ -181,36 +210,51 @@ def cmd_run(args: argparse.Namespace) -> int:
             decision = gate(verdict, kpi_before, collect(ws, specs=specs), [], specs)
         else:
             decision = Decision("retry", f"backend_{result.exit_reason}")
-        if decision.action == "revert" and args.repo is not None:
+        if decision.action == "revert" and repo is not None:
             _revert(ws)   # no tmpdir o revert é o próprio descarte
 
     sec_total = time.monotonic() - t0
-    ok = decision.action == "accept"
-    exit_reason = _exit_reason(result, decision)
+    row = RunRow(
+        run_id=run_id,
+        unit_id=unit.id,
+        project=project,
+        backend=backend_name,
+        model=model,
+        tier=tier,
+        kind=unit.kind,
+        ok=decision.action == "accept",
+        exit_reason=_exit_reason(result, decision),
+        sec_total=sec_total,
+        sec_provision=sec_provision,
+        cost_usd=result.cost_usd,
+        intervention=False,
+        created_at=store.now_iso(),
+    )
+    return RunOutcome(row=row, decision=decision)
 
-    row_id = store.record_run(
-        RunRow(
-            run_id=run_id,
-            unit_id=unit.id,
+
+def cmd_run(args: argparse.Namespace) -> int:
+    unit = load_unit(Path(args.unit))
+    try:
+        outcome = run_once(
+            unit,
+            args.backend,
+            args.model,
+            repo=args.repo,
             project=args.project,
-            backend=args.backend,
-            model=args.model,
-            tier=None,
-            kind=unit.kind,
-            ok=ok,
-            exit_reason=exit_reason,
-            sec_total=sec_total,
-            sec_provision=sec_provision,
-            cost_usd=result.cost_usd,
-            intervention=False,
-            created_at=store.now_iso(),
+            max_turns=args.max_turns,
         )
-    )
+    except PreflightError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
+    row, decision = outcome.row, outcome.decision
+    row_id = store.record_run(row)
     print(
-        f"{run_id} {unit.id} {args.backend} {decision.action} {decision.reason} "
-        f"{sec_total:.2f}s ledger#{row_id}"
+        f"{row.run_id} {unit.id} {row.backend} {decision.action} {decision.reason} "
+        f"{row.sec_total:.2f}s ledger#{row_id}"
     )
-    return 0 if ok else 1
+    return 0 if row.ok else 1
 
 
 def _arm(text: str) -> Arm:
@@ -238,14 +282,61 @@ def _fmt_arm(arm: Arm) -> str:
     return f"{arm.succ}/{arm.n} [{lo:.2f},{hi:.2f}]"
 
 
+def _print_ab_run(label: str, i: int, row: RunRow) -> None:
+    """Uma linha curta por run: o A/B com backend de verdade demora, e sem isto
+    a CLI fica muda até o fim."""
+    model = "" if row.model is None else f":{row.model}"
+    status = "ok" if row.ok else "falhou"
+    print(f"{label}{i} {row.backend}{model} {status} {row.exit_reason} {row.sec_total:.2f}s")
+
+
 def cmd_ab(args: argparse.Namespace) -> int:
     """Veredito de Wilson de B (candidata) contra A (baseline).
+
+    Dois modos, mutuamente exclusivos: sem `--dim` os braços vêm prontos
+    (`--a 5/6`), com `--dim` o harness roda o experimento e conta os sucessos.
 
     Sai 0 em qualquer veredito: DISCARD e INCONCLUSIVE são respostas da régua,
     não erro da CLI. Quem decide o que fazer com o veredito é o chamador.
     """
+    if args.dim is not None:
+        return _cmd_ab_run(args)
+    if args.a is None or args.b is None:
+        args.parser.error("modo estatístico exige --a e --b (ou use --dim)")
     verdict = decide_ab(args.a, args.b, min_n=args.min_n)
     print(f"{verdict} a={_fmt_arm(args.a)} b={_fmt_arm(args.b)}")
+    return 0
+
+
+def _cmd_ab_run(args: argparse.Namespace) -> int:
+    """`--dim backend`: mesma unidade nos dois executores, n vezes cada."""
+    if args.a is not None or args.b is not None:
+        args.parser.error("--dim roda o experimento; --a/--b já trazem o resultado pronto")
+    missing = [
+        "--" + f.replace("_", "-")
+        for f in ("unit", "a_backend", "b_backend")
+        if getattr(args, f) is None
+    ]
+    if missing:
+        args.parser.error(f"--dim {args.dim} exige {', '.join(missing)}")
+    if args.n <= 0:
+        args.parser.error(f"--n tem que ser positivo: {args.n}")
+
+    try:
+        report = run_ab(
+            Path(args.unit),
+            ArmSpec(backend=args.a_backend, model=args.a_model),
+            ArmSpec(backend=args.b_backend, model=args.b_model),
+            n=args.n,
+            min_n=args.min_n,
+            project=args.project,
+            on_run=_print_ab_run,
+        )
+    except PreflightError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
+    print(f"{report.verdict} a={_fmt_arm(report.arm_a)} b={_fmt_arm(report.arm_b)}")
     return 0
 
 
@@ -294,17 +385,30 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--repo", default=None,
                      help="repo-alvo (git, limpo): vira o workspace e é onde os KPIs "
                           "são medidos; sem ele o run roda num tmpdir vazio")
-    run.add_argument("--max-turns", type=int, default=8, dest="max_turns")
+    run.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS, dest="max_turns")
     run.set_defaults(func=cmd_run)
 
     ab = sub.add_parser("ab", help="veredito de Wilson entre dois braços")
-    ab.add_argument("--a", required=True, type=_arm, metavar="SUCC/N",
-                    help="braço A (baseline), ex.: 5/6")
-    ab.add_argument("--b", required=True, type=_arm, metavar="SUCC/N",
-                    help="braço B (candidata), ex.: 6/6")
+    ab.add_argument("--a", type=_arm, metavar="SUCC/N",
+                    help="braço A (baseline) já contado, ex.: 5/6")
+    ab.add_argument("--b", type=_arm, metavar="SUCC/N",
+                    help="braço B (candidata) já contado, ex.: 6/6")
     ab.add_argument("--min-n", type=int, default=MIN_N, dest="min_n",
                     help=f"tentativas por braço para a régua opinar (default {MIN_N})")
-    ab.set_defaults(func=cmd_ab)
+    # Modo de execução: o harness roda o experimento em vez de só contar.
+    ab.add_argument("--dim", choices=["backend"], default=None,
+                    help="dimensão testada; roda a mesma unidade nos dois braços")
+    ab.add_argument("--unit", default=None, help="diretório (ou arquivo) com unit.toml")
+    ab.add_argument("--a-backend", default=None, dest="a_backend")
+    ab.add_argument("--b-backend", default=None, dest="b_backend")
+    ab.add_argument("--a-model", default=None, dest="a_model")
+    ab.add_argument("--b-model", default=None, dest="b_model")
+    ab.add_argument("--n", type=int, default=MIN_N,
+                    help=f"tentativas por braço (default {MIN_N})")
+    ab.add_argument("--project", default=None)
+    # `parser` no namespace: erro de combinação de flag sai como erro de
+    # argparse (uso + exit 2), não como exceção no meio do experimento.
+    ab.set_defaults(func=cmd_ab, parser=ab)
 
     backends = sub.add_parser("backends", help="lista backends registrados + preflight")
     backends.set_defaults(func=cmd_backends)
