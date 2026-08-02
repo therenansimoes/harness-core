@@ -15,6 +15,7 @@ projects/*/ui/test-results/
 test-results/
 benchmarks/judge/task_*/fixtures/
 benchmarks/judge/task_*/.setup_base_sha
+benchmarks/held_in/task_*/fixtures/
 attic/judges/_env/
 _env/
 runs/

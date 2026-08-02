@@ -2,15 +2,15 @@
 """verify task_j_b2b — o teste selado (fix_sha do upstream) fica verde e a
 suíte completa não regride.
 
-Copia judges/_sealed/j_b2b/test_checksum.py para o workspace SÓ na hora de
+Copia attic/judges/_sealed/j_b2b/test_checksum.py para o workspace SÓ na hora de
 verificar (sobrescreve o que o agente tenha deixado em tests/test_checksum.py
 — inclusive se o agente editou/apagou o arquivo, que é exatamente o caso que
 D2/tamper-check quer capturar em run_task.py), confere o sha256 contra
-judges/registry.tsv, roda o arquivo selado e a suíte inteira, e apaga a
+attic/judges/registry.tsv, roda o arquivo selado e a suíte inteira, e apaga a
 cópia selada do workspace antes de sair.
 
 O ambiente é responsabilidade do juiz, não do agente: os testes rodam com
-judges/_env/j_b2b/bin/python (venv compartilhado, criado por setup.sh —
+attic/judges/_env/j_b2b/bin/python (venv compartilhado, criado por setup.sh —
 pytest + deps de runtime do schwifty), com PYTHONPATH apontando pro
 workspace pra achar o pacote schwifty ali (não instalado no _env — puro
 Python, resolve por sys.path). O agente não precisa criar venv nem instalar
@@ -29,9 +29,9 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-SEALED = REPO_ROOT / "judges" / "_sealed" / "j_b2b" / "test_checksum.py"
-REGISTRY = REPO_ROOT / "judges" / "registry.tsv"
-ENV_PYTHON = REPO_ROOT / "judges" / "_env" / "j_b2b" / "bin" / "python"
+SEALED = REPO_ROOT / "attic" / "judges" / "_sealed" / "j_b2b" / "test_checksum.py"
+REGISTRY = REPO_ROOT / "attic" / "judges" / "registry.tsv"
+ENV_PYTHON = REPO_ROOT / "attic" / "judges" / "_env" / "j_b2b" / "bin" / "python"
 JUDGE_ID = "j_b2b"
 TARGET_REL = Path("tests") / "test_checksum.py"
 
@@ -49,7 +49,7 @@ def registry_sealed_sha256() -> str:
 
 
 def pick_python() -> str:
-    """judges/_env/j_b2b/ é o venv compartilhado do juiz (setup.sh cria uma
+    """attic/judges/_env/j_b2b/ é o venv compartilhado do juiz (setup.sh cria uma
     vez, fora do workspace). Se por algum motivo ainda não existir, cai pro
     interpretador que está rodando este verify — mas isso é sinal de setup
     incompleto, não o caminho normal."""

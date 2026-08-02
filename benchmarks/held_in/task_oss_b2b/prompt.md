@@ -13,7 +13,7 @@ código não relacionado.
 O ambiente Python já está pronto (não crie venv, não instale nada). Rode a
 suíte de testes do projeto com:
 
-    PYTHONPATH=. /Users/renansimoes/projects/harness-core/judges/_env/j_b2b/bin/python -m pytest
+    PYTHONPATH=. /Users/renansimoes/projects/harness-core/attic/judges/_env/j_b2b/bin/python -m pytest
 
 Garanta que ela passa localmente sem falhas antes de finalizar.
 

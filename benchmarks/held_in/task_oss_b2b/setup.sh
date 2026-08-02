@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # setup.sh — provisiona fixtures/ com o schwifty no base_sha (juiz j_b2b) E
-# o ambiente Python pra rodar os testes (judges/_env/j_b2b/).
+# o ambiente Python pra rodar os testes (attic/judges/_env/j_b2b/).
 #
 # Clona o upstream, fixa no commit anterior ao bug fix (registry.tsv),
 # remove o .git (o agente não pode "trapacear" olhando o histórico/tags
@@ -10,7 +10,7 @@
 #
 # O ambiente Python é responsabilidade do juiz, não do agente: o agente só
 # corrige o bug no workspace, não precisa criar venv nem instalar nada.
-# judges/_env/j_b2b/ é um venv COMPARTILHADO (fora do workspace de qualquer
+# attic/judges/_env/j_b2b/ é um venv COMPARTILHADO (fora do workspace de qualquer
 # run), criado uma vez, com pytest + as deps de runtime do schwifty (puro
 # Python — não precisa instalar o pacote em si, só rodar com PYTHONPATH
 # apontando pro workspace). Ver verify.py.
@@ -19,10 +19,10 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../../.." && pwd)"
 FIXTURES="$HERE/fixtures"
-REGISTRY="$REPO_ROOT/judges/registry.tsv"
+REGISTRY="$REPO_ROOT/attic/judges/registry.tsv"
 JUDGE_ID="j_b2b"
 MARKER="$HERE/.setup_base_sha"
-ENV_DIR="$REPO_ROOT/judges/_env/j_b2b"
+ENV_DIR="$REPO_ROOT/attic/judges/_env/j_b2b"
 ENV_MARKER="$ENV_DIR/.setup_ok"
 
 setup_env() {
@@ -109,7 +109,7 @@ rm -rf "$TMP_CLONE/.git"
 cp -R "$TMP_CLONE/." "$FIXTURES/"
 
 # defesa em profundidade: fixtures/ nunca deve ter .venv/venv — o ambiente
-# de teste é judges/_env/j_b2b/, fora do workspace, não algo que viva nas
+# de teste é attic/judges/_env/j_b2b/, fora do workspace, não algo que viva nas
 # fixtures. Se algo vazar aqui (upstream com venv commitado, cópia manual),
 # apaga antes de seguir.
 rm -rf "$FIXTURES/.venv" "$FIXTURES/venv"
