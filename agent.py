@@ -284,6 +284,8 @@ def _run_api(prompt: str, workspace: Path) -> AgentResult:
 
 
 def run_agent(prompt: str, workspace: Path) -> AgentResult:
+    if os.environ.get("HARNESS_MOCK_AGENT") == "1":
+        return AgentResult(ok=True, seconds=0.01, tokens=0, cost_usd=0.0, turns=1, text="DONE: mock", notes="mock")
     if BACKEND == "api":
         return _run_api(prompt, workspace)
     if BACKEND == "cli":

@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
+os.environ["HARNESS_MOCK_AGENT"] = "1"
 
 PROPOSAL = """+++
 id = "{pid}"
