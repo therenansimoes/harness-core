@@ -28,9 +28,9 @@ O projeto patinou por meta-recursão: arena (agentes construindo harnesses conco
 
 ## Próximos passos (ordem)
 
-1. **Port gen3 → core:** gate hermético com reject gravado, tamper check, safety allowlist. (Em execução.)
-2. **Apontar para código que não é dele** — a falha que nenhuma geração da arena resolveu. Primeiro alvo: um repo real do Renan, task com verify determinístico.
-3. Só depois: segundo modelo/backend no A/B.
+1. ~~Port gen3 → core~~ **FEITO** (commit 10c64d2): safety allowlist, tamper check, gate em JSONL, testes honestos (34 passed reais).
+2. **Camada de juízes — FASE 1** (spec aprovada em `judges/SPEC-J1.md`): projetos-juiz derivados de OSS real (decisão do Renan: repo novo, nunca os dele — têm segredos), 1 juiz `j_b2b` primeiro, nota 60/40 determinístico/persona, gate manual. Em execução: pesquisa do upstream OSS validado (teste do mantenedor vermelho no base).
+3. FASE 2 dos juízes (j_web, j_hw, gate automático) + segundo modelo/backend no A/B.
 
 ## Pesquisa (evidência colhida, não opinião)
 
@@ -42,6 +42,10 @@ O projeto patinou por meta-recursão: arena (agentes construindo harnesses conco
   3. Flags on/off por projeto (dict em config.py) — só quando houver 2+ módulos com histórico isolado.
   4. Isolamento multi-projeto (padrão event-sourcing do OpenHands V1 / sessões independentes do Agent SDK) — só quando existir 2º projeto real.
   5. Mem0/Letta/vector DB — ignorar; reavaliar só se markdown+SQLite não escalar.
+
+## Radar de tecnologia (nunca parar de estudar — veredito registrado antes de adotar)
+
+- **deer-flow (ByteDance, MIT, 78k stars, ativo, 2026-08-01):** SuperAgent harness sobre LangGraph. ROUBAR padrão: sandbox isolado por run (versão subprocess simples, não Docker/K8s); SkillScan (scan determinístico antes de carregar capacidade); memória com escopo explícito (fazer com SQLite/markdown, depois do "saiu do lugar"). IGNORAR: LangGraph como runtime, multi-worker Redis, gateway de canais — contraria stdlib-only e a escada.
 
 ## Critério de "saiu do lugar"
 

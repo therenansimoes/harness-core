@@ -1,0 +1,2 @@
+judge_id	upstream_url	base_sha	fix_sha	sealed_sha256	rubric_version	license
+j_b2b	https://github.com/mdomke/schwifty	a84d35818306f613b2e70721dbb5ad72d5ed8cf6	77574549267f7e1756d7e1c5ccbde4b274e43e17	ccd0fe01337c1bdce254958ad32760e1cfdd1efb9af86772c03beae138a94c19	J1	MIT

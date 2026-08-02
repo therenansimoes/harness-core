@@ -13,3 +13,5 @@ node_modules/
 projects/*/ui/report.json
 projects/*/ui/test-results/
 test-results/
+benchmarks/judge/task_*/fixtures/
+benchmarks/judge/task_*/.setup_base_sha
