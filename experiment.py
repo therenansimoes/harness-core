@@ -37,6 +37,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
@@ -51,6 +52,10 @@ RESULTS_HEADER = [
     "timestamp", "harness_version", "backend", "model", "suite",
     "task_id", "success", "seconds", "tokens", "cost_usd", "turns", "notes",
 ]
+
+
+# intervalo do laço de poll do pool de runs paralelas.
+POLL_INTERVAL_S = 1.0
 
 
 class ExperimentError(Exception):
@@ -88,6 +93,9 @@ def parse_experiment(path: Path) -> dict:
     # teto nominal de n_per_arm antes de disparar (não dá pra parar no meio
     # quando tudo sobe de uma vez via Popen — ver run_experiment).
     cfg.setdefault("est_cost_per_run", 0.35)
+    # teto de runs simultâneas no modo parallel — disparar tudo de uma vez
+    # esbarra em rate limit da conta e mata o experimento.
+    cfg.setdefault("max_workers", 6)
     return cfg
 
 
@@ -281,7 +289,8 @@ def run_experiment(cfg: dict, parallel: bool | None = None) -> dict:
 
 
 def _run_experiment_parallel(cfg: dict) -> dict:
-    """Modo parallel: TODAS as runs de A e B sobem juntas via Popen — A e B
+    """Modo parallel: as runs de A e B sobem via Popen num pool de no máximo
+    max_workers simultâneas, na ordem intercalada A0, B0, A1, B1, ... — A e B
     contemporâneos por construção (melhor garantia que intercalar). Sem jeito
     de parar no meio quando tudo já foi disparado, então o budget vira um
     teto NOMINAL calculado ANTES de disparar (n_per_arm x 2 x
@@ -292,6 +301,7 @@ def _run_experiment_parallel(cfg: dict) -> dict:
     budget = cfg["budget_usd"]
     mutation = cfg["mutation"]
     est_cost = cfg.get("est_cost_per_run", 0.35)
+    max_workers = max(1, int(cfg.get("max_workers", 6)))
 
     n_per_arm = n_requested
     budget_capped = False
@@ -318,22 +328,41 @@ def _run_experiment_parallel(cfg: dict) -> dict:
         run_setup(wt_a, task)
         run_setup(wt_b, task)
 
-        # dispara tudo de uma vez (A e B, todos os pares) — cada run com seu
-        # próprio HARNESS_RESULTS, então nada colide no append.
-        launched = []
-        for i in range(n_per_arm):
-            for arm, wt in (("A", wt_a), ("B", wt_b)):
+        # fila na ordem intercalada A0, B0, A1, B1, ... — cada run com seu
+        # próprio HARNESS_RESULTS, então nada colide no append. Dispara no
+        # máximo max_workers de uma vez (rate limit da conta): a cada run
+        # concluída, a próxima da fila sobe.
+        pending = [
+            (arm, i, wt)
+            for i in range(n_per_arm)
+            for arm, wt in (("A", wt_a), ("B", wt_b))
+        ]
+        next_idx = 0
+        active: list[tuple] = []
+        while next_idx < len(pending) or active:
+            while next_idx < len(pending) and len(active) < max_workers:
+                arm, i, wt = pending[next_idx]
                 run_id = f"{name}_{arm}_{i}_{ts}"
                 results_path = results_dir / f"{run_id}.tsv"
                 proc = run_task_launch(wt, task, run_id, results_path)
-                launched.append((proc, arm, i, results_path))
+                active.append((proc, arm, i, results_path))
+                next_idx += 1
 
-        for proc, arm, i, results_path in launched:
-            proc.wait()
-            row = collect_result(results_path, str(results_path))
-            row["arm"] = arm
-            row["pair_index"] = i
-            runs.append(row)
+            still_running = []
+            for entry in active:
+                proc, arm, i, results_path = entry
+                if proc.poll() is None:
+                    still_running.append(entry)
+                    continue
+                proc.wait()
+                row = collect_result(results_path, str(results_path))
+                row["arm"] = arm
+                row["pair_index"] = i
+                runs.append(row)
+            progressed = len(still_running) != len(active)
+            active = still_running
+            if active and not progressed:
+                time.sleep(POLL_INTERVAL_S)
     finally:
         remove_worktree(wt_a)
         remove_worktree(wt_b)

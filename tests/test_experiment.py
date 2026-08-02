@@ -297,10 +297,54 @@ def _make_fake_popen(script):
             results_path.write_text(header + "\n" + row + "\n")
             self.returncode = 0
 
+        def poll(self):
+            return self.returncode
+
         def wait(self, timeout=None):
             return self.returncode
 
     FakePopen.calls = calls
+    return FakePopen
+
+
+def _make_concurrency_popen(script):
+    """Como _make_fake_popen, mas a run só "termina" no 2º poll() — assim dá
+    pra medir quantos Popen ficam vivos ao mesmo tempo (pico de concorrência)."""
+    calls: list[dict] = []
+    state = {"alive": 0, "peak": 0}
+
+    class FakePopen:
+        def __init__(self, cmd, cwd=None, env=None, stdout=None, stderr=None):
+            calls.append({"cmd": cmd, "cwd": Path(cwd), "run_id": env["HARNESS_RUN_ID"]})
+            if not script:
+                raise AssertionError("Popen chamado além do script combinado no teste")
+            success, cost = script.pop(0)
+            results_path = Path(env["HARNESS_RESULTS"])
+            header = "\t".join(experiment.RESULTS_HEADER)
+            row = "\t".join(str(v) for v in [
+                "2026-08-02T00:00:00+00:00", "vtest", "cli", "m", "fixed", "task_j_b2b",
+                success, "1.0", "100", f"{cost:.4f}", "1", "",
+            ])
+            results_path.write_text(header + "\n" + row + "\n")
+            self.returncode = None
+            self._polls = 0
+            state["alive"] += 1
+            state["peak"] = max(state["peak"], state["alive"])
+
+        def poll(self):
+            self._polls += 1
+            if self.returncode is None and self._polls >= 2:
+                self.returncode = 0
+                state["alive"] -= 1
+            return self.returncode
+
+        def wait(self, timeout=None):
+            while self.poll() is None:
+                pass
+            return self.returncode
+
+    FakePopen.calls = calls
+    FakePopen.state = state
     return FakePopen
 
 
@@ -326,6 +370,31 @@ def test_parallel_dispara_tudo_e_coleta(tmp_path, monkeypatch):
     assert result["aggregates"]["B"]["successes"] == 3
     assert len(result["runs"]) == 6
     assert set(fake_run.created) == set(fake_run.removed)
+
+
+def test_parallel_respeita_max_workers(tmp_path, monkeypatch):
+    # 6 runs (3 pares) com teto de 2 simultâneas: nunca mais de 2 Popen vivos.
+    cfg = experiment.parse_experiment(_write_parallel_cfg(tmp_path, "parmw", n=3, budget=100.0))
+    assert cfg["max_workers"] == 6  # default do parse
+    cfg["max_workers"] = 2
+    fake_run = FakeRun(script=[])
+    fake_popen = _make_concurrency_popen(script=[(1, 0.1)] * 6)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(experiment.time, "sleep", lambda s: None)
+
+    result = experiment.run_experiment(cfg)
+
+    assert fake_popen.state["peak"] == 2  # teto respeitado, e o pool foi usado de fato
+    assert len(fake_popen.calls) == 6
+    assert [c["run_id"] for c in fake_popen.calls] == [
+        "parmw_A_0_" + result["timestamp"], "parmw_B_0_" + result["timestamp"],
+        "parmw_A_1_" + result["timestamp"], "parmw_B_1_" + result["timestamp"],
+        "parmw_A_2_" + result["timestamp"], "parmw_B_2_" + result["timestamp"],
+    ]
+    assert len(result["runs"]) == 6
+    assert result["aggregates"]["A"]["successes"] == 3
+    assert result["aggregates"]["B"]["successes"] == 3
 
 
 def test_parallel_reduz_n_pelo_budget_antes_de_disparar(tmp_path, monkeypatch):
