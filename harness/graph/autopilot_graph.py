@@ -68,6 +68,11 @@ from harness.types import MutationRow
 
 CFG_ROOT = "harness_root"
 CFG_N = "harness_n_per_arm"
+# Chave do LangGraph, não nossa: é o `thread_id` do `configurable`.
+CFG_THREAD = "thread_id"
+
+# Nome do nó que escreve no config, e do marcador que ele deixa no ledger.
+APPLY_NODE = "apply"
 
 # Valor de `langgraph.graph.END`. Literal porque os roteadores são de módulo e
 # o import do vendor é tardio (o bootstrap de env precisa rodar antes dele).
@@ -92,6 +97,7 @@ class AutopilotState(TypedDict):
     arms: dict | None
     verdict: str | None
     escalation: dict | None
+    abort_reason: str | None
     forced_rule_id: str | None
     interventions: int
     aborted: bool
@@ -359,7 +365,32 @@ def _apply(state: AutopilotState, config=None) -> dict:
         return stop
     try:
         rule = _rule_of(state, config)
-        mutation = mutate.apply(rule, store.now_iso(), root=_root(config))
+        # Marcador de "o loop vai mexer no config" ANTES da escrita, e não
+        # depois: é a única evidência que sobrevive a um SIGKILL no meio do
+        # ciclo, e é dela que o `_pending_rules` do próximo boot depende para
+        # distinguir toml sujo de toml que sempre foi assim. A ordem importa —
+        # marcar depois de mutar deixaria a janela em que a mutação existe no
+        # arquivo sem existir em lugar nenhum, que é exatamente o config
+        # calibrado em silêncio que o guard existe para pegar. O contrário
+        # (marca sem mutação) é inofensivo: o guard confere o valor do toml
+        # antes de acusar. `mutation_id` é determinístico do par (regra, ts),
+        # então é o MESMO que o `record` vai gravar no fim.
+        ts = store.now_iso()
+        store.record_node(
+            _cfg(config, CFG_THREAD, ""),
+            APPLY_NODE,
+            {
+                "rule_id": rule.id,
+                "mutation_id": mutate.mutation_id(rule.id, ts),
+                "target_file": rule.target_file,
+                "key": rule.key,
+            },
+            path=_db(config),
+            # Chaveado por `(thread, ciclo)`: retomar o mesmo ciclo reaproveita
+            # a marca em vez de duplicá-la.
+            attempt=state["cycle"],
+        )
+        mutation = mutate.apply(rule, ts, root=_root(config))
     except GenomeViolation as exc:      # cinto e suspensório do genome_check
         return _stop(state, esc.GENOME_VIOLATION, {"violations": len(exc.violations)})
     except (OSError, MutationError) as exc:
@@ -542,8 +573,10 @@ def _record(state: AutopilotState, config=None) -> dict:
     rate_b = arm_b.succ / arm_b.n if arm_b.n else 0.0
     target = state.get("target") or {}
     # Ciclo interrompido no meio grava a mutação com o motivo — experimento
-    # abortado não é experimento inexistente.
-    note = (state.get("escalation") or {}).get("reason")
+    # abortado não é experimento inexistente. O motivo vem do `abort_reason`
+    # quando o humano já respondeu: `escalation` é o que ainda espera resposta,
+    # e o `escalate` a limpa ao ser respondido.
+    note = (state.get("escalation") or {}).get("reason") or state.get("abort_reason")
 
     store.record_mutation(
         MutationRow(
@@ -564,6 +597,7 @@ def _record(state: AutopilotState, config=None) -> dict:
         "mutation": None,
         "arms": None,
         "verdict": None,
+        "abort_reason": None,
         "results": [{
             "cycle": state["cycle"],
             "rule_id": mutation.rule_id,
@@ -621,6 +655,12 @@ def _escalate(state: AutopilotState, config=None) -> dict:
     seguir com uma regra escolhida a dedo, ou qualquer outra coisa para abortar.
     Quando já existe mutação aplicada, "continue" não é oferecido — a árvore
     precisa voltar ao baseline antes de qualquer novo experimento.
+
+    Respondida, a escalação SAI do estado nos dois casos. `escalation` significa
+    "o loop está parado esperando gente": mantê-la depois da resposta faz o
+    relatório do resume reimprimir no stderr um pedido de ajuda que já foi
+    atendido, com o `thread=` de uma thread encerrada. O motivo continua vivo em
+    `abort_reason`, que é o que vira `note` da linha ABORTED no ledger.
     """
     from langgraph.types import interrupt
 
@@ -635,7 +675,8 @@ def _escalate(state: AutopilotState, config=None) -> dict:
         "interventions": state["interventions"] + 1,
         "aborted": not resume,
         "forced_rule_id": rule_id if resume else None,
-        "escalation": None if resume else state["escalation"],
+        "escalation": None,
+        "abort_reason": None if resume else (state["escalation"] or {}).get("reason"),
         "events": [_event("resume", action=action or esc.ABORT, rule=rule_id)],
     }
 
@@ -720,6 +761,7 @@ def initial_state(
         arms=None,
         verdict=None,
         escalation=None,
+        abort_reason=None,
         forced_rule_id=None,
         interventions=0,
         aborted=False,
@@ -730,17 +772,34 @@ def initial_state(
 
 
 def _pending_rules(rules: Sequence[Rule], base: Path, db: Path) -> list[str]:
-    """Regras cujo `to` já está no config e que nenhum KEEP no ledger explica.
+    """Regras cuja mutação pode ter ficado no config sem ninguém ter julgado.
 
     É a assinatura de um crash entre o `apply` e o `record`: o toml ficou
-    calibrado por uma mutação que ninguém julgou. Começar um ciclo assim mediria
-    o braço A JÁ mutado — o A/B compararia a mutação contra ela mesma e o
-    veredito seria sobre nada.
+    calibrado por uma mutação que nenhum veredito explica. Começar um ciclo
+    assim mediria o braço A JÁ mutado — o A/B compararia a mutação contra ela
+    mesma e o veredito seria sobre nada.
+
+    Duas provas, e as duas exigem que alguém TENHA aplicado: o marcador que o nó
+    `apply` deixa no ledger sem linha de veredito correspondente, e a linha
+    ABORTED que não diz ter voltado. O valor do toml sozinho não prova nada —
+    `to` pode ser simplesmente o que o arquivo sempre teve (regra escrita contra
+    uma versão antiga do config), e acusar isso de sujeira trava para sempre um
+    loop cujo repo está limpo. O falso positivo custa mais que o falso negativo
+    aqui: o negativo ainda esbarra no `from` conferido pelo `mutate.apply`.
     """
-    kept = {m.rule_id for m in store.mutations(path=db) if m.verdict == "KEEP"}
+    ledger = store.mutations(path=db)
+    judged = {m.mutation_id for m in ledger}
+    kept = {m.rule_id for m in ledger if m.verdict == "KEEP"}
+    suspect = {m.rule_id for m in ledger if m.verdict == ABORTED and not m.reverted}
+    suspect |= {
+        str(p.get("rule_id"))
+        for p in store.node_payloads(APPLY_NODE, path=db)
+        if p.get("mutation_id") not in judged
+    }
+
     dirty: list[str] = []
     for rule in rules:
-        if rule.id in kept:
+        if rule.id not in suspect or rule.id in kept:
             continue
         try:
             current = mutate.read_value(base / rule.target_file, rule.key)
@@ -827,8 +886,10 @@ def run_autopilot(
     interrupts = final.get("__interrupt__") or ()
     window = int(cfg["window"])
     history = store.history(limit=window, path=data_dir / store.DB_NAME)
-    # Parada pendente vem do `__interrupt__`; escalação já respondida (e
-    # abortada) só sobrevive no estado — as duas contam como escalação.
+    # Só a parada PENDENTE conta: ela vem do `__interrupt__`. Escalação já
+    # respondida sai do estado no próprio `escalate` — reimprimi-la faria a CLI
+    # pedir de novo uma resposta que já veio. O que aconteceu no ciclo abortado
+    # continua no `results` (verdict ABORTED + `note`).
     escalation = interrupts[0].value if interrupts else final.get("escalation")
     return AutopilotReport(
         thread_id=thread_id,

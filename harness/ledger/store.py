@@ -187,6 +187,21 @@ def get_node(
     return json.loads(row["payload"]) if row is not None else None
 
 
+def node_payloads(node: str, path: Path | None = None) -> list[dict]:
+    """Payloads de TODAS as passagens por um nó, na ordem de gravação.
+
+    `get_node` responde por `(run_id, node, attempt)`; esta é a pergunta
+    inversa — quem passou por este nó, em qualquer thread. É o que o guard de
+    config sujo precisa: mutação aplicada e nunca julgada não tem linha em
+    `mutations` (o crash foi antes do `record`), só o marcador do nó.
+    """
+    with connect(path) as conn:
+        rows = conn.execute(
+            "SELECT payload FROM node_events WHERE node = ? ORDER BY rowid", (node,)
+        ).fetchall()
+    return [json.loads(r["payload"]) for r in rows]
+
+
 def record_run_once(
     row: RunRow, node: str = "record", path: Path | None = None
 ) -> tuple[int, bool]:
