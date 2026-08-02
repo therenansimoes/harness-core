@@ -1,0 +1,9 @@
+# KPI do harness para este projeto. ATENÇÃO: kpi.collect() lê o kpi.toml do
+# WORKSPACE (cópia do work_path), não este arquivo — ver project.py::_execute.
+# Para o human_score entrar no results.tsv, este bloco precisa estar no
+# .harness/kpi.toml do work_path.
+
+[kpi.human_score]
+cmd = 'python3 "$HARNESS_ROOT/note.py" kpi website-faz-rogers'
+direction = "up"
+timeout_s = 10

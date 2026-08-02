@@ -107,6 +107,15 @@ def test_cmd_roda_no_workspace_do_alvo(tmp_path):
     assert kpi.collect(tmp_path) == {"marcador": 123.0}
 
 
+def test_run_kpi_exports_harness_root(tmp_path):
+    """cwd é o alvo, então um KPI que usa ferramenta do harness (note.py) só
+    acha a raiz por $HARNESS_ROOT."""
+    assert kpi.run_kpi('test -f "$HARNESS_ROOT/kpi.py" && echo 1', tmp_path) == 1.0
+    _write_kpi_toml(tmp_path, '[kpi.raiz]\ncmd = "echo $HARNESS_ROOT | wc -c"\n')
+    assert kpi.collect(tmp_path)["raiz"] == float(len(str(kpi.ROOT)) + 1)
+    assert kpi.ROOT == REPO
+
+
 def test_to_json_compacto_sem_tab_nem_quebra(tmp_path):
     s = kpi.to_json({"b": 2.0, "a": 1.0})
     assert s == '{"a":1.0,"b":2.0}'

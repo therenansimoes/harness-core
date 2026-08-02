@@ -27,6 +27,9 @@ immutable = [
     # router pode se dar o tier caro e falsear o próprio A/B (D7).
     "router.py",
     "evolution/models.toml",
+    # quem MEDE a qualidade não se muda: nota humana fora do alcance do genoma.
+    "note.py",
+    "projects/**/notes.tsv",
     "evolution/catalog.toml",
     "benchmarks/sealed/**",
     "benchmarks/held_in/**",

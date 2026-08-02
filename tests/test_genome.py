@@ -300,6 +300,28 @@ def test_models_toml_e_router_sao_immutable():
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_note_py_is_immutable():
+    """D8.1: quem MEDE a qualidade não se muda — uma proposta que reescreve o
+    note.py se dá a própria nota."""
+    rc, tmp, evolve, calls = run_cycle("g_note", [("note.py", "MIN_NOTES = 3", "MIN_NOTES = 1")])
+    try:
+        _assert_rejeitada(rc, tmp, evolve, calls, ["note.py"])
+    finally:
+        unload(tmp)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_project_notes_tsv_is_immutable():
+    """A nota é do humano: o histórico dela não é editável por proposta."""
+    f = "projects/website-faz-rogers/notes.tsv"
+    rc, tmp, evolve, calls = run_cycle("g_notes_tsv", [(f, "0", "5")])
+    try:
+        _assert_rejeitada(rc, tmp, evolve, calls, [f])
+    finally:
+        unload(tmp)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_genome_toml_editado_durante_a_run_e_tamper():
     """Tamper check: reescrever a régua no meio do exame também é violação."""
     def tamper(tmp):

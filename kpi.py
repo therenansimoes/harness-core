@@ -30,12 +30,14 @@ CLI:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tomllib
 from math import nan
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parent
 DEFAULT_TIMEOUT_S = 60
 UP, DOWN = "up", "down"
 DEFAULT_DIRECTION = UP
@@ -101,10 +103,15 @@ def run_kpi(cmd: str, cwd, timeout_s: float = DEFAULT_TIMEOUT_S) -> float:
     mesmo do `verify.py` do alvo, que run_task.py já executa direto — não há
     superfície nova: quem escreve o kpi.toml já controla o código do alvo.
     Por isso o allowlist de safety.py (que gate*ia argv de lista, nunca shell)
-    não se aplica aqui."""
+    não se aplica aqui.
+
+    `HARNESS_ROOT` vai no env porque o cwd é o alvo: um KPI que precisa de uma
+    ferramenta do harness (note.py, por exemplo) não tem como achar a raiz a
+    partir do workspace copiado."""
     try:
         p = subprocess.run(
             cmd, cwd=str(cwd), shell=True, capture_output=True, text=True, timeout=timeout_s,
+            env={**os.environ, "HARNESS_ROOT": str(ROOT)},
         )
     except (subprocess.TimeoutExpired, OSError):
         return nan
