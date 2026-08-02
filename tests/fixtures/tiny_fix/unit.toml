@@ -1,0 +1,6 @@
+id = "tiny_fix"
+kind = "code"
+prompt = """O arquivo /target.py tem uma função add(a, b) que subtrai em vez de somar.
+Corrija: chame edit_file com file_path="/target.py", old_string="return a - b",
+new_string="return a + b". Não faça mais nada depois disso."""
+verify_cmd = "python3 -c 'from target import add; assert add(2,3)==5'"

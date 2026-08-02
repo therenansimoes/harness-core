@@ -61,4 +61,32 @@ def test_bootstrap_disables_tracing(monkeypatch):
 
 def test_backends_lists_mock(data_dir, capsys):
     assert cli.main(["backends"]) == 0
-    assert "mock" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "mock" in out
+    assert "deepagents" in out
+
+
+def test_model_flag_reaches_ledger_and_backend(data_dir, monkeypatch):
+    from harness.backends import registry
+    from harness.backends.mock import MockBackend
+
+    class Spy(MockBackend):
+        model = None
+
+    spy = Spy()
+    monkeypatch.setattr(registry, "get_backend", lambda name: spy)
+    rc = cli.main(["run", "--unit", FIXTURE, "--backend", "mock", "--model", "ollama:x:1b"])
+
+    assert rc == 0
+    assert spy.model == "ollama:x:1b"
+    assert store.history()[0].model == "ollama:x:1b"
+
+
+def test_seed_workspace_copies_unit_files_except_unit_toml(tmp_path):
+    unit = cli.load_unit(Path(__file__).parent / "fixtures" / "tiny_fix")
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    assert cli.seed_workspace(unit, ws) == ["target.py"]
+    assert not (ws / "unit.toml").exists()
+    assert "a - b" in (ws / "target.py").read_text()

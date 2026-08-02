@@ -8,14 +8,27 @@ license = { text = "MIT" }
 authors = [{ name = "Renan Simões", email = "renan@rogerstenis.com.br" }]
 dependencies = []
 
-[project.optional-dependencies]
+[dependency-groups]
+# Grupo (não extra) para o `uv run pytest` funcionar num sync limpo.
 dev = ["pytest>=8.0"]
+
+[project.optional-dependencies]
+# Extra opcional: o núcleo NÃO depende de LangChain. Pins exatos — a API do
+# deepagents é jovem (risco 1 da SPEC), então nada de faixa de versão aqui.
+deepagents = [
+    "deepagents==0.7.1",
+    "langchain==1.3.14",
+    "langgraph==1.2.10",
+    "langgraph-checkpoint-sqlite==3.1.1",
+    "langchain-ollama==1.1.0",
+]
 
 [project.scripts]
 harness = "harness.cli:main"
 
 [project.entry-points."harness.backends"]
 mock = "harness.backends.mock:MockBackend"
+deepagents = "harness.backends.deepagents_backend:DeepagentsBackend"
 
 [build-system]
 requires = ["hatchling"]
@@ -27,3 +40,5 @@ packages = ["harness"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 norecursedirs = ["legacy", ".venv", "projects", "benchmarks", "data"]
+addopts = "-m 'not ollama'"
+markers = ["ollama: exige servidor Ollama local rodando (excluído por padrão)"]

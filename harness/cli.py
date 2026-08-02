@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,9 @@ def _bootstrap() -> None:
     """Telemetria de terceiro é opt-in explícito, nunca default."""
     os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
     os.environ.setdefault("LANGSMITH_TRACING", "false")
+    # langgraph-checkpoint 3.x: sem isto, DB comprometido executa código na
+    # desserialização msgpack.
+    os.environ.setdefault("LANGGRAPH_STRICT_MSGPACK", "true")
 
 
 def load_unit(path: Path) -> UnitSpec:
@@ -43,6 +47,26 @@ def load_unit(path: Path) -> UnitSpec:
     )
 
 
+def seed_workspace(unit: UnitSpec, ws: Path) -> list[str]:
+    """Copia os arquivos da unidade pro workspace (menos o próprio `unit.toml`).
+
+    Provisório: `workspace/provision.py` troca isto por git worktree no PR-3.
+    """
+    copied: list[str] = []
+    for src in sorted(unit.path.rglob("*")):
+        rel = src.relative_to(unit.path)
+        if rel.parts[0] == UNIT_FILE or "__pycache__" in rel.parts:
+            continue
+        dst = ws / rel
+        if src.is_dir():
+            dst.mkdir(parents=True, exist_ok=True)
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        copied.append(rel.as_posix())
+    return copied
+
+
 def _verify(unit: UnitSpec, ws: Path, timeout_s: float = 120.0) -> bool:
     # Provisório: `ruler/verify.py` assume isto no PR-4 e devolve um Verdict.
     proc = subprocess.run(
@@ -54,6 +78,9 @@ def _verify(unit: UnitSpec, ws: Path, timeout_s: float = 120.0) -> bool:
 def cmd_run(args: argparse.Namespace) -> int:
     unit = load_unit(Path(args.unit))
     backend = registry.get_backend(args.backend)
+    if args.model is not None and hasattr(backend, "model"):
+        # Backend model-selectable checa o modelo pedido no próprio preflight.
+        backend.model = args.model
 
     pre = backend.preflight()
     if not pre.ok:
@@ -64,6 +91,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     t0 = time.monotonic()
     with tempfile.TemporaryDirectory(prefix=f"harness-{run_id}-") as tmp:
         ws = Path(tmp)
+        seed_workspace(unit, ws)
         sec_provision = time.monotonic() - t0
         result = backend.execute(
             ExecRequest(
@@ -74,14 +102,18 @@ def cmd_run(args: argparse.Namespace) -> int:
                 trace_path=ws / "trace.jsonl",
             )
         )
-        passed = _verify(unit, ws) if result.ok else False
+        # A régua decide, não o executor: verify roda sempre que houve execução
+        # (mesmo max_turns — o agente pode ter consertado no último turno).
+        # "blocked"/"error" nem chegaram a executar; aí não há o que verificar.
+        ran = result.exit_reason in ("done", "max_turns", "timeout")
+        passed = _verify(unit, ws) if ran else False
 
     sec_total = time.monotonic() - t0
-    ok = result.ok and passed
-    if not result.ok:
+    ok = passed
+    if not ran:
         exit_reason = result.exit_reason
     else:
-        exit_reason = "done" if passed else "verify_failed"
+        exit_reason = "done" if passed else (result.exit_reason if result.exit_reason != "done" else "verify_failed")
 
     row_id = store.record_run(
         RunRow(

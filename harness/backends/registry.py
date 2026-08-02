@@ -42,8 +42,12 @@ def _ep_factory(ep) -> Callable[[], Backend]:
 
 
 def _factories() -> dict[str, Callable[[], Backend]]:
-    # Fallback embutido: o `mock` sempre existe, mesmo sem o pacote instalado.
-    factories: dict[str, Callable[[], Backend]] = {"mock": _builtin_mock}
+    # Fallback embutido: os backends do repo existem mesmo sem o pacote
+    # instalado (o `deepagents` se anuncia indisponível no preflight).
+    factories: dict[str, Callable[[], Backend]] = {
+        "mock": _builtin_mock,
+        "deepagents": _builtin_deepagents,
+    }
     factories.update(_entry_point_factories())
     factories.update(_manual)
     return factories
@@ -53,6 +57,12 @@ def _builtin_mock() -> Backend:
     from harness.backends.mock import MockBackend
 
     return MockBackend()
+
+
+def _builtin_deepagents() -> Backend:
+    from harness.backends.deepagents_backend import DeepagentsBackend
+
+    return DeepagentsBackend()
 
 
 def available() -> list[str]:

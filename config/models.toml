@@ -1,0 +1,18 @@
+# Tabela de preço por modelo, em USD por 1M de tokens. Calibrável pelo loop
+# (arquivo mutável no genoma), a régua nunca depende dele.
+#
+# Chave = a string de modelo que o harness passa pro backend (`init_chat_model`).
+# Modelo ausente da tabela: `ollama:*` vale 0.0 (roda local, custo marginal $0),
+# qualquer outro vira `cost_usd = None` — melhor sem número que com número falso.
+
+[pricing."ollama:qwen3:4b"]
+input_per_mtok = 0.0
+output_per_mtok = 0.0
+
+[pricing."ollama:qwen2.5:3b"]
+input_per_mtok = 0.0
+output_per_mtok = 0.0
+
+[pricing."ollama:qwen3-coder:30b"]
+input_per_mtok = 0.0
+output_per_mtok = 0.0
