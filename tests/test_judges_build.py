@@ -19,7 +19,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
-sys.path.insert(0, str(REPO / "judges"))
+sys.path.insert(0, str(REPO / "attic" / "judges"))
 
 os.environ["PERSONA_MOCK"] = "1"
 
@@ -68,10 +68,10 @@ def test_dry_run_via_cli_imprime_verdict_track_build():
     judges/verdicts/build_j_b2b/ do repo real; limpa no finally pra não
     poluir git status nem os testes de graph_judgements que copiam
     judges/verdicts/ real como fixture."""
-    out_dir = REPO / "judges" / "verdicts" / "build_j_b2b"
+    out_dir = REPO / "attic" / "judges" / "verdicts" / "build_j_b2b"
     try:
         proc = subprocess.run(
-            [sys.executable, str(REPO / "judges" / "run_judge.py"), "--track", "build", "--judge", "build_j_b2b", "--dry-run"],
+            [sys.executable, str(REPO / "attic" / "judges" / "run_judge.py"), "--track", "build", "--judge", "build_j_b2b", "--dry-run"],
             cwd=REPO,
             capture_output=True,
             text=True,

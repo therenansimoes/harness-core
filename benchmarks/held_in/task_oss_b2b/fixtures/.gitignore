@@ -1,0 +1,13 @@
+*.pyc
+*.egg-info
+tags
+.cache/
+.eggs/
+.coverage
+.devbox
+AUTHORS
+build/
+dist/
+private/
+htmlcov/
+test-results.xml

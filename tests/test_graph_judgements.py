@@ -26,7 +26,7 @@ sys.path.insert(0, str(REPO))
 
 import graph  # noqa: E402
 
-REAL_VERDICTS_DIR = REPO / "judges" / "verdicts"
+REAL_VERDICTS_DIR = REPO / "attic" / "judges" / "verdicts"
 
 
 @pytest.fixture(scope="module", autouse=True)

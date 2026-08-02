@@ -30,8 +30,8 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-SEALED = REPO_ROOT / "judges" / "_sealed" / "build_j_b2b" / "test_pricing.py"
-REGISTRY = REPO_ROOT / "judges" / "registry_build.tsv"
+SEALED = REPO_ROOT / "attic" / "judges" / "_sealed" / "build_j_b2b" / "test_pricing.py"
+REGISTRY = REPO_ROOT / "attic" / "judges" / "registry_build.tsv"
 JUDGE_ID = "build_j_b2b"
 TARGET_NAME = "test_pricing.py"
 

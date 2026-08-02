@@ -155,7 +155,7 @@ def credit_ok(rep: dict) -> bool:
     return all(g["ok"] for g in rep["gates"] if not g["name"].startswith("ganho normalizado"))
 
 
-JUDGES_VERDICTS_DIR = ROOT / "judges" / "verdicts"
+JUDGES_VERDICTS_DIR = ROOT / "attic" / "judges" / "verdicts"
 
 
 def _judge_summary(version: str) -> dict | None:
@@ -187,7 +187,7 @@ def _judge_candidate_veto(version: str) -> bool:
 def judge_ok(va: str, vb: str) -> bool | None:
     """Espelha `credit_ok`, mas pro sinal de juízes (SPEC-J1 §7 / SPEC-J2
     agregação): lê os summaries de juízes mais recentes de A e B
-    (`judges/verdicts/summary_<versão>.json`) e aprova promoção só se a
+    (`attic/judges/verdicts/summary_<versão>.json`) e aprova promoção só se a
     candidata não regrediu na mediana além da margem, os juízes não estão
     discordando demais entre si (spread) e nenhum verdict da candidata
     tomou veto de D2.
@@ -313,8 +313,8 @@ Gates de piso na held-out (o gate de ganho não se aplica aqui — sealed respon
 def _judges_md(judge_result: bool | None, va: str, vb: str, require_judges: bool) -> str:
     if judge_result is None:
         return (
-            "juízes: **sem dados** — `judges/verdicts/summary_<versão>.json` não existe "
-            f"pra {va} e/ou {vb}. Rode `judges/run_judge.py --all-judges` (ou "
+            "juízes: **sem dados** — `attic/judges/verdicts/summary_<versão>.json` não existe "
+            f"pra {va} e/ou {vb}. Rode `attic/judges/run_judge.py --all-judges` (ou "
             "`--dry-run`) nas duas versões pra preencher. FASE 1 é gate manual: o "
             "wiring está pronto mas não bloqueia nada sem `--require-judges`."
         )

@@ -23,21 +23,21 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
-sys.path.insert(0, str(REPO / "judges"))
+sys.path.insert(0, str(REPO / "attic" / "judges"))
 
 os.environ["PERSONA_MOCK"] = "1"
 
 import persona  # noqa: E402
 import run_judge  # noqa: E402
 
-REGISTRY = REPO / "judges" / "registry.tsv"
-SEALED = REPO / "judges" / "_sealed" / "j_b2b" / "test_checksum.py"
+REGISTRY = REPO / "attic" / "judges" / "registry.tsv"
+SEALED = REPO / "attic" / "judges" / "_sealed" / "j_b2b" / "test_checksum.py"
 TASK_DIR = REPO / "benchmarks" / "judge" / "task_j_b2b"
 
-SEALED_WEB = REPO / "judges" / "_sealed" / "j_web" / "index.test.ts"
+SEALED_WEB = REPO / "attic" / "judges" / "_sealed" / "j_web" / "index.test.ts"
 TASK_DIR_WEB = REPO / "benchmarks" / "judge" / "task_j_web"
 
-SEALED_HW = REPO / "judges" / "_sealed" / "j_hw" / "tests.c"
+SEALED_HW = REPO / "attic" / "judges" / "_sealed" / "j_hw" / "tests.c"
 TASK_DIR_HW = REPO / "benchmarks" / "judge" / "task_j_hw"
 
 

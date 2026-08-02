@@ -15,11 +15,11 @@ projects/*/ui/test-results/
 test-results/
 benchmarks/judge/task_*/fixtures/
 benchmarks/judge/task_*/.setup_base_sha
-judges/_env/
+attic/judges/_env/
 _env/
 runs/
-arena/gen4/seed/
-arena/gen4/v1/
-arena/gen4/v2/
-arena/gen4/v3/
-arena/gen4/v4/
+attic/arena/gen4/seed/
+attic/arena/gen4/v1/
+attic/arena/gen4/v2/
+attic/arena/gen4/v3/
+attic/arena/gen4/v4/

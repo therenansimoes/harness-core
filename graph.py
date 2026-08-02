@@ -293,13 +293,13 @@ def record_judgement(judge_id: str, harness_version: str, rubric_version: str,
 
 
 def ingest_verdicts(verdicts_dir=None, db_path=None) -> int:
-    """Varre judges/verdicts/<judge_id>/<harness_version>.json e grava em `judgements`.
+    """Varre attic/judges/verdicts/<judge_id>/<harness_version>.json e grava em `judgements`.
 
     Ignora `summary_*.json`. Idempotente: rodar duas vezes não duplica (upsert
     por judge_id+harness_version+rubric_version+ts via record_judgement).
     Retorna a quantidade de verdicts ingeridos.
     """
-    base = Path(verdicts_dir) if verdicts_dir is not None else ROOT / "judges" / "verdicts"
+    base = Path(verdicts_dir) if verdicts_dir is not None else ROOT / "attic" / "judges" / "verdicts"
     n = 0
     if not base.is_dir():
         return n
@@ -811,7 +811,7 @@ def _cli(argv) -> None:
     parser = argparse.ArgumentParser(description="graph.py — CLI mínima para judgements.")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_ingest = sub.add_parser("ingest-verdicts", help="varre judges/verdicts/ e grava em judgements")
+    p_ingest = sub.add_parser("ingest-verdicts", help="varre attic/judges/verdicts/ e grava em judgements")
     p_ingest.set_defaults(func=_cli_ingest_verdicts)
 
     p_hist = sub.add_parser("judge-history", help="lista judgements recentes")

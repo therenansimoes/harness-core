@@ -54,7 +54,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -62,8 +62,8 @@ import persona  # noqa: E402
 import process_metrics  # noqa: E402
 
 DEFAULT_JUDGE_ID = "j_b2b"
-REGISTRY = REPO_ROOT / "judges" / "registry.tsv"
-VERDICTS_DIR = REPO_ROOT / "judges" / "verdicts"
+REGISTRY = REPO_ROOT / "attic" / "judges" / "registry.tsv"
+VERDICTS_DIR = REPO_ROOT / "attic" / "judges" / "verdicts"
 RESULTS = REPO_ROOT / "results.tsv"
 SPREAD_INCONCLUSIVE_THRESHOLD = 25
 
@@ -96,7 +96,7 @@ _STDOUT_LOCK = threading.Lock()
 # accept.py} + judges/registry_build.tsv. Nenhum judge_id hardcoded além do
 # default de compatibilidade.
 DEFAULT_BUILD_JUDGE_ID = "build_j_b2b"
-REGISTRY_BUILD = REPO_ROOT / "judges" / "registry_build.tsv"
+REGISTRY_BUILD = REPO_ROOT / "attic" / "judges" / "registry_build.tsv"
 
 # pesos da régua J2, trilha build (RUBRIC-J2.md). D1 não existe na trilha B
 # (sem upstream a corrigir — B1 é quem mede "projeto de verdade"). D3 não
