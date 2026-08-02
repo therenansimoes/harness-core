@@ -1,6 +1,6 @@
 # STATUS — fonte de verdade do harness-core
 
-**Atualizado:** 2026-08-01. Este arquivo substitui PLAN.md, FAST_START.md e generative-project.md como norte. Eles ficam como referência histórica — não seguir mais.
+**Atualizado:** 2026-08-02. Este arquivo substitui PLAN.md, FAST_START.md e generative-project.md como norte. Eles ficam como referência histórica — não seguir mais.
 
 ## Visão (destino, confirmada pelo Renan em 2026-08-01)
 
@@ -29,11 +29,20 @@ O projeto patinou por meta-recursão: arena (agentes construindo harnesses conco
 - 2 runs com `cli_exit_1` silencioso no results.tsv (2026-08-01 15:57/58) — causa não investigada.
 - Gate do evolve não tem tamper check nem safety allowlist (mecanismos existem provados na gen3).
 
-## Próximos passos (ordem)
+## Escada de construção (spec do architect, 2026-08-02)
 
-1. ~~Port gen3 → core~~ **FEITO** (commit 10c64d2): safety allowlist, tamper check, gate em JSONL, testes honestos (34 passed reais).
-2. **Camada de juízes — FASE 1** (spec aprovada em `judges/SPEC-J1.md`): projetos-juiz derivados de OSS real (decisão do Renan: repo novo, nunca os dele — têm segredos), 1 juiz `j_b2b` primeiro, nota 60/40 determinístico/persona, gate manual. Em execução: pesquisa do upstream OSS validado (teste do mantenedor vermelho no base).
-3. FASE 2 dos juízes (j_web, j_hw, gate automático) + segundo modelo/backend no A/B.
+| # | Degrau | Aceite verificável | Executor |
+|---|---|---|---|
+| D0 | ~~Descartar gen5~~ FEITO (revert e1a2bb6, 174 testes verdes) | — | mechanic |
+| D1 | Congelar `judges/` e `arena/` em `attic/`; extrair verify do `task_j_b2b` → `benchmarks/held_in/task_oss_b2b/`; métricas X1/X2/X3 → `metrics/process.py`; `evolve.py` sem import de judges | `rg -l "judges/" *.py` vazio; suite held_in grava em results.tsv | mechanic |
+| D2 | Régua: `score.py` com Wilson, `MIN_N=6`, KEEP/DISCARD/INCONCLUSIVE; `experiment.py` consome | 5/6 vs 4/6 → INCONCLUSIVE; 6/6 vs 1/6 → KEEP; 3/3 vs 0/3 → INCONCLUSIVE | builder |
+| D3 | `profile.py` (self-adaptive): detecta stack/comandos determinístico, lê CLAUDE.md do alvo, escreve `.harness/profile.toml`, injeta no prompt. Antes: researcher levanta prior art (aider repo-map, mise/devbox etc.) | roda contra 2 repos; comando de teste detectado executa e sai 0 | builder |
+| D4 | KPI: `.harness/kpi.toml` + coleta pós-run → colunas `kpi_*` em results.tsv e graph | 3 runs demo com kpi_* preenchido; `score.py --ab` compara por KPI | builder |
+| D5 | Genoma 360: `evolution/genome.toml` (mutáveis: agent.py, prompts/, profile.py; blocklist: evolve.py, score.py, safety.py, sealed/) | proposta em score.py falha `tamper:genome_violation`; em prompts/ passa | builder |
+| D6 | `autopilot`: fila → run → KPI → revert se regride; propostas de catálogo determinístico do erro dominante | 20min sem intervenção, ≥5 linhas em results.tsv, zero escrita fora do workspace | builder |
+| D7 | Prova em código de terceiro: +3 tasks held-out de repos OSS distintos | 3 verifies red no base, green pós-run em cópia limpa | builder |
+
+Riscos vigiados: KPI gameável (KPI calculado fora do genoma + held-out selado), genoma 360 se auto-quebrar (blocklist + worktree + revert por regressão), autonomia sem teto (budget $ e wall-clock por SIGTERM no config). NÃO construir: satélites, Docker, vector DB/GraphRAG/Mem0, credit assignment por módulo, multi-projeto real (só com 2º projeto), qualquer volta de arena.
 
 ## Pesquisa (evidência colhida, não opinião)
 
@@ -46,16 +55,17 @@ O projeto patinou por meta-recursão: arena (agentes construindo harnesses conco
   4. Isolamento multi-projeto (padrão event-sourcing do OpenHands V1 / sessões independentes do Agent SDK) — só quando existir 2º projeto real.
   5. Mem0/Letta/vector DB — ignorar; reavaliar só se markdown+SQLite não escalar.
 
-## Método generativo v2 (princípios do Renan, 2026-08-01)
+## Decisão de 2026-08-02 (definitiva — substitui o "Método generativo v2")
 
-A arena volta como método de construção QUANDO a camada de juízes provar que mede honesto (a v1 morreu por medição quebrada, não pelo conceito). Regras do método:
+Desenvolvimento por gerações + juízes está ABANDONADO como método de construção do harness. A arena não volta. O método geracional fica reservado para otimizar sistemas PRONTOS que já têm KPIs — os KPIs são o feedback natural de testes A/B/multivariáveis. Gen5 parcial descartado (revert e1a2bb6). O harness se constrói por desenvolvimento direto, com três eixos:
 
-- **Briefing mínimo:** goal + base de código a menor possível + regras do que pode/não pode + bullets curtos de dicas. Detalhe é ruído; pedido não é mecanismo.
-- **Recursos máximos, tempo mínimo:** candidatos recebem todas as tools, time (subagentes) e recursos — mas o TEMPO é o gargalo, imposto por mecanismo (SIGTERM), nunca por instrução.
-- **Juiz avalia escopo por escopo, resultado E processo:** cada juiz usa o harness candidato pra construir um projeto fake no domínio dele, e pontua (a) o resultado entregue e (b) o processo de desenvolvimento com aquele harness (fricção, autonomia, recuperação de erro). Mesma lista de critérios pra todos.
-- **Alvo do artefato:** harness super, auto-melhorável, autônomo, auto-organizável — capaz de organizar, planejar, melhorar continuamente e desenvolver projetos de forma autônoma.
+- **Autonomia:** desenvolver projetos com pouca interação humana.
+- **Self-improvement 360°:** melhorar qualquer parte de si (código, prompts, memória, processo) com prova/gate — não só config.
+- **Self-adaptive:** detectar stack, convenções e KPIs do projeto-alvo e ajustar comportamento por projeto.
 
-Sequência que protege o investimento: (1) juiz j_b2b rodando honesto ← estamos aqui; (2) rubrica ganha a dimensão "processo" (P3/P4 + uso end-to-end); (3) só então reabrir gerações de candidatos sobre a base atual.
+### Loop de self-improvement sem juízes
+
+Fitness = verificadores determinísticos com barreira estatística, em três anéis: (1) held-in (`benchmarks/held_in/`) para propor; (2) held-out selado (`benchmarks/sealed/`) só para creditar; (3) KPIs do projeto-alvo (`.harness/kpi.toml`, nome → comando → número) — regressão de KPI reverte a mutação. A régua substitui o juiz: `MIN_N=6`, decisão por intervalo de Wilson não-sobreposto, saída ternária KEEP/DISCARD/INCONCLUSIVE (inconclusive não promove). Persona LLM só como comentário em draft, nunca como número que promove. Quem julga não se muda: `evolve.py`, `score.py`, `safety.py` e `benchmarks/sealed/` fora do genoma, sempre.
 
 ## Doutrina de rodada rápida (Renan, 2026-08-02 — "com metodologia certa, grande parte da verificação vira um script")
 
