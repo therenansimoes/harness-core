@@ -31,7 +31,8 @@ timeout_s = 5
 """)
     specs = load_kpis(repo)
     assert set(specs) == {"testes", "linhas"}
-    assert specs["testes"] == KpiSpec("testes", "echo 3", "higher", 60.0)
+    # timeout_s ausente = None: quem roda escolhe o default, ninguém capa o spec.
+    assert specs["testes"] == KpiSpec("testes", "echo 3", "higher", None)
     assert specs["linhas"] == KpiSpec("linhas", "echo 10", "lower", 5.0)
 
 
@@ -101,6 +102,26 @@ cmd = "sleep 5; echo 1"
     assert math.isnan(values["lento"])
 
 
+def test_collect_honra_timeout_do_spec_maior_que_o_do_chamador(repo):
+    # o default do chamador não capa o spec: capar mataria só o lado lento
+    # (o depois) e o gate reverteria uma mudança boa.
+    _write_kpis(repo, """
+[kpi.lento]
+cmd = "sleep 0.6; echo 7"
+timeout_s = 5
+""")
+    assert collect(repo, timeout_s=0.2) == {"lento": 7.0}
+
+
+def test_collect_honra_timeout_menor_do_spec(repo):
+    _write_kpis(repo, """
+[kpi.lento]
+cmd = "sleep 5; echo 1"
+timeout_s = 0.3
+""")
+    assert math.isnan(collect(repo)["lento"])
+
+
 SPECS = {
     "testes": KpiSpec("testes", "x", "higher"),
     "linhas": KpiSpec("linhas", "x", "lower"),
@@ -134,8 +155,18 @@ def test_regressed_nan_antes_e_ignorado():
 
 
 def test_regressed_ausente_em_before_e_ignorado():
+    # KPI novo não tem linha de base; ausência no antes não fabrica regressão.
     assert regressed({}, {"testes": 0}, SPECS) == []
-    assert regressed({"testes": 10}, {}, SPECS) == []
+    assert regressed({}, {}, SPECS) == []
+
+
+def test_regressed_sumir_do_after_e_regressao():
+    # apagar a entrada do kpis.toml é mais barato que quebrar o comando: o
+    # KPI some do `after` e o gate aceitaria. Sumiu = regrediu.
+    assert regressed({"testes": 10}, {}, SPECS) == ["testes"]
+    assert regressed({"testes": 10, "linhas": 100}, {"linhas": 100}, SPECS) == ["testes"]
+    # sem base medida, sumir continua sendo ignorado.
+    assert regressed({"testes": math.nan}, {}, SPECS) == []
 
 
 def test_regressed_lista_ordenada_de_todos_os_piores():

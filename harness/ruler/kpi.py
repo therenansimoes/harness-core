@@ -5,7 +5,7 @@ Formato (`<repo>/kpis.toml`):
     [kpi.linhas]
     cmd = "wc -l < src/main.py"
     direction = "lower"     # opcional, default "higher"
-    timeout_s = 120         # opcional, default 60
+    timeout_s = 120         # opcional; sem ele vale o default de quem roda (60)
 
 `direction` não muda a coleta — só `regressed` sabe o que é "melhor". "higher"
 = maior é melhor (testes verdes, cobertura); "lower" = menor é melhor (linhas,
@@ -37,12 +37,17 @@ DEFAULT_DIRECTION = HIGHER
 
 @dataclass(frozen=True)
 class KpiSpec:
-    """Um KPI declarado pelo alvo: como medir e para que lado é melhor."""
+    """Um KPI declarado pelo alvo: como medir e para que lado é melhor.
+
+    `timeout_s=None` = o alvo não declarou; quem roda escolhe o default. Um
+    valor declarado é o limite daquele KPI e ninguém o encurta — capar o
+    timeout do spec mata a medição depois da mudança e fabrica regressão.
+    """
 
     name: str
     cmd: str
     direction: Direction = DEFAULT_DIRECTION
-    timeout_s: float = DEFAULT_TIMEOUT_S
+    timeout_s: float | None = None
 
 
 def load_kpis(repo: Path) -> dict[str, KpiSpec]:
@@ -66,10 +71,13 @@ def load_kpis(repo: Path) -> dict[str, KpiSpec]:
         if not isinstance(spec, dict) or not str(spec.get("cmd", "")).strip():
             print(f"kpi: [kpi.{name}] sem 'cmd', ignorado ({path})", file=sys.stderr)
             continue
+        timeout_raw = spec.get("timeout_s")
         try:
-            timeout_s = float(spec.get("timeout_s", DEFAULT_TIMEOUT_S))
+            timeout_s = None if timeout_raw is None else float(timeout_raw)
         except (TypeError, ValueError):
-            timeout_s = DEFAULT_TIMEOUT_S
+            print(f"kpi: [kpi.{name}] timeout_s={timeout_raw!r} inválido, usando o "
+                  f"default do chamador ({path})", file=sys.stderr)
+            timeout_s = None
         direction = str(spec.get("direction", DEFAULT_DIRECTION)).strip().lower()
         if direction not in (HIGHER, LOWER):
             print(f"kpi: [kpi.{name}] direction={spec.get('direction')!r} desconhecido, "
@@ -98,9 +106,12 @@ def run_kpi(spec: KpiSpec, repo: Path, timeout_s: float = DEFAULT_TIMEOUT_S) -> 
     `shell=True` é deliberado: o contrato do `kpis.toml` é um comando de shell
     (pipe/redirect é o caso comum). Não há superfície nova — quem escreve o
     `kpis.toml` já controla o código do alvo, e `verify_cmd` roda igual.
-    `timeout_s` do chamador é teto global; o do spec é o limite daquele KPI.
+    O limite é o do spec quando ele declara um; `timeout_s` do chamador só vale
+    para quem não declarou. Encurtar o do spec mataria a medição só do lado
+    lento (o depois) e o `regressed` leria isso como regressão de uma mudança
+    boa — o teto do chamador não pode inventar veredito.
     """
-    limit = min(float(spec.timeout_s), float(timeout_s))
+    limit = float(timeout_s if spec.timeout_s is None else spec.timeout_s)
     try:
         proc = subprocess.run(
             spec.cmd, cwd=str(repo), shell=True, capture_output=True, text=True, timeout=limit
@@ -121,7 +132,10 @@ def run_kpi(spec: KpiSpec, repo: Path, timeout_s: float = DEFAULT_TIMEOUT_S) -> 
 
 
 def collect(repo: Path, timeout_s: float = DEFAULT_TIMEOUT_S) -> dict[str, float]:
-    """{nome: valor} para todo KPI declarado em `<repo>/kpis.toml`."""
+    """{nome: valor} para todo KPI declarado em `<repo>/kpis.toml`.
+
+    `timeout_s` é o default de quem não declarou `timeout_s` no `kpis.toml`.
+    """
     return {
         name: run_kpi(spec, repo, timeout_s) for name, spec in load_kpis(repo).items()
     }
@@ -134,12 +148,17 @@ def regressed(
 ) -> list[str]:
     """Nomes dos KPIs que pioraram de `before` para `after`. `[]` = sem regressão.
 
-    - nome ausente em `before` (ou em `after`): ignorado — não há linha de base,
-      e tratar ausência como zero fabricaria regressão;
+    Quem manda é o `before`: ele é a linha de base e todo nome medido nele tem
+    que continuar medido depois.
+
+    - nome ausente em `before`: ignorado — KPI novo não tem base, e tratar
+      ausência como zero fabricaria regressão;
     - `before` NaN: ignorado, a medição de base falhou;
-    - `after` NaN com `before` medido: REGRESSÃO. NaN nunca conta como melhora,
-      e perder a medição depois da mudança é o jeito mais barato de burlar o
-      gate — quem quebra o comando do KPI não passa;
+    - `after` NaN **ou ausente** com `before` medido: REGRESSÃO. NaN nunca conta
+      como melhora, e perder a medição depois da mudança é o jeito mais barato
+      de burlar o gate. Ausência é o jeito ainda mais barato: bastaria apagar a
+      entrada do `kpis.toml` (ou o arquivo) para o KPI sumir do `after` e o
+      gate aceitar. Sumiu = regrediu;
     - sem entrada em `specs`: direction default "higher".
 
     Comparação é estrita (igual não regride) e sem limiar de ruído: aqui os dois
@@ -147,8 +166,8 @@ def regressed(
     """
     specs = specs or {}
     out: list[str] = []
-    for name in sorted(set(before) & set(after)):
-        old, new = float(before[name]), float(after[name])
+    for name in sorted(before):
+        old, new = float(before[name]), float(after.get(name, nan))
         if isnan(old):
             continue
         if isnan(new):
