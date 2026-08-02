@@ -1,9 +1,0 @@
-{"turn": 1, "task": "task_off_by_one", "strategy": "fix_off_by_one", "changed_file": false, "passed": true, "duration_s": 0.017, "wall_s": 0.017, "tokens_estimate": 29, "ts": 1}
-{"turn": 2, "task": "task_return_none", "strategy": "fix_off_by_one", "changed_file": false, "passed": true, "duration_s": 0.017, "wall_s": 0.017, "tokens_estimate": 30, "ts": 2}
-{"turn": 3, "task": "task_swap_op", "strategy": "fix_off_by_one", "changed_file": false, "passed": true, "duration_s": 0.017, "wall_s": 0.017, "tokens_estimate": 26, "ts": 3}
-{"turn": 1, "task": "task_off_by_one", "strategy": "fix_off_by_one", "changed_file": false, "passed": true, "duration_s": 0.016, "wall_s": 0.016, "tokens_estimate": 29, "ts": 1}
-{"turn": 2, "task": "task_return_none", "strategy": "fix_off_by_one", "changed_file": false, "passed": true, "duration_s": 0.016, "wall_s": 0.016, "tokens_estimate": 30, "ts": 2}
-{"turn": 3, "task": "task_swap_op", "strategy": "fix_off_by_one", "changed_file": false, "passed": true, "duration_s": 0.016, "wall_s": 0.017, "tokens_estimate": 26, "ts": 3}
-{"turn": 1, "task": "task_off_by_one", "strategy": "fix_off_by_one", "changed_file": false, "passed": true, "duration_s": 0.02, "wall_s": 0.02, "tokens_estimate": 29, "ts": 1}
-{"turn": 2, "task": "task_return_none", "strategy": "fix_off_by_one", "changed_file": false, "passed": true, "duration_s": 0.017, "wall_s": 0.017, "tokens_estimate": 30, "ts": 2}
-{"turn": 3, "task": "task_swap_op", "strategy": "fix_off_by_one", "changed_file": false, "passed": true, "duration_s": 0.017, "wall_s": 0.017, "tokens_estimate": 26, "ts": 3}

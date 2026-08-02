@@ -3,34 +3,23 @@ __pycache__/
 .pytest_cache/
 *.pyc
 .DS_Store
-evolution/sandboxes/
-evolution/critique.db
-# runtime do autopilot (D6): log de sessão, snapshots de revert e a escrita
-# confinada (TMPDIR/workspaces/demo do aceite) — tudo dentro da raiz, nada
-# versionado.
-evolution/autopilot/
-evolution/rollbacks/
-evolution/decisions.jsonl
+data/
+*.sqlite
+node_modules/
+runs/
+test-results*
 .harness_tmp/
 .harness_ws/
 .harness_demo/
-evolution/.assist_cursor
-channel/whatsapp/auth/
-channel/whatsapp/inbox.jsonl
-channel/whatsapp/node_modules/
-.ui_test_tmp/
-node_modules/
+_env/
 projects/*/ui/report.json
 projects/*/ui/test-results/
-test-results/
+benchmarks/held_in/task_*/fixtures/
 benchmarks/judge/task_*/fixtures/
 benchmarks/judge/task_*/.setup_base_sha
-benchmarks/held_in/task_*/fixtures/
-attic/judges/_env/
-_env/
-runs/
-attic/arena/gen4/seed/
-attic/arena/gen4/v1/
-attic/arena/gen4/v2/
-attic/arena/gen4/v3/
-attic/arena/gen4/v4/
+# legado congelado (referência read-only)
+legacy/evolution/sandboxes/
+legacy/evolution/critique.db
+legacy/evolution/autopilot/
+legacy/evolution/rollbacks/
+legacy/evolution/decisions.jsonl

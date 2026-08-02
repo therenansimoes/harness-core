@@ -1,7 +1,0 @@
-{
-  "order": [
-    "fix_off_by_one",
-    "fix_swap_operator",
-    "fix_return_none"
-  ]
-}

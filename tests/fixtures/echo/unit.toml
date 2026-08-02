@@ -1,0 +1,4 @@
+id = "echo"
+kind = "code"
+prompt = "Escreva a saída do echo no workspace."
+verify_cmd = "test -f mock_output.txt"

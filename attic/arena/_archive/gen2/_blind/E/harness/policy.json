@@ -1,3 +1,0 @@
-{
-  "mutation_order": ["const_flip", "cmp_flip", "arith_op_flip"]
-}

@@ -1,2 +1,0 @@
-{"turn": 0, "action": "baseline", "mutation": null, "passed": 0, "failed": 4, "decision": "n/a", "oracle_intact": true, "t_wall": 1785629546.856, "cost_usd": 0.0, "tokens": 0}
-{"turn": 1, "action": "candidate", "mutation": "const_flip:const_flip#35(1->0)", "passed": 1, "failed": 3, "decision": "accepted", "oracle_intact": true, "elapsed_s": 1.259, "t_wall": 1785629547.471, "cost_usd": 0.0, "tokens": 0}
