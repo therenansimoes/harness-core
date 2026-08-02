@@ -1,0 +1,71 @@
+# kinds.toml — o QUE a unidade é. Config, não código.
+#
+# Kind é ORTOGONAL a custo: dizer "isto é content" não diz quanto pagar — quem
+# escolhe preço é o router (config/models.toml). Sem LLM no caminho: um
+# classificador que custa mais que o modelo que ele escolheria se paga negativo.
+#
+# Precedência (isso é CÓDIGO, testado em tests/test_kinds.py):
+#   1. unit.kind explícito no unit.toml  -> vence tudo, o resto nem roda
+#   2. maior score                       -> keyword pesa mais que extensão
+#      ("refatorar index.astro" é refactor, não content)
+#   3. empate                            -> primeiro em [precedence].order
+#   4. nenhum sinal                      -> [precedence].fallback
+#
+# Palavras casam no INÍCIO da palavra: "refator" pega "refatorar", "texto" NÃO
+# pega "contexto". Use o radical — e nunca dois radicais que se contêm dentro
+# da MESMA lista, senão o mesmo trecho conta dois hits.
+
+[weights]
+keyword = 2
+extension = 1
+filename = 1
+
+[precedence]
+# rótulo mais específico primeiro; `code` é o genérico, por isso é o último e
+# também o fallback.
+order = ["infra", "config", "refactor", "content", "code"]
+fallback = "code"
+
+[kind.infra]
+extensions = [".tf", ".tfvars"]
+# nome sem extensão não casa por sufixo: `filenames` casa como palavra no texto.
+filenames = ["dockerfile", "docker-compose.yml", "makefile", "procfile", "nginx.conf"]
+keywords = [
+    "deploy", "docker", "container", "kubernetes", "k8s", "pipeline", "nginx",
+    "systemd", "servidor", "hospedagem", "dns", "certificado", "ssl", "backup",
+    "cron", "workflow",
+]
+
+[kind.config]
+extensions = [".toml", ".yaml", ".yml", ".ini", ".cfg", ".json", ".conf", ".properties"]
+keywords = [
+    "config", "parâmetro", "variável de ambiente", ".env", "flag", "knob",
+    "threshold", "calibrar", "habilitar", "desabilitar",
+]
+
+[kind.refactor]
+# refactor é ação, não artefato — só keyword. As palavras de julgamento do
+# router velho (arquitetura/decidir/trade-off, que iam pro tier caro) moram aqui.
+extensions = []
+keywords = [
+    "refator", "reestrutur", "extrair", "simplificar", "deduplicar",
+    "modulariz", "acoplamento", "arquitetura", "design", "decidir", "escolher",
+    "trade-off", "migrar", "esquema", "schema",
+]
+
+[kind.content]
+extensions = [".md", ".mdx", ".txt", ".rst", ".astro", ".html", ".csv"]
+keywords = [
+    "texto", "copy", "redigir", "reescrev", "conteúdo", "título", "descrição",
+    "tradu", "ortografia", "parágrafo", "seo",
+]
+
+[kind.code]
+extensions = [
+    ".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".rb", ".php",
+    ".c", ".cpp", ".sh", ".sql",
+]
+keywords = [
+    "implementar", "função", "bug", "teste", "endpoint", "api", "classe",
+    "método", "parse", "exceção", "validação", "lint", "compil", "stacktrace",
+]

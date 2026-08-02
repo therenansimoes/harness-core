@@ -1,3 +1,54 @@
+# models.toml — classes de CUSTO, knobs do router e tabela de preço. Config,
+# não código. Dois consumidores independentes e desacoplados: o router lê
+# [[tier]]/[router], o backend lê [pricing]. Cada um ignora o que não é seu.
+#
+# `tier` é preço, não competência. Quem diz o QUE a unidade é são os kinds
+# (config/kinds.toml), e os dois são ortogonais de propósito: é isso que deixa
+# o prior aprender "t0 é ruim pro kind code" sem condenar t0 inteiro.
+#
+# cost_rank: único e contíguo a partir de 0 (0 = mais barato). É a ordem que a
+# escalation percorre. Load falha se furar — router que cai em default
+# silencioso quando o TOML quebra esconde o bug e paga a conta.
+#
+# Quem converte token em $ é o backend, via [pricing] no fim do arquivo — o
+# router nunca lê preço absoluto, só a ordem relativa de cost_rank.
+
+[[tier]]
+name = "t0"
+backend = "deepagents"
+model = "ollama:qwen3:4b"        # local, $0 por run
+max_turns = 12
+cost_rank = 0
+
+[[tier]]
+name = "t1"
+backend = "deepagents"
+model = "ollama:qwen3-coder:30b"
+max_turns = 24
+cost_rank = 1
+
+[[tier]]
+name = "t2"
+backend = "claude_code"
+model = ""                       # placeholder: o CLI escolhe o modelo dele
+max_turns = 40
+cost_rank = 2
+
+[router]
+default_tier = "t0"   # kind sem entrada em [router.kind] cai aqui
+max_attempts = 3      # inclui a 1a tentativa
+min_n = 6             # amostra mínima pro prior opinar (Wilson não fala no vazio)
+prior_floor = 0.50    # Wilson lower < floor => sobe um tier
+
+# Tier INICIAL por kind: hipótese de partida, calibrável. O prior corrige com
+# evidência, a escalation corrige com falha.
+[router.kind]
+content = "t0"
+config = "t0"
+code = "t1"
+infra = "t1"
+refactor = "t2"
+
 # Tabela de preço por modelo, em USD por 1M de tokens. Calibrável pelo loop
 # (arquivo mutável no genoma), a régua nunca depende dele.
 #
