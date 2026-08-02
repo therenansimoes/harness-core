@@ -14,11 +14,17 @@ v0.1 quase foi promovida com um ganho que não existia. Runs sem telemetria
 válida (truncadas pelo teto de turns, timeout, JSON quebrado) reportam $0 e
 0 tokens; entrar no agregado de custo puxa a média para baixo e inventa
 eficiência. Elas contam para success e para tempo, nunca para custo.
+
+RÉGUA DE SUCCESS (D2, 2026-08-02): quem decide sobre success é intervalo de
+Wilson, não diferença bruta de acertos nem juiz-LLM. `decide_ab` devolve
+KEEP/DISCARD/INCONCLUSIVE; INCONCLUSIVE nunca promove. Com N pequeno, 5/6 vs
+4/6 é ruído — a régua diz isso em vez de fingir veredito.
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import statistics
 from collections import defaultdict
@@ -31,9 +37,63 @@ RESULTS = Path(os.environ.get("HARNESS_RESULTS", Path(__file__).parent / "result
 # Marcadores de run que terminou sem telemetria confiável (ver agent.py).
 BAD_TELEMETRY = ("cli_exit", "timeout", "bad_json", "max_turns")
 
-MIN_N = 3            # runs mínimos por lado
+MIN_N = 6            # runs mínimos por lado para a régua de Wilson opinar
+MIN_N_GATE = 3       # N mínimo dos gates de eficiência (tempo/custo) do A/B
 GAIN_PCT = 0.10      # ganho mínimo para creditar melhora (10%)
 IMBALANCE = 1.5      # N de um lado > 1.5x o outro = amostra desbalanceada
+Z = 1.96             # 95% — z do intervalo de Wilson
+
+KEEP, DISCARD, INCONCLUSIVE = "KEEP", "DISCARD", "INCONCLUSIVE"
+
+
+def wilson_interval(successes: int, n: int, z: float = Z) -> tuple[float, float]:
+    """Intervalo de Wilson (score interval) para uma proporção.
+
+    Wald (p ± z·sqrt(p(1-p)/n)) degenera justamente no caso que aparece aqui:
+    N pequeno e p colado em 0 ou 1 devolve intervalo de largura zero e finge
+    certeza. Wilson não degenera — 6/6 vira [0.61, 1.0], não [1.0, 1.0].
+    """
+    if n <= 0:
+        return 0.0, 1.0
+    p = successes / n
+    den = 1 + z * z / n
+    center = (p + z * z / (2 * n)) / den
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / den
+    return max(0.0, center - half), min(1.0, center + half)
+
+
+def decide_ab(succ_a: int, n_a: int, succ_b: int, n_b: int) -> dict:
+    """Veredito ternário sobre success — a régua que substituiu o juiz-LLM.
+
+    Sobreposição de intervalos = não dá para distinguir os dois lados com o N
+    que existe. INCONCLUSIVE é resposta honesta, não empate a favor de B: nunca
+    promove. Quem quiser veredito, rode mais runs.
+    """
+    ci_a, ci_b = wilson_interval(succ_a, n_a), wilson_interval(succ_b, n_b)
+    out = {
+        "ci_a": ci_a,
+        "ci_b": ci_b,
+        "n_a": n_a,
+        "n_b": n_b,
+        "successes_a": succ_a,
+        "successes_b": succ_b,
+        "min_n": MIN_N,
+        "z": Z,
+    }
+    if n_a < MIN_N or n_b < MIN_N:
+        return {**out, "verdict": INCONCLUSIVE,
+                "reason": f"N insuficiente (A={n_a} B={n_b}, mínimo {MIN_N} por lado)"}
+    if ci_b[0] > ci_a[1]:
+        return {**out, "verdict": KEEP,
+                "reason": f"Wilson não sobrepõe e B é melhor "
+                          f"(A [{ci_a[0]:.2f},{ci_a[1]:.2f}] < B [{ci_b[0]:.2f},{ci_b[1]:.2f}])"}
+    if ci_a[0] > ci_b[1]:
+        return {**out, "verdict": DISCARD,
+                "reason": f"Wilson não sobrepõe e A é melhor "
+                          f"(A [{ci_a[0]:.2f},{ci_a[1]:.2f}] > B [{ci_b[0]:.2f},{ci_b[1]:.2f}])"}
+    return {**out, "verdict": INCONCLUSIVE,
+            "reason": f"intervalos de Wilson se sobrepõem "
+                      f"(A [{ci_a[0]:.2f},{ci_a[1]:.2f}] vs B [{ci_b[0]:.2f},{ci_b[1]:.2f}])"}
 
 
 def load() -> list[dict]:
@@ -128,10 +188,19 @@ def ab_report(rows: list[dict], va: str, vb: str) -> dict:
         1, min(A["n_valid"], B["n_valid"])
     )
 
+    # Régua de Wilson sobre success (D2): aqui ela entra como não-regressão —
+    # DISCARD é regressão estatisticamente distinguível e barra o merge. KEEP
+    # em success não dispensa os gates de eficiência, e INCONCLUSIVE (o caso
+    # normal com N de suite) não credita nada sozinho.
+    verdict = decide_ab(A["pass"], A["n"], B["pass"], B["n"])
+
     gates = [
         ("success não caiu", B["rate"] >= A["rate"]),
         ("success limpo não caiu", B["rate_valid"] >= A["rate_valid"]),
-        (f"N válido suficiente (>={MIN_N} por lado)", A["n_valid"] >= MIN_N and B["n_valid"] >= MIN_N),
+        (f"Wilson não acusa regressão de success ({verdict['verdict']})",
+         verdict["verdict"] != DISCARD),
+        (f"N válido suficiente (>={MIN_N_GATE} por lado)",
+         A["n_valid"] >= MIN_N_GATE and B["n_valid"] >= MIN_N_GATE),
         ("truncamento não aumentou", B["trunc_rate"] <= A["trunc_rate"]),
         (f"ganho normalizado >={GAIN_PCT:.0%} (mediana s OU custo/run)", faster or cheaper),
         ("sem regressão grave no outro eixo (<+10%)", (d_med < 0.10) and (d_cost < 0.10)),
@@ -144,6 +213,8 @@ def ab_report(rows: list[dict], va: str, vb: str) -> dict:
         "d_med": d_med,
         "d_cost": d_cost,
         "d_tok": d_tok,
+        "verdict": verdict["verdict"],
+        "wilson": verdict,
         "gates": [{"name": n, "ok": bool(ok)} for n, ok in gates],
         "failed": [n for n, ok in gates if not ok],
         "imbalanced": imbalanced,
@@ -166,6 +237,9 @@ def do_ab(rows: list[dict], va: str, vb: str) -> int:
     print(f"  custo/run    ${A['cost_run']:.4f} -> ${B['cost_run']:.4f}   {s_cost}")
     print(f"  tokens/run   {A['tok_run']:.0f} -> {B['tok_run']:.0f}   {s_tok}")
     print(f"  truncamento  {A['trunc_rate']:.0%} -> {B['trunc_rate']:.0%}")
+    w = rep["wilson"]
+    print(f"  Wilson 95%   A [{w['ci_a'][0]:.2f},{w['ci_a'][1]:.2f}] "
+          f"B [{w['ci_b'][0]:.2f},{w['ci_b'][1]:.2f}]   -> {w['verdict']} ({w['reason']})")
 
     if A["rate"] != A["rate_valid"] or B["rate"] != B["rate_valid"]:
         print(

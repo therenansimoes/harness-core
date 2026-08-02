@@ -168,32 +168,39 @@ def test_para_no_budget_no_par_completo(tmp_path, monkeypatch):
 # ------------------------------------------------------------- draft/regra
 
 
+def _agg(successes_a, n_a, successes_b, n_b) -> dict:
+    def arm(successes, n):
+        return {"n": n, "successes": successes, "success_rate": successes / n if n else 0.0,
+                "cost_usd_total": 0.0, "cost_usd_avg": 0.0, "tokens_avg": 0.0, "turns_avg": 0.0}
+    return {"A": arm(successes_a, n_a), "B": arm(successes_b, n_b)}
+
+
 @pytest.mark.parametrize(
-    "successes_a, successes_b, min_diff, expected",
+    "successes_a, n_a, successes_b, n_b, expected, verdict",
     [
-        (1, 4, 2, "promover"),
-        (4, 1, 2, "rejeitar"),
-        (2, 3, 2, "inconclusivo"),
+        (0, 6, 6, 6, "promover", "KEEP"),
+        (6, 6, 0, 6, "rejeitar", "DISCARD"),
+        # ruído: 4/6 vs 5/6 não distingue nada, e N=5 nem chega ao mínimo
+        (4, 6, 5, 6, "inconclusivo", "INCONCLUSIVE"),
+        (1, 5, 4, 5, "inconclusivo", "INCONCLUSIVE"),
     ],
 )
-def test_decide_tres_cenarios(successes_a, successes_b, min_diff, expected):
-    agg = {
-        "A": {"n": 5, "successes": successes_a, "success_rate": successes_a / 5,
-              "cost_usd_total": 0.0, "cost_usd_avg": 0.0, "tokens_avg": 0.0, "turns_avg": 0.0},
-        "B": {"n": 5, "successes": successes_b, "success_rate": successes_b / 5,
-              "cost_usd_total": 0.0, "cost_usd_avg": 0.0, "tokens_avg": 0.0, "turns_avg": 0.0},
-    }
-    decision = experiment.decide(agg, {"min_diff_successes": min_diff})
+def test_decide_usa_regua_de_wilson(successes_a, n_a, successes_b, n_b, expected, verdict):
+    decision = experiment.decide(_agg(successes_a, n_a, successes_b, n_b), {})
     assert decision["outcome"] == expected
+    assert decision["verdict"] == verdict
+    assert decision["rule"] == "wilson"
 
 
 def test_draft_e_json_tres_cenarios(tmp_path, monkeypatch):
     monkeypatch.setattr(experiment, "EXPERIMENTS_DIR", tmp_path / "experiments")
     # cada item é (sucesso_A, sucesso_B) de um par; script flat = [A,B,A,B,...] na ordem de consumo.
+    # N=6 por braço é o mínimo que a régua de Wilson aceita para opinar.
     cenarios = [
-        ([(0, 1), (0, 1), (0, 1), (1, 1)], "promover"),      # A=1/4, B=4/4 -> diff=3
-        ([(1, 0), (1, 0), (1, 0), (1, 1)], "rejeitar"),       # A=4/4, B=1/4 -> diff=-3
-        ([(1, 1), (1, 1), (0, 1), (0, 0)], "inconclusivo"),   # A=2/4, B=3/4 -> diff=1
+        ([(0, 1)] * 6, "promover"),                            # A=0/6, B=6/6
+        ([(1, 0)] * 6, "rejeitar"),                            # A=6/6, B=0/6
+        ([(1, 1), (1, 1), (0, 1), (0, 1), (1, 0), (0, 0)],     # A=3/6, B=4/6
+         "inconclusivo"),
     ]
     for i, (pairs, expected) in enumerate(cenarios):
         script = [item for a, b in pairs for item in ((a, 0.0), (b, 0.0))]
