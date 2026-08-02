@@ -26,7 +26,8 @@ O projeto patinou por meta-recursão: arena (agentes construindo harnesses conco
 
 - Só testado com `claude-haiku-4-5`; backend `api` nunca exercitado.
 - 2 runs com `cli_exit_1` silencioso no results.tsv (2026-08-01 15:57/58) — causa não investigada.
-- Gate do evolve não tem tamper check nem safety allowlist (mecanismos existem provados na gen3).
+- ~~Gate do evolve não tem tamper check nem safety allowlist~~ RESOLVIDO: tamper check (genome fingerprint + sandbox_tamper) e genome.toml no D5/fix-sandbox.
+- Confinamento assimétrico no ciclo self do autopilot: `evolution/decisions.jsonl` é escrito na raiz REAL mesmo com `HARNESS_PROJECTS_ROOT` apontando pra demo (o `.md` da decisão vai pro root temporário). Gitignored, sem efeito no git, mas o log de máquina mistura sessões demo e reais. (2026-08-02)
 
 ## Escada de construção (spec do architect, 2026-08-02)
 
