@@ -197,4 +197,4 @@ def test_schema_antigo_intacto(fixtures_dir):
     assert all("judge_id" not in r for r in runs)
 
     rows = graph.judge_history(n=100, db_path=db_path)
-    assert len(rows) == 4
+    assert len(rows) >= 4  # judgements ingeridos seguem visíveis (dir vivo, conta cresce)
