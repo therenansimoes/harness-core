@@ -9,6 +9,7 @@ evolution/critique.db
 # versionado.
 evolution/autopilot/
 evolution/rollbacks/
+evolution/decisions.jsonl
 .harness_tmp/
 .harness_ws/
 .harness_demo/
