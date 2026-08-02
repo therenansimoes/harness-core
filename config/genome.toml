@@ -1,0 +1,32 @@
+# quem julga não se muda.
+#
+# `immutable` é a blocklist: régua, roteador, genoma e topologia do grafo, o
+# lock de deps e os exames selados. `mutable` é o que o loop pode calibrar.
+# Padrão repetido nos dois grupos é contradição de configuração — `load()`
+# recusa carregar; colisão de padrões diferentes sobre o mesmo path vira
+# violação em runtime. Nos dois casos, falha fechado.
+#
+# Matching é glob estilo pathlib sobre o path relativo à raiz do repo, em
+# posix: `*` não atravessa `/`, o segmento `**` casa um ou mais segmentos.
+
+immutable = [
+    # quem MEDE e quem DECIDE não se muda: uma mutação que reescreve a régua
+    # ou o gate aprova a si mesma.
+    "harness/ruler/**",
+    # quem define o que pode mudar também não se muda.
+    "harness/genome/**",
+    # quem ESCOLHE o modelo não se muda: senão a proposta se dá o tier caro e
+    # falseia o próprio A/B.
+    "harness/routing/**",
+    # a topologia é o processo; o loop calibra os toml, não os nós.
+    "harness/graph/**",
+    # deps pinadas: trocar versão por baixo invalida qualquer comparação.
+    "uv.lock",
+    # exame selado: se o loop pode reescrever a prova, a nota não vale nada.
+    "benchmarks/sealed/**",
+]
+
+mutable = [
+    "config/*.toml",
+    "prompts/**",
+]
