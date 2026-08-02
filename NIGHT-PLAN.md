@@ -4,14 +4,16 @@ Modo: trabalho contínuo autônomo. Fable orquestra; subagentes executam. Priori
 
 ## Fila (ordem; riscar ao concluir)
 
-1. [EM VOO] A/B MAX_TURNS 13v30 na task do juiz → decisão v0.4 (teto $2.50).
-2. Generalizar `judges/run_judge.py` para os 3 juízes (JUDGE_ID hardcoded → parâmetro/loop). Offline, testes com mock.
-3. M2: rodar os 3 juízes na melhor versão → primeira medição de generalidade (teto ~$3; mediana + spread).
-4. SPEC-J2 Design 2: `process_metrics.py` (X1/X2/X3 do trace) + RUBRIC-J2 + brief/accept do build_j_b2b. Tudo offline/testável.
-5. Persona: CoT estilo G-Eval antes do score (custo zero, mudança de prompt) + blindar `call_persona` contra exit-1-com-JSON (mesmo bug já corrigido no agent.py).
-6. Importar 2-3 tasks portáveis do Terminal-Bench (POC já validada no scratchpad) como suite `tb`.
-7. README honesto reescrito (estado real, como rodar, arquitetura) — preparação open source (M3).
-8. Se sobrar noite: graph.py tabela judgements; GC/polimento; revisar dívidas do STATUS.
+1. ~~[EM VOO] A/B MAX_TURNS 13v30 na task do juiz → decisão v0.4 (teto $2.50).~~
+2. ~~Generalizar `judges/run_judge.py` para os 3 juízes (JUDGE_ID hardcoded → parâmetro/loop). Offline, testes com mock.~~
+3. ~~M2: rodar os 3 juízes na melhor versão → primeira medição de generalidade (teto ~$3; mediana + spread).~~
+4. ~~SPEC-J2 Design 2: `process_metrics.py` (X1/X2/X3 do trace) + RUBRIC-J2 + brief/accept do build_j_b2b. Tudo offline/testável.~~
+5. ~~Persona: CoT estilo G-Eval antes do score (custo zero, mudança de prompt) + blindar `call_persona` contra exit-1-com-JSON (mesmo bug já corrigido no agent.py).~~
+6. ~~Importar 2-3 tasks portáveis do Terminal-Bench (POC já validada no scratchpad) como suite `tb`.~~
+7. ~~README honesto reescrito (estado real, como rodar, arquitetura) — preparação open source (M3).~~
+8. ~~Se sobrar noite: graph.py tabela judgements; GC/polimento; revisar dívidas do STATUS.~~
+
+fila estrutural concluída 2026-08-02 ~06h; extras: judge_ok, verdict history, trilha B, candidata v0.5 registrada.
 
 ## Regras da noite
 

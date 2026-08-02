@@ -16,4 +16,5 @@ test-results/
 benchmarks/judge/task_*/fixtures/
 benchmarks/judge/task_*/.setup_base_sha
 judges/_env/
+_env/
 runs/
