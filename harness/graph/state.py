@@ -17,11 +17,16 @@ Event = dict[str, Any]
 
 @dataclass(frozen=True)
 class Budget:
-    """Teto do run. `deadline_ts` é epoch em segundos; PR-9 é quem mata por ele."""
+    """Teto do run. `deadline_ts` é epoch em segundos, checado na entrada de cada
+    nó do autopilot; `max_parallel` é o semáforo do fan-out (risco 6 da SPEC)."""
 
     spent_usd: float = 0.0
     deadline_ts: float | None = None
     max_attempts: int = 2
+    max_parallel: int = 1
+
+    def expired(self, now: float) -> bool:
+        return self.deadline_ts is not None and now >= self.deadline_ts
 
 
 @dataclass(frozen=True)

@@ -1,4 +1,4 @@
-"""CLI do harness. `harness run` / `harness ab` / `harness backends`."""
+"""CLI do harness. `harness run` / `harness ab` / `harness improve` / `harness backends`."""
 
 from __future__ import annotations
 
@@ -30,6 +30,7 @@ from harness.workspace.provision import dispose, provision
 UNIT_FILE = "unit.toml"
 SCRATCH_DIR = ".harness"   # log do verify; não conta como sujeira do repo-alvo
 DEFAULT_MAX_TURNS = 8
+HELD_IN = Path("benchmarks/held_in")   # unidades default do `harness improve`
 
 
 def _bootstrap() -> None:
@@ -351,6 +352,67 @@ def cmd_backends(args: argparse.Namespace) -> int:
     return 0
 
 
+def _improve_units(args: argparse.Namespace) -> list[Path]:
+    """Unidades de avaliação: as pedidas, ou o held_in inteiro.
+
+    Sem unidade não há experimento — e falhar dizendo isso é melhor que rodar
+    um A/B sobre zero evidência e imprimir INCONCLUSIVE com cara de resposta.
+    """
+    if args.unit:
+        return [Path(u) for u in args.unit]
+    found = sorted(p.parent for p in HELD_IN.glob(f"*/{UNIT_FILE}"))
+    if not found:
+        raise FileNotFoundError(
+            f"nenhum --unit e nenhuma unidade em {HELD_IN}/*/{UNIT_FILE}: "
+            "o loop precisa de unidade de avaliação para medir a mutação"
+        )
+    return found
+
+
+def cmd_improve(args: argparse.Namespace) -> int:
+    """Um ciclo (ou mais) do loop de melhoria: propor, testar em A/B, decidir.
+
+    Sai 0 em qualquer veredito, inclusive escalação: "preciso de humano" é
+    resposta do loop, não erro da CLI — mesma regra do `harness ab`.
+    """
+    from harness.graph.autopilot_graph import run_autopilot
+    from harness.improve.target import CatalogError
+
+    try:
+        units = _improve_units(args)
+        report = run_autopilot(
+            store.data_dir(),
+            cycles=args.cycles,
+            deadline_s=args.deadline_s,
+            units=units,
+            backend=args.backend,
+            model=args.model,
+            n=args.n,
+        )
+    except (FileNotFoundError, ValueError, CatalogError) as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
+    for r in report.results:
+        change = f" {r['key']} {r['change']}" if r.get("key") else ""
+        delta = "" if r.get("delta") is None else f" delta={r['delta']:+.2f}"
+        print(
+            f"ciclo{r['cycle']} {r['rule_id']}{change} {r['verdict']} "
+            f"a={r['arm_a']} b={r['arm_b']}{delta} "
+            f"{'revertida' if r['reverted'] else 'mantida'} mut={r['mutation_id']}"
+            + (f" ({r['note']})" if r.get("note") else "")
+        )
+    if report.escalation:
+        e = report.escalation
+        print(f"escalate {e['reason']} evidence={e['evidence']}", file=sys.stderr)
+    print(
+        f"improve ciclos={report.cycles} mutações={len(report.results)} "
+        f"intervenções={report.interventions} "
+        f"intervention_rate={report.intervention_rate:.2f} (n={report.runs_window})"
+    )
+    return 0
+
+
 def _pct(values: list[float], q: int) -> float:
     """Percentil por rank mais próximo — sem dependência, honesto para n pequeno."""
     ordered = sorted(values)
@@ -412,6 +474,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     backends = sub.add_parser("backends", help="lista backends registrados + preflight")
     backends.set_defaults(func=cmd_backends)
+
+    improve = sub.add_parser("improve", help="ciclo de auto-melhoria: muta config e testa em A/B")
+    improve.add_argument("--cycles", type=int, default=1)
+    improve.add_argument("--deadline-s", type=float, default=None, dest="deadline_s",
+                         help="teto de tempo do loop; estourou, escala pro humano")
+    improve.add_argument("--unit", action="append", default=[],
+                         help="unidade de avaliação (repetível); default: benchmarks/held_in/*")
+    improve.add_argument("--backend", default="mock",
+                         help="executor dos DOIS braços — o que muda entre eles é a config")
+    improve.add_argument("--model", default=None)
+    improve.add_argument("--n", type=int, default=None,
+                         help="tentativas por braço (default: [improve].n_per_arm do catalog)")
+    improve.set_defaults(func=cmd_improve)
 
     bench = sub.add_parser("bench", help="mede o custo de uma operação do harness")
     bench.add_argument("what", choices=["provision"])

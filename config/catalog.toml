@@ -1,0 +1,65 @@
+# catalog.toml — as mutações que o loop TEM PERMISSÃO de propor.
+#
+# Cada [[rule]] é uma hipótese falsificável sobre um knob: "trocar esta chave
+# deste valor para aquele reduz este padrão de falha". O loop não inventa
+# mutação; ele escolhe da lista a de maior ganho esperado
+#
+#     ganho = freq(padrão de falha) x custo_médio(padrão) x prior(regra)
+#
+# e prova ou desmente com A/B (régua Wilson). Lista esgotada ou ganho abaixo de
+# `min_gain` = risco 5 da SPEC: sem gradiente o loop escala pro humano, não
+# improvisa.
+#
+# `fails_on` é o que amarra a regra à evidência: são `exit_reason` do ledger
+# (cortados no primeiro ':'). Regra sem `fails_on` nunca é escolhida — não há
+# como estimar ganho de uma hipótese que não diz o que promete curar.
+#
+# `key` aceita `tabela.chave` e `array[i].chave`, com o índice na ordem do
+# arquivo (`tier[0]` = o primeiro [[tier]] de models.toml). `from` é conferido
+# contra o arquivo antes de aplicar: catálogo desatualizado falha, não muta.
+#
+# Este arquivo é mutável no genoma para o humano calibrar — mas o loop NÃO pode
+# se apontar para cá (`genome:self_edit`): regra que afrouxa o critério de
+# escolha de regras aprova a si mesma.
+
+[improve]
+# Preço do segundo desperdiçado, em USD. Existe porque modelo local reporta
+# custo 0.0: sem isto, numa máquina que roda de graça toda falha teria custo
+# zero, o ganho seria zero e o loop nunca acharia gradiente. 1e-4/s ~ $0.36/h.
+sec_cost_usd = 0.0001
+min_gain = 0.000001   # abaixo disto o experimento custa mais que a cura
+min_fail_n = 1        # falhas mínimas para o padrão contar como padrão
+n_per_arm = 6         # tentativas por braço (MIN_N da régua; menos não opina)
+window = 200          # runs recentes que contam como evidência
+max_parallel = 1      # teto do fan-out do A/B (ver autopilot_graph)
+
+[[rule]]
+id = "prior_floor_050_to_065"
+target_file = "config/models.toml"
+key = "router.prior_floor"
+from = 0.50
+to = 0.65
+fails_on = ["verify_failed"]
+hypothesis = """Unidade que reprova no verify no tier barato deveria ter subido
+antes: piso mais alto faz o prior escalar mais cedo e troca falha por dinheiro."""
+
+[[rule]]
+id = "max_turns_t0_12_to_8"
+target_file = "config/models.toml"
+key = "tier[0].max_turns"
+from = 12
+to = 8
+fails_on = ["timeout", "max_turns"]
+hypothesis = """Run local que não converge em 8 turnos raramente converge em 12;
+cortar o teto devolve o relógio para a próxima tentativa em vez de gastá-lo
+no mesmo beco."""
+
+[[rule]]
+id = "max_attempts_3_to_4"
+target_file = "config/models.toml"
+key = "router.max_attempts"
+from = 3
+to = 4
+fails_on = ["verify_failed"]
+hypothesis = """A escalation morre no teto de tentativas antes de chegar ao tier
+de cima; uma tentativa a mais compra o degrau que faltava."""

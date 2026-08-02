@@ -90,6 +90,27 @@ class Verdict:
 
 
 @dataclass(frozen=True)
+class MutationRow:
+    """Uma mutação de config avaliada pelo loop de melhoria.
+
+    `arm_a`/`arm_b` são `"sucessos/tentativas"` — o mesmo formato de `harness ab
+    --a 5/6`, legível no sqlite e parseável sem esquema extra. `verdict` é o da
+    régua (KEEP/DISCARD/INCONCLUSIVE) ou `REJECTED`, quando o genoma barrou a
+    regra antes de qualquer run. `note` carrega a violação ou o motivo da
+    escalação: rejeição sem causa registrada não é auditável.
+    """
+
+    mutation_id: str
+    rule_id: str
+    verdict: str
+    arm_a: str
+    arm_b: str
+    applied_at: str
+    reverted: bool
+    note: str | None = None
+
+
+@dataclass(frozen=True)
 class RunRow:
     """Uma linha do ledger. `backend` e `kind` existem desde a linha 1."""
 

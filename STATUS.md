@@ -17,9 +17,9 @@ Pacote `harness/` (núcleo, zero menção a vendor) sobre LangGraph; legado cong
 | PR-4 | ruler/ completo: wilson, kpi (specs do ANTES anti-Goodhart), verify, note, gate | **FEITO** merge `38b2caf` |
 | PR-5 | genome/ mutable-immutable + tamper + config/genome.toml | **FEITO** merge `71c2fb7` |
 | PR-6 | routing/: kinds ortogonais + prior Wilson keyed (kind,tier,backend) — bug de chave do legado corrigido | **FEITO** merge `cb3f86c` |
-| PR-7 | Backend claude_code (CLI oficial) + slot harness.auth plugável | próximo |
-| PR-8 | A/B de backend rodado pelo próprio harness (`harness ab --dim backend`) | — |
-| PR-9 | autopilot_graph + improve/ (target, escalate via interrupt, intervention_rate) | — |
+| PR-7 | Backend claude_code (CLI oficial) + slot harness.auth plugável | **FEITO** `a8e6717` |
+| PR-8 | A/B de backend rodado pelo próprio harness (`harness ab --dim backend`) | **FEITO** `bc0714e` |
+| PR-9 | autopilot_graph + improve/ (target, escalate via interrupt, intervention_rate) | andaime commitado; aceite NÃO cumprido — C1 (canal causal) é PR-9b bloqueante |
 | PR-10 | improve/replay (atribuição por mutação) + docs + publish | — |
 
 Pendência de fiação (não é PR novo): o nó `route` do run_graph ainda é stub — ligar `routing/router.select()` quando o autopilot (PR-9) consumir o grafo.

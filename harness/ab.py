@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from harness.ledger import store
@@ -62,12 +62,24 @@ def run_ab(
     min_n: int = MIN_N,
     project: str | None = None,
     on_run: Callable[[str, int, RunRow], None] | None = None,
+    before_run: Callable[[str, int], None] | None = None,
+    intervention: bool = False,
 ) -> AbReport:
     """Roda `n` vezes cada braço, alternando, e devolve o veredito de Wilson.
 
     `data_dir` None = o ledger default (`$HARNESS_DATA_DIR`). `on_run` recebe
     `(braço, i, row)` a cada run — é como a CLI imprime progresso sem que este
     módulo saiba o que é stdout.
+
+    `before_run` recebe `(braço, i)` ANTES de cada run e é o que permite testar
+    dimensão que não cabe no `ArmSpec`: o autopilot usa para ligar/desligar a
+    mutação de config entre uma run e outra, preservando a alternância. Ele
+    roda dentro do experimento, então exceção dele aborta o A/B inteiro — é
+    intencional, braço montado errado não vira amostra.
+
+    `intervention=True` marca as linhas do ledger como "teve humano no loop".
+    Quem sabe disso é o chamador (o grafo que foi retomado por um resume), não
+    a run.
     """
     # Import tardio: o cli é quem chama o A/B, então o A/B não importa o cli no
     # topo (ciclo) — mesmo padrão do graph/run_graph.py.
@@ -84,6 +96,8 @@ def run_ab(
     t0 = time.monotonic()
     for i in range(1, n + 1):
         for label, spec in zip(ARMS, specs):
+            if before_run is not None:
+                before_run(label, i)
             outcome = run_once(
                 unit,
                 spec.backend,
@@ -92,10 +106,11 @@ def run_ab(
                 tier=spec.tier,
                 max_turns=spec.max_turns or DEFAULT_MAX_TURNS,
             )
-            store.record_run(outcome.row, path=db)
-            rows[label].append(outcome.row)
+            row = replace(outcome.row, intervention=True) if intervention else outcome.row
+            store.record_run(row, path=db)
+            rows[label].append(row)
             if on_run is not None:
-                on_run(label, i, outcome.row)
+                on_run(label, i, row)
     sec_total = time.monotonic() - t0
 
     arms = {label: _tally(rows[label]) for label in ARMS}

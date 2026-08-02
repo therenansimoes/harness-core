@@ -8,6 +8,11 @@ escrita externa feita por um nó do grafo. É o que torna o resume idempotente.
 O `attempt` fica em 0 para os nós que rodam uma vez por run (plan, provision,
 record); os nós por-tentativa (execute, verify) passam o attempt corrente, senão
 o retry replaya o resultado da tentativa anterior em vez de reexecutar.
+
+`mutations` é a terceira tabela: uma linha por mutação de config que o loop de
+melhoria avaliou (PR-9). Não é derivável de `runs` — a mesma amostra de runs
+podia ter sido gerada sem experimento nenhum. É o que o replay do PR-10 lê para
+atribuir delta a uma mudança.
 """
 
 from __future__ import annotations
@@ -18,7 +23,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from harness.types import RunRow
+from harness.types import MutationRow, RunRow
 
 DB_NAME = "runs.sqlite"
 
@@ -51,12 +56,29 @@ CREATE TABLE IF NOT EXISTS node_events (
     created_at TEXT    NOT NULL,
     UNIQUE(run_id, node, attempt)
 );
+
+CREATE TABLE IF NOT EXISTS mutations (
+    mutation_id TEXT    PRIMARY KEY,
+    rule_id     TEXT    NOT NULL,
+    verdict     TEXT    NOT NULL,
+    arm_a       TEXT    NOT NULL,
+    arm_b       TEXT    NOT NULL,
+    applied_at  TEXT    NOT NULL,
+    reverted    INTEGER NOT NULL,
+    note        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mutations_rule ON mutations(rule_id);
 """
 
 _COLUMNS = (
     "run_id", "unit_id", "project", "backend", "model", "tier", "kind",
     "ok", "exit_reason", "sec_total", "sec_provision", "cost_usd",
     "intervention", "created_at",
+)
+
+_MUT_COLUMNS = (
+    "mutation_id", "rule_id", "verdict", "arm_a", "arm_b", "applied_at",
+    "reverted", "note",
 )
 
 
@@ -115,6 +137,37 @@ def history(
             f"SELECT * FROM runs{clause} ORDER BY id DESC LIMIT ?", params
         ).fetchall()
     return [_row(r) for r in rows]
+
+
+def record_mutation(row: MutationRow, path: Path | None = None) -> bool:
+    """Grava a mutação avaliada. False = `mutation_id` já estava lá.
+
+    Não sobrescreve: o `mutation_id` é determinístico (regra + timestamp), então
+    o resume do autopilot reexecutando o nó `record` não pode reescrever um
+    veredito já emitido — a régua fala uma vez por experimento.
+    """
+    values = [_encode(getattr(row, c)) for c in _MUT_COLUMNS]
+    placeholders = ", ".join("?" * len(_MUT_COLUMNS))
+    with connect(path) as conn:
+        cur = conn.execute(
+            f"INSERT OR IGNORE INTO mutations ({', '.join(_MUT_COLUMNS)}) "
+            f"VALUES ({placeholders})",
+            values,
+        )
+        return cur.rowcount == 1
+
+
+def mutations(
+    rule_id: str | None = None, limit: int = 500, path: Path | None = None
+) -> list[MutationRow]:
+    """Mutações mais recentes primeiro (ordem de gravação)."""
+    clause = " WHERE rule_id = ?" if rule_id is not None else ""
+    params: list[object] = ([rule_id] if rule_id is not None else []) + [limit]
+    with connect(path) as conn:
+        rows = conn.execute(
+            f"SELECT * FROM mutations{clause} ORDER BY rowid DESC LIMIT ?", params
+        ).fetchall()
+    return [_mutation(r) for r in rows]
 
 
 def record_node(
@@ -183,6 +236,19 @@ def _select_node(
 
 def _encode(value: object) -> object:
     return int(value) if isinstance(value, bool) else value
+
+
+def _mutation(r: sqlite3.Row) -> MutationRow:
+    return MutationRow(
+        mutation_id=r["mutation_id"],
+        rule_id=r["rule_id"],
+        verdict=r["verdict"],
+        arm_a=r["arm_a"],
+        arm_b=r["arm_b"],
+        applied_at=r["applied_at"],
+        reverted=bool(r["reverted"]),
+        note=r["note"],
+    )
 
 
 def _row(r: sqlite3.Row) -> RunRow:
