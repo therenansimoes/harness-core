@@ -13,6 +13,7 @@ import importlib.util
 import json
 import os
 import shutil
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -376,3 +377,76 @@ def test_criterio_descartado_recalcula_denominador():
     )
     # numer = 60 + 10 = 70; denom = 60 + 10 (peso de P2) = 70 -> 100
     assert verdict["judge_score"] == 100
+
+
+# --------------------------------------------------------------- generalização
+
+
+def test_run_dry_default_e_j_b2b():
+    """Sem --judge, o comportamento é o de antes (compatibilidade)."""
+    verdict = run_judge.run_dry()
+    assert verdict["judge_id"] == "j_b2b"
+
+
+def test_run_dry_aceita_judge_id_por_parametro():
+    verdict = run_judge.run_dry("j_web")
+    assert verdict["judge_id"] == "j_web"
+    reg_web = run_judge.read_registry_row("j_web")
+    assert verdict["base_sha"] == reg_web["base_sha"]
+
+
+def test_task_dir_for_segue_convencao():
+    assert run_judge.task_dir_for("j_hw") == TASK_DIR_HW
+    assert run_judge.task_dir_for("j_web") == TASK_DIR_WEB
+    assert run_judge.task_dir_for("j_b2b") == TASK_DIR
+
+
+def test_all_judge_ids_veem_do_registry():
+    ids = run_judge.all_judge_ids()
+    assert set(ids) == {"j_b2b", "j_web", "j_hw"}
+
+
+def test_all_judges_dry_run_gera_3_verdicts_e_summary(tmp_path, monkeypatch):
+    verdicts_dir = tmp_path / "verdicts"
+    monkeypatch.setattr(run_judge, "VERDICTS_DIR", verdicts_dir)
+
+    summary = run_judge.run_all_judges(dry_run=True)
+
+    assert set(summary["scores"]) == {"j_b2b", "j_web", "j_hw"}
+    for judge_id in ("j_b2b", "j_web", "j_hw"):
+        out = verdicts_dir / judge_id / f"{run_judge.harness_version()}.json"
+        assert out.exists()
+        loaded = json.loads(out.read_text())
+        assert loaded["judge_id"] == judge_id
+        assert loaded["judge_score"] == summary["scores"][judge_id]
+
+    summary_path = verdicts_dir / f"summary_{run_judge.harness_version()}.json"
+    assert summary_path.exists()
+    loaded_summary = json.loads(summary_path.read_text())
+    assert loaded_summary["scores"] == summary["scores"]
+
+    values = list(summary["scores"].values())
+    assert summary["median"] == statistics.median(values)
+    assert summary["spread"] == max(values) - min(values)
+
+
+def test_build_summary_mediana_e_spread():
+    summary = run_judge.build_summary({"j_b2b": 90, "j_web": 80, "j_hw": 70})
+    assert summary["median"] == 80
+    assert summary["spread"] == 20
+    assert summary["inconclusive"] is False
+
+
+def test_build_summary_spread_maior_que_25_marca_inconclusive():
+    summary = run_judge.build_summary({"j_b2b": 95, "j_web": 60, "j_hw": 90})
+    assert summary["spread"] == 35
+    assert summary["inconclusive"] is True
+
+
+def test_build_summary_ignora_scores_none():
+    """judge_score None (infra_error) não pode quebrar mediana/spread nem
+    ser confundido com um score real."""
+    summary = run_judge.build_summary({"j_b2b": 90, "j_web": None, "j_hw": 70})
+    assert summary["median"] == 80
+    assert summary["spread"] == 20
+    assert summary["scores"]["j_web"] is None

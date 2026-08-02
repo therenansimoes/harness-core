@@ -31,8 +31,8 @@ hypothesis = "Candidata sintética usada pelo teste do caminho {pid}."
 
 [change]
 file = "agent.py"
-old = '''MAX_TURNS = 12'''
-new = '''MAX_TURNS = 11'''
+old = '''MAX_TURNS = 30'''
+new = '''MAX_TURNS = 25'''
 +++
 
 Proposta sintética do teste.
@@ -112,7 +112,7 @@ def run_case(pid, fixed_cand, expect_rc, sealed=None, sealed_base=None,
             fails.append(f"exit esperado {expect_rc}, obtido {rc}")
 
         version = (tmp / "harness_version.txt").read_text().strip()
-        patched = "MAX_TURNS = 11" in (tmp / "agent.py").read_text()
+        patched = "MAX_TURNS = 25" in (tmp / "agent.py").read_text()
         if merged:
             if version != "vB":
                 fails.append(f"version deveria virar vB, é {version}")

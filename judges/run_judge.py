@@ -1,19 +1,32 @@
 #!/usr/bin/env python3
-"""run_judge.py — orquestra uma avaliação do juiz j_b2b (FASE 1 do SPEC-J1).
+"""run_judge.py — orquestra uma avaliação de juiz (FASE 1 do SPEC-J1).
 
-Fluxo real (§6 do SPEC-J1):
-    1. fixtures/ do task_j_b2b já provisionadas (setup.sh — chamado se faltar).
+Generalizado para os 3 juízes do registry (j_b2b, j_web, j_hw) — nada
+hardcoded por juiz além da convenção `benchmarks/judge/task_<judge_id>` e
+da linha em `judges/registry.tsv`.
+
+Fluxo real (§6 do SPEC-J1), por juiz:
+    1. fixtures/ do task_<judge_id> já provisionadas (setup.sh — chamado se
+       faltar).
     2. run_task.py roda o agente na task, com --keep (workspace preservado).
     3. verify.py roda de novo, direto, contra o workspace preservado, pra
        extrair a linha estruturada `JUDGE_RESULT=...` (D1/D3 granular) que
        run_task.py descarta (results.tsv só guarda os últimos 160 chars).
+       task_j_web/verify.py e task_j_hw/verify.py têm parsers próprios
+       (parse_bnt_counts/parse_test_counts) por baixo — run_judge só
+       depende da linha `JUDGE_RESULT=...` e do exit code, não do formato
+       de pytest/bnt/ctest.
     4. persona.py entrega P1/P2 com citação.
-    5. verdict.json gravado em judges/verdicts/j_b2b/<harness_version>.json.
+    5. verdict.json gravado em judges/verdicts/<judge_id>/<harness_version>.json.
 
 --dry-run: pula (2)-(4), usa números sintéticos + persona em modo mock
 (PERSONA_MOCK=1), só para validar o formato do verdict (§7 do SPEC-J1).
 Este harness ainda não faz nenhuma chamada paga — o caminho real acima
 existe mas só foi exercitado com --dry-run / PERSONA_MOCK=1 até aqui.
+
+--all-judges roda os 3 em sequência (real ou --dry-run) e agrega score por
+juiz + mediana + spread num summary em
+judges/verdicts/summary_<harness_version>.json.
 """
 from __future__ import annotations
 
@@ -22,6 +35,7 @@ import json
 import os
 import re
 import shutil
+import statistics
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -33,11 +47,34 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import persona  # noqa: E402
 
-JUDGE_ID = "j_b2b"
-TASK_DIR = REPO_ROOT / "benchmarks" / "judge" / "task_j_b2b"
+DEFAULT_JUDGE_ID = "j_b2b"
 REGISTRY = REPO_ROOT / "judges" / "registry.tsv"
 VERDICTS_DIR = REPO_ROOT / "judges" / "verdicts"
 RESULTS = REPO_ROOT / "results.tsv"
+SPREAD_INCONCLUSIVE_THRESHOLD = 25
+
+
+def task_dir_for(judge_id: str) -> Path:
+    return REPO_ROOT / "benchmarks" / "judge" / f"task_{judge_id}"
+
+
+def all_judge_ids() -> list[str]:
+    """Ordem dos judge_id como aparecem em registry.tsv, restrito à régua
+    J1 (FASE 1 — os juízes que este run_judge.py sabe orquestrar via
+    task_<judge_id>/verify.py + persona). Registry pode ganhar entradas de
+    outras trilhas/réguas (ex.: SPEC-J2) que não seguem essa convenção —
+    nenhuma lista de judge_id hardcoded, só o filtro pela régua."""
+    lines = REGISTRY.read_text().splitlines()
+    header = lines[0].split("\t")
+    idx = header.index("judge_id")
+    rv_idx = header.index("rubric_version")
+    return [
+        cols[idx]
+        for line in lines[1:]
+        if line.strip()
+        for cols in [line.split("\t")]
+        if cols[rv_idx] == "J1"
+    ]
 
 # pesos da régua v1 — espelha judges/RUBRIC-J1.md, fase 1 (D1-D4 + P1 + P2).
 WEIGHTS = {"D1": 25, "D2": 15, "D3": 10, "D4": 10, "P1": 15, "P2": 10}
@@ -79,7 +116,9 @@ def synthetic_deterministic() -> dict:
     }
 
 
-def compute_deterministic(verify_result: dict, tampered: bool, cost_usd: float, turns: int) -> dict:
+def compute_deterministic(
+    verify_result: dict, tampered: bool, cost_usd: float, turns: int, task_id: str = "task_j_b2b"
+) -> dict:
     """Traduz a saída estruturada do verify.py (JUDGE_RESULT=...) + o
     tamper-check do run_task.py em D1-D4, seguindo RUBRIC-J1."""
     d1 = WEIGHTS["D1"] if verify_result.get("target_ok") else 0
@@ -98,7 +137,7 @@ def compute_deterministic(verify_result: dict, tampered: bool, cost_usd: float, 
     d3 = max(0, d3)
 
     d4 = WEIGHTS["D4"]  # sem baseline histórico -> default cheio (RUBRIC-J1 §D4)
-    baseline = median_baseline_cost_turns()
+    baseline = median_baseline_cost_turns(task_id)
     if baseline is not None:
         med_cost, med_turns = baseline
         ratio = max(cost_usd / med_cost if med_cost else 1.0, turns / med_turns if med_turns else 1.0)
@@ -119,7 +158,7 @@ def compute_deterministic(verify_result: dict, tampered: bool, cost_usd: float, 
     }
 
 
-def median_baseline_cost_turns() -> tuple[float, float] | None:
+def median_baseline_cost_turns(task_id: str = "task_j_b2b") -> tuple[float, float] | None:
     """Mediana de cost_usd/turns de runs anteriores do mesmo judge_id em
     results.tsv (suite=judge). None se não houver histórico ainda."""
     if not RESULTS.exists():
@@ -130,7 +169,7 @@ def median_baseline_cost_turns() -> tuple[float, float] | None:
         for line in fh:
             cols = line.rstrip("\n").split("\t")
             row = dict(zip(header, cols))
-            if row.get("suite") == "judge" and row.get("task_id") == "task_j_b2b":
+            if row.get("suite") == "judge" and row.get("task_id") == task_id:
                 rows.append(row)
     if not rows:
         return None
@@ -264,15 +303,18 @@ def load_trace(notes: str) -> str:
     return "\n".join(f"{i}: {line}" for i, line in enumerate(lines, start=1))
 
 
-def run_real() -> dict:
+def run_real(judge_id: str = DEFAULT_JUDGE_ID) -> dict:
     """Roda run_task.py de verdade (agente real via `claude -p`, custo
     real) e monta a ficha a partir do resultado. Não exercitado neste PR
     (proibido chamar API paga) — implementado, não testado end-to-end."""
-    if not TASK_DIR.joinpath("fixtures", "pyproject.toml").exists():
-        subprocess.run(["bash", str(TASK_DIR / "setup.sh")], check=True)
+    task_dir = task_dir_for(judge_id)
+    task_id = f"task_{judge_id}"
+
+    if not task_dir.joinpath("fixtures", "pyproject.toml").exists():
+        subprocess.run(["bash", str(task_dir / "setup.sh")], check=True)
 
     proc = subprocess.run(
-        [sys.executable, str(REPO_ROOT / "run_task.py"), str(TASK_DIR), "--suite", "judge", "--keep"],
+        [sys.executable, str(REPO_ROOT / "run_task.py"), str(task_dir), "--suite", "judge", "--keep"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
@@ -285,20 +327,20 @@ def run_real() -> dict:
     ws = Path(m.group(1))
 
     diff_proc = subprocess.run(
-        ["diff", "-ru", str(TASK_DIR / "fixtures"), str(ws), "--exclude=.venv", "--exclude=venv"],
+        ["diff", "-ru", str(task_dir / "fixtures"), str(ws), "--exclude=.venv", "--exclude=venv"],
         capture_output=True,
         text=True,
     )
     diff = diff_proc.stdout
 
     verify_proc = subprocess.run(
-        [sys.executable, str(TASK_DIR / "verify.py")], cwd=ws, capture_output=True, text=True, timeout=120
+        [sys.executable, str(task_dir / "verify.py")], cwd=ws, capture_output=True, text=True, timeout=120
     )
     verify_out = verify_proc.stdout + verify_proc.stderr
     jm = re.search(r"JUDGE_RESULT=(\{.*\})", verify_out)
     verify_result = json.loads(jm.group(1)) if jm else {"target_ok": False, "full": {}}
 
-    row = last_results_row("task_j_b2b")
+    row = last_results_row(task_id)
     tokens = int(row["tokens"]) if row and row.get("tokens", "").strip() else 0
     if tokens == 0:
         # infra quebrou antes do agente trabalhar (0 tokens = nenhuma
@@ -306,8 +348,8 @@ def run_real() -> dict:
         # D1-D4, judge_score fica None em vez de um 0 que pareceria "o
         # agente tentou e foi mal".
         shutil.rmtree(ws, ignore_errors=True)
-        reg = read_registry_row(JUDGE_ID)
-        return build_infra_error_verdict(JUDGE_ID, reg, row)
+        reg = read_registry_row(judge_id)
+        return build_infra_error_verdict(judge_id, reg, row)
 
     cost_usd = float(row["cost_usd"]) if row else 0.0
     turns = int(row["turns"]) if row else 0
@@ -318,14 +360,14 @@ def run_real() -> dict:
 
     trace = load_trace(row.get("notes", "") if row else "")
 
-    deterministic = compute_deterministic(verify_result, tampered, cost_usd, turns)
+    deterministic = compute_deterministic(verify_result, tampered, cost_usd, turns, task_id)
     ficha = persona.call_persona(deterministic, diff, trace, verify_out)
     persona_scored, discarded, veto, veto_reason = validate_and_score_persona(ficha, diff, trace)
 
     shutil.rmtree(ws, ignore_errors=True)
 
-    reg = read_registry_row(JUDGE_ID)
-    return build_verdict(JUDGE_ID, reg, deterministic, persona_scored, discarded, veto, veto_reason, cost_usd)
+    reg = read_registry_row(judge_id)
+    return build_verdict(judge_id, reg, deterministic, persona_scored, discarded, veto, veto_reason, cost_usd)
 
 
 def last_results_row(task_id: str) -> dict | None:
@@ -345,8 +387,8 @@ def last_results_row(task_id: str) -> dict | None:
     return last
 
 
-def run_dry() -> dict:
-    reg = read_registry_row(JUDGE_ID)
+def run_dry(judge_id: str = DEFAULT_JUDGE_ID) -> dict:
+    reg = read_registry_row(judge_id)
     deterministic = synthetic_deterministic()
     os.environ.setdefault("PERSONA_MOCK", "1")
     diff = "schwifty/checksum/germany.py:1\n-        return checksum\n+        return super().reconcile(checksum)\n"
@@ -354,20 +396,82 @@ def run_dry() -> dict:
     ficha = persona.call_persona(deterministic, diff, trace, "78 passed\n414 passed")
     persona_scored, discarded, veto, veto_reason = validate_and_score_persona(ficha, diff, trace)
     return build_verdict(
-        JUDGE_ID, reg, deterministic, persona_scored, discarded, veto, veto_reason, deterministic["evidence"]["cost_usd"]
+        judge_id, reg, deterministic, persona_scored, discarded, veto, veto_reason, deterministic["evidence"]["cost_usd"]
     )
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description="orquestra a avaliação do juiz j_b2b (FASE 1)")
-    ap.add_argument("--dry-run", action="store_true", help="pula run_task.py/persona real; monta verdict sintético")
-    a = ap.parse_args()
+# ------------------------------------------------------------------ --all-judges
 
-    verdict = run_dry() if a.dry_run else run_real()
+
+def run_one(judge_id: str, dry_run: bool) -> dict:
+    verdict = run_dry(judge_id) if dry_run else run_real(judge_id)
     out = write_verdict(verdict)
     print(json.dumps(verdict, indent=2, ensure_ascii=False))
     print(f"\nverdict gravado em {out}")
     print(f"judge_score = {verdict['judge_score']}")
+    return verdict
+
+
+def build_summary(scores: dict[str, int | None]) -> dict:
+    """Agrega score por juiz: mediana + spread (max-min) sobre os scores
+    não-None. spread > 25 marca `inconclusive` (juízes discordando demais
+    pra confiar num único número)."""
+    values = [v for v in scores.values() if v is not None]
+    median = statistics.median(values) if values else None
+    spread = (max(values) - min(values)) if values else None
+    return {
+        "scores": scores,
+        "median": median,
+        "spread": spread,
+        "inconclusive": bool(spread is not None and spread > SPREAD_INCONCLUSIVE_THRESHOLD),
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+
+
+def write_summary(summary: dict) -> Path:
+    VERDICTS_DIR.mkdir(parents=True, exist_ok=True)
+    out = VERDICTS_DIR / f"summary_{harness_version()}.json"
+    out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
+    return out
+
+
+def run_all_judges(dry_run: bool) -> dict:
+    scores: dict[str, int | None] = {}
+    for judge_id in all_judge_ids():
+        verdict = run_one(judge_id, dry_run)
+        scores[judge_id] = verdict["judge_score"]
+
+    summary = build_summary(scores)
+    out = write_summary(summary)
+
+    print("\n--- resumo --all-judges ---")
+    for judge_id, score in summary["scores"].items():
+        print(f"{judge_id}: {score}")
+    print(f"median: {summary['median']}")
+    print(f"spread: {summary['spread']}")
+    if summary["inconclusive"]:
+        print("inconclusive: true (spread > 25)")
+    print(f"summary gravado em {out}")
+    return summary
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="orquestra a avaliação de um juiz (FASE 1)")
+    ap.add_argument("--dry-run", action="store_true", help="pula run_task.py/persona real; monta verdict sintético")
+    ap.add_argument(
+        "--judge",
+        default=DEFAULT_JUDGE_ID,
+        choices=all_judge_ids(),
+        help="qual juiz rodar (default: j_b2b, compatibilidade)",
+    )
+    ap.add_argument("--all-judges", action="store_true", help="roda os 3 juízes em sequência e agrega um summary")
+    a = ap.parse_args()
+
+    if a.all_judges:
+        run_all_judges(a.dry_run)
+        return 0
+
+    run_one(a.judge, a.dry_run)
     return 0
 
 
