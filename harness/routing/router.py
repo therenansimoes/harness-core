@@ -38,8 +38,8 @@ class RouterError(Exception):
 
 @dataclass(frozen=True)
 class Tier:
-    """Uma classe de custo. `model` vazio = o backend escolhe o dele (o CLI do
-    claude_code, por exemplo, não aceita modelo pinado por aqui)."""
+    """Uma classe de custo. `model` vazio = o backend escolhe o dele (backend
+    cujo CLI fixa o próprio modelo ignoraria o que fosse pinado aqui)."""
 
     name: str
     backend: str

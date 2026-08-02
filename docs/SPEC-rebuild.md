@@ -1,5 +1,11 @@
 # SPEC — rebuild in-place do harness-core (LangGraph + deepagents, MIT, provider-agnostic)
 
+> **Executada; ver `docs/ARCHITECTURE.md`.** Este arquivo vira histórico: é a
+> decisão e o porquê, congelados no dia em que foram tomados. O que vale hoje
+> (estrutura, contratos, estado do grafo, zonas do genoma) está no
+> ARCHITECTURE; o andamento da escada de PRs, no `STATUS.md`. Onde esta spec e
+> o código divergirem, o código está certo.
+
 > Gerada pelo architect em 2026-08-02. Decisões confirmadas: evolução in-place, licença MIT, open source, provider-agnostic. Fonte dos requisitos: memory `handoff-recomeco-deepagents`.
 
 **Decisão:** núcleo novo em `harness/` (pacote Python), legado root movido para `legacy/` congelado; LangGraph = orquestração, deepagents = executor default via um contrato `Backend` de 3 métodos, régua/genoma/router portados como código NOVO (semântica preservada, vendor removido).
