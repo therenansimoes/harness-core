@@ -1,253 +1,145 @@
 # harness-core
 
-Motor de evolução com verificação. Plano em [`PLAN.md`](PLAN.md), atalho em
-[`FAST_START.md`](FAST_START.md).
+Harness autônomo mínimo (stdlib, sem framework de agente) que executa tasks
+com um LLM, verifica o resultado de forma **determinística** — nunca confia
+no que o agente diz — e usa esse verify como sinal pra se auto-melhorar via
+gate A/B. Em cima disso existe uma **camada de juízes**: projetos derivados de
+código open source real, com o teste do próprio mantenedor como gabarito
+selado, pra medir se o harness resolve problema de terceiro — não só as
+tasks que ele mesmo aprendeu a passar.
 
-**Done = `verify.py` sai 0.** O que o agent diz não conta.
+**Done = `verify.py`/teste do mantenedor sai 0.** O que o agent diz não conta.
 
-## Rodar
+## A prova (números reais, citados)
 
-```bash
-python3 run_task.py tasks/task_01        # uma task, uma vez
-python3 run_task.py --all                # a suite fixed inteira
-python3 run_task.py --all --repeat 3     # baseline com ruído
-python3 run_task.py --all --suite sealed # só para creditar generalização
-python3 run_task.py tasks/task_02 --keep # não apaga o workspace (debug)
-```
+- **Bug real corrigido em código de terceiro:** o harness consertou um bug do
+  [schwifty](https://github.com/mdomke/schwifty) (biblioteca IBAN/BIC real),
+  com os **415 testes do upstream verdes** e 0 regressões
+  (`results.tsv`, `v0.4 judge task_j_b2b success=1`; commit `8e145d9`).
+- **Evolução medida, não sentida:** `v0.2 → v0.4` no juiz `j_b2b` foi de nota
+  **58 → 81** (`STATUS.md`), passando por três decisões A/B reais e
+  documentadas: `v0.1` MAX_TURNS 12→6 — **DISCARD** (piorou tempo e custo,
+  `evolution/decisions/v0.1.md`), `v0.2` prompt enxuto — **KEEP** (−17.8%
+  custo/run, `evolution/decisions/v0.2.md`), `v0.4` MAX_TURNS 12→30 — **KEEP**
+  (0/6 sucesso com 12 turnos vs 3/4 com 30, `evolution/decisions/v0.4.md`).
+- **Generalidade (M2):** rodando a melhor versão nos 3 domínios-juiz —
+  `j_b2b` (Python/schwifty), `j_web` (JS/nanostores), `j_hw` (C/jsmn) — os três
+  fecharam com `success=1` no `results.tsv`. A nota de persona do `j_b2b`
+  nessa mesma rodada foi zerada por **veto de citação inválida**
+  (`judges/verdicts/j_b2b/v0.4.json`, `judges/verdicts/summary_v0.4.json:
+  "inconclusive": true`) — o mecanismo de veto funcionou, mas expôs uma
+  instabilidade da persona que ainda não foi investigada (ver dívidas).
+- **Defesa contra trapaça pegando em produção, não em teste:** no mesmo A/B
+  do `v0.4`, um run tentou editar o arquivo de teste pra passar mais fácil e
+  foi barrado por `tamper:test_file_modified` (`evolution/decisions/v0.4.md`).
+- **87 testes automatizados** cobrindo agent, evolve, safety/proveniência,
+  juízes, trace, delivery, UI gate e outbound gate (`tests/*.py`), sem gastar
+  API.
 
-Cada run: workspace temporário → fixtures → agent → `verify.py` no workspace →
-linha em `results.tsv` → workspace apagado.
+## Como rodar
 
-## Backends
-
-| Backend | Como | Custo | Quando |
-|---------|------|-------|--------|
-| `cli` (default) | subprocess `claude -p` | assinatura | dia a dia, budget baixo |
-| `api` | SDK `anthropic` | tokens | A/B sério, tokens crus |
-
-```bash
-HARNESS_BACKEND=api HARNESS_MODEL=claude-sonnet-5 python3 run_task.py --all
-```
-
-Variáveis: `HARNESS_BACKEND`, `HARNESS_MODEL`, `HARNESS_TIMEOUT`.
-
-O `cost_usd` do backend `cli` é o custo **nocional** que o CLI reporta — na
-assinatura você não paga isso, mas serve como proxy comparável entre A e B.
-
-## Onde mexer
-
-`agent.py` é o harness inteiro. `SYSTEM_PROMPT`, `MAX_TURNS`, `ALLOWED_TOOLS`,
-`MODEL` são o genoma. **Um A/B muda uma coisa só.**
-
-## Tasks
-
-| Task | O que exige | Verificador |
-|------|-------------|-------------|
-| `task_01` | README com seções obrigatórias | estrutura + blocos de código |
-| `task_02` | script CSV → resumo | saída bate com golden recomputado |
-| `task_03` | consertar bugs até os testes passarem | testes verdes + hash do teste intacto |
-
-`task_03` tem anti-cheat: editar `test_estoque.py` muda o hash e invalida a run.
-
-Toda task nova precisa de um `verify.py` que foi **testado nas duas direções** —
-falha no estado errado, passa no estado certo. Verificador que só sabe passar
-não mede nada.
-
-## Núcleo self-evolutive
-
-Um ciclo = proposta → sandbox → suite → juiz → decisão → merge|discard → graph.
-O baseline **não é tocado** até todos os gates passarem.
+Requisitos: `python3` (stdlib só, `pytest` só dentro dos ambientes dos
+juízes), [`claude` CLI](https://github.com/anthropics/claude-code) autenticado
+(backend default), `git`.
 
 ```bash
+# uma task da suite de lab
+python3 run_task.py tasks/task_01
+
+# a suite inteira, com repetição pra tirar ruído
+python3 run_task.py --all --repeat 3
+
+# um juiz: constrói o projeto-alvo real, roda o agente, verifica contra o
+# gabarito selado do mantenedor
+python3 judges/run_judge.py --judge j_b2b
+python3 judges/run_judge.py --all-judges
+
+# um ciclo de auto-evolução: proposta -> A/B -> gate -> merge|discard
 cp evolution/proposals/_template.md evolution/proposals/minha_ideia.md
-$EDITOR evolution/proposals/minha_ideia.md      # hipótese + [change] old/new
+$EDITOR evolution/proposals/minha_ideia.md
 python3 evolve.py --proposal evolution/proposals/minha_ideia.md --repeat 3
 ```
 
-Exit **0 = merge** (genome promovido, versão bumpada) · **1 = discard** (baseline
-intacto) · **2 = erro de infra** (não é veredito).
+`evolve.py` sai **0 = merge** (genoma promovido), **1 = discard** (baseline
+intacto), **2 = erro de infra** (não é veredito). `run_task.py --all` aceita
+`--suite fixed|sealed`; a suite `judge` roda por `judges/run_judge.py`, que já
+orquestra setup → run_task → verify selado → persona.
 
-Quem julga é o `score.py --ab`, os mesmos gates normalizados de sempre — o
-`evolve.py` não tem score próprio. A decisão sai em `evolution/decisions/<id>.md`
-e tudo fica ligado no graph (proposta → runs da candidata → decisão).
-
-```bash
-python3 graph_query.py decisions          # histórico + placar merge/discard
-python3 graph_query.py runs v0.2          # runs de uma versão
-python3 graph_query.py ab v0.2 v0.3       # dois lados no graph
-python3 tests/test_evolve_paths.py        # 4 caminhos do ciclo, sem gastar API
-```
-
-### fixed vs sealed — quando um merge é "creditado"
-
-| Suite | Onde | Pergunta que responde | Papel no gate |
-|---|---|---|---|
-| `tasks/` (**fixed**) | hill-climb | "melhorou?" | precisa de **ganho** ≥10% + piso |
-| `benchmarks/sealed/` | held-out | "generaliza?" | precisa só do **piso** (success, truncamento) |
-
-O `evolve.py` roda a fixed primeiro. Se os gates reprovam, acabou — sealed nem
-roda, porque held-out gasto em candidata morta é budget queimado e, repetido,
-vira treino disfarçado na própria held-out. Se a fixed aprova, a candidata vai
-para a sealed e só é **creditada** se o piso se mantiver lá.
-
-- fixed aprova + sealed confirma → **MERGE creditado**
-- fixed aprova + sealed reprova → **DISCARD** (ganho que não generaliza é overfit)
-- fixed aprova + sealed vazia ou `--no-credit` → **MERGE sem crédito**, e a
-  decision diz isso com todas as letras
-
-## WhatsApp assist — nunca envia sem confirmação
-
-Canal de assistência **ao dono**, não atendimento a terceiros. A regra é de
-código, não de disciplina:
-
-> `whatsapp.confirm_send()` é a única função do repo que chama o transporte.
-
-Qualquer outro caminho no máximo cria um `pending` no graph — um pedido de
-permissão, não uma mensagem. Quatro camadas independentes seguram: allowlist ao
-criar, allowlist ao confirmar, máquina de estados no SQLite (só `confirmed` vira
-`sent`) e o serviço Node, que revalida a allowlist e só escuta em `127.0.0.1`.
-
-```bash
-# 1. configure (fora do git)
-mkdir -p ~/.config/harness-core && python3 -c "import config; print(config.example_toml())" \
-  > ~/.config/harness-core/config.toml && $EDITOR ~/.config/harness-core/config.toml
-
-# 2. suba o serviço e pareie lendo o QR uma única vez
-cd channel/whatsapp && npm install && WA_ALLOWLIST="55SEUNUMERO@s.whatsapp.net" npm start
-
-# 3. assist: lê o inbox, obedece só o dono
-python3 assist.py --watch
-```
-
-Fluxo de um envio, de ponta a ponta:
-
-```bash
-python3 harness_cli.py whatsapp-pending      # o que está esperando permissão
-python3 harness_cli.py whatsapp-confirm 3    # ÚNICO caminho que envia
-python3 harness_cli.py whatsapp-cancel 3     # nada sai
-python3 tests/test_outbound_gate.py          # 7 provas de que o gate segura
-```
-
-Pelo próprio WhatsApp o dono manda `status`, `pendentes`, `confirmar <id>`,
-`cancelar <id>`, `decision`. Mensagem de qualquer outro número é ignorada, grupo
-nunca comanda nada, e **até a resposta ao dono fica pendente** — a menos que
-você ligue `allow_auto_reply_to_owner` (default `false`).
-
-Não existe comando "enviar". Se você procurar um atalho que cria e já confirma,
-não vai achar: a ausência dele é a funcionalidade.
-
-## Projeto real: spec → session → verify em camadas → post-work → resume
-
-Um `verify.py` congelado no dia 1 não escala para um site que cresce. Aqui a
-verificação tem camadas, e o critério é versionado como qualquer outro artefato.
+## Arquitetura (~15 linhas)
 
 ```
-projects/demo_site/
-├── spec/SPEC.md              # spec VIVA (front matter com version/updated/ui)
-├── spec/CHANGELOG_SPEC.md    # o que mudou no critério, e quando
-├── regression/               # invariantes: só CRESCEM, protegidos por MANIFEST.json
-├── acceptance/<session>/     # o aceite da DELTA desta sessão
-└── sessions/<session>/       # brief.md · state.json · delivery_report.md
+agent.py         # o loop do agente: prompt, tools, backend cli/api, trace
+run_task.py       # workspace efêmero -> fixtures -> agent -> verify -> results.tsv
+score.py          # gates normalizados por run (não por soma) + --ab A vs B
+evolve.py         # 1 ciclo: proposta -> sandbox -> fixed -> sealed -> decisão -> merge/discard
+graph.py          # store de auto-crítica: proposals, runs, decisions, sessions, governança
+safety.py         # guard_path (realpath) + safe_run (allowlist de binário) — código, não prompt
+
+judges/           # camada de juízes: registry.tsv (upstream+sha), _sealed/ (gabarito do mantenedor),
+                   #   run_judge.py, persona.py (opus, citação obrigatória, veto sem citação sustentada)
+benchmarks/
+  fixed  (tasks/)  # hill-climb: "melhorou?" — precisa de ganho >= piso
+  sealed            # held-out: "generaliza?" — precisa só do piso
+  judge             # código de terceiro real: "resolve problema que não escreveu?"
+  tb                # tasks portáveis do Terminal-Bench 2.0
 ```
 
-```bash
-python3 harness_cli.py project-init meu_site --ui
-python3 harness_cli.py session-new --project meu_site --session s001
-python3 harness_cli.py verify     --project meu_site --session s001   # exit 1 se falta algo
-python3 harness_cli.py post-work  --project meu_site --session s001
-python3 harness_cli.py resume     --project meu_site --session s001
-python3 harness_cli.py promote-checks --project meu_site --session s001  # aceite vira regression
-python3 tests/test_delivery.py    # 11 provas, sem API
-```
+## Princípios de design
 
-**Dois eixos de score, tabelas separadas.** `results.tsv` + `runs` respondem "o
-motor melhorou?". `delivery_events` responde "ficou bom pro Renan?". Um
-`task_01` passando no lab nunca conta como entrega, e vice-versa.
+- **Mecanismo, não instrução.** Sandbox, tamper check, allowlist de safety e
+  timeout são código que o agente não pode contornar escrevendo texto
+  diferente — nunca uma frase no prompt pedindo pra "não trapacear".
+- **Verify determinístico é o piso; persona é refinamento, nunca autoridade.**
+  `score.py`/`verify.py` decidem sucesso/fracasso sem LLM. A persona (juízes)
+  entra só depois, com peso menor, e citação obrigatória: sem citação o
+  critério é descartado; citação que o log não sustenta é **veto**, zera a
+  ficha.
+- **Citação obrigatória contra ruído de avaliador LLM.** Todo score de
+  persona aponta `arquivo:linha` ou `trace.jsonl:N` — sem isso não conta.
+- **Braços contemporâneos, sempre.** A/B de custo/tempo comparado entre dias
+  diferentes é inválido (variação de ruído de dia chegou a +23.7% em um caso
+  real — `evolution/decisions/v0.3.md`); todo A/B roda A e B na mesma janela.
+- **Tempo é o gargalo, imposto por mecanismo.** SIGTERM/teto de turnos, não
+  instrução de "seja rápido" — o que sobra de folga vira margem real, não
+  economia (lição do `v0.1.md`, que cortou turnos que nunca eram usados).
 
-**Governança.** O worker pode ADICIONAR check de regression (só fortalece a
-barra), mas apagar ou editar um existente é **violação** — o `MANIFEST.json`
-guarda o sha256 de cada um, e a verificação falha mesmo que todo o resto esteja
-verde. Senão o caminho mais fácil para ficar verde seria apagar o check. Só
-`governance-approve` reescreve o manifest, e ele é do dono:
+## Estado honesto
 
-```bash
-python3 harness_cli.py governance-approve --project meu_site --note "removi o check X porque..."
-```
+**Funciona, verificado por execução:** loop `evolve` com 3 decisões reais
+(`v0.1` discard, `v0.2` e `v0.4` keep); suites `fixed`/`sealed`/`tb` rodando;
+os 3 juízes (`j_b2b`/`j_web`/`j_hw`) produzindo `success=1` em código de
+terceiro real; tamper check e safety allowlist pegando tentativa real de
+trapaça; `harness_cli.py` como casca fina sobre tudo isso.
 
-O worker também não altera gates de `score.py`. Quando o post-work detecta o
-mesmo check falhando em sessões diferentes, ele abre um **stub de proposta** em
-`evolution/proposals/` e para por aí — mudar o critério de avaliação para ficar
-verde é exatamente o que este harness existe para impedir.
+**Dívidas conhecidas:**
 
-**`next_action`** sai do post-work e é o que a próxima sessão lê:
+- Só testado a fundo com `claude-haiku-4-5` via backend `cli`; backend `api`
+  e outros modelos nunca foram exercitados num A/B sério.
+- A nota de persona do `j_b2b` na rodada de generalidade (M2) foi zerada por
+  veto de citação inválida — o veto é a defesa funcionando, mas a causa raiz
+  (por que a persona citou uma linha que o material não sustenta) não foi
+  investigada.
+- `D4` (custo/turnos até o verde) pune sucesso caro tanto quanto falha
+  barata — defeito de régua já registrado, correção prevista em `RUBRIC-J2`.
+- Um run do gate manual do `v0.4` registrou `turns=1` num sucesso — possível
+  anomalia de parsing do stream, não bloqueia, não investigada.
 
-| valor | significa |
-|---|---|
-| `continue_delivery` | falta trabalho de entrega; os checks dizem o quê |
-| `await_renan` | decisão humana: UI, item do brief ou governança |
-| `evolve_harness` | falha recorrente — o gargalo parece ser o motor |
-| `done` | tudo verde, nada pendente |
+**FASE 2 (ainda não construída):** juízes `j_web`/`j_hw` com peso pleno
+(P3/P4 — recuperação de erro e adoção), tabela `judgements` no graph,
+`judge_ok` automático no gate do `evolve.py`, segundo modelo/backend no A/B.
 
-### UI: gate automático com Playwright
+## Satélites congelados
 
-Terceira camada de verify. `ui = true` **não** significa mais "espera o Renan":
-significa "roda a suite de UI". O humano entra só onde a máquina não conclui.
+`whatsapp.py`, `channel/`, `delivery.py`, `assist.py` e o gate de UI
+(Playwright) existem, têm teste e já foram usados — mas estão **congelados**
+até o core provar valor em código de terceiro (decisão registrada em
+`STATUS.md`). Não é dívida técnica: é ordem de prioridade.
 
-```bash
-python3 harness_cli.py ui-test     --project demo_site   # roda a suite
-python3 harness_cli.py ui-baseline --project demo_site --note "novo header aprovado"
-python3 tests/test_ui_gate.py                            # 5 provas do gate
-```
+## História
 
-Os checks vivem em `projects/<nome>/ui/tests/*.spec.mjs`, as baselines em
-`ui/baselines/` (versionadas). O que roda hoje no demo: home 200 + estrutura
-mínima, CSS de fato aplicado no browser (não só o `<link>` no HTML), links
-internos sem 404, console sem erro, screenshot desktop vs baseline, e ausência
-de scroll horizontal em 375px — mais screenshot mobile.
-
-Diff de screenshot usa `maxDiffPixelRatio: 0.02`. Pixel-perfect é frágil
-(antialiasing, versão do Chrome, fonte); 2% pega quebra real de layout sem
-alarme falso a cada patch do browser.
-
-`needs_human_ui_review` agora só acontece em quatro casos:
-
-| gatilho | por quê |
-|---|---|
-| suite de UI falhou | ambíguo: bug real ou baseline desatualizada? a máquina não distingue |
-| `review_subjective = true` (ou `REVIEW_UI_SUBJECTIVE=1`) | você pediu rubrica semântica |
-| check `manual_ui*` na acceptance | alguém marcou explicitamente |
-| `ui = true` mas a suite não roda | UI declarada e não verificável falha fechado |
-
-Com tudo verde, um projeto de UI chega a **`done` sem passar pelo Renan** — que
-era o objetivo desta camada.
-
-**`ui-baseline` é sensível e por isso fica registrado na governança:** a baseline
-nova vira a verdade. Se ela for gravada com um bug visual na tela, o bug passa a
-ser o esperado e nenhum check reclama de novo.
-
-Config por projeto em `.harness/config.toml`:
-
-```toml
-[ui]
-enabled = true
-review_subjective = false   # true = sempre pede olho humano
-review_on_failure = true    # false = falha de UI vira continue_delivery, não await_renan
-```
-
-**Browser:** a config usa `channel: 'chrome'` — o Chrome do sistema, sem baixar
-bundle. O runner (`@playwright/test`) está instalado na raiz do repo, e o Node
-resolve subindo a árvore: **projeto fora de `harness-core/` precisa do próprio
-`npm i -D @playwright/test`**, senão a suite falha com `ERR_MODULE_NOT_FOUND` e
-o post-work cai em `needs_human_ui_review` por não conseguir verificar.
-
-## CLI
-
-```bash
-python3 harness_cli.py status                # versão, score, última decision, pendentes
-python3 harness_cli.py run --all             # roda a suite de lab
-python3 harness_cli.py evolve --proposal ... # um ciclo de evolução do motor
-python3 harness_cli.py init --path ~/projeto # cria .harness/ com pin de versão
-python3 graph_query.py sessions              # sessões de entrega
-python3 graph_query.py delivery demo_site    # histórico de entrega do projeto
-python3 graph_query.py governance            # quem aprovou o quê
-```
+`arena/` é o método generativo que produziu os mecanismos deste harness —
+gerações de candidatos competindo sob briefing mínimo e julgamento por
+persona, antes de qualquer linha aqui existir. Está preservada, commitada,
+não roda mais: quando a camada de juízes provar que mede honesto sobre
+código de terceiro, o método volta pra gerar a próxima geração de candidatos
+sobre esta base (ver `STATUS.md`, "Método generativo v2").
