@@ -21,6 +21,7 @@ from pathlib import Path
 
 from harness.ab import ArmSpec, run_ab
 from harness.backends import registry
+from harness.improve.replay import DEFAULT_LIMIT
 from harness.ledger import store
 from harness.routing import ROUTE_AUTO, ROUTE_MANUAL, ROUTE_MODES, router
 from harness.ruler.gate import Decision, gate
@@ -523,6 +524,10 @@ def cmd_replay(args: argparse.Namespace) -> int:
 
     Sai 0 com qualquer número, inclusive delta n/a: "não tenho amostra depois"
     é resposta honesta do replay, não erro da CLI. Só mutação inexistente sai 1.
+
+    `--limit` vale nos dois modos, com o MESMO número: o `--list` é como se
+    descobre o id, e listar com um teto e atribuir com outro faz o `--list`
+    mostrar id que o `--mutation` jura não existir.
     """
     from harness.improve.replay import ReplayError, replay
 
@@ -535,13 +540,16 @@ def cmd_replay(args: argparse.Namespace) -> int:
                 f"{'revertida' if m.reverted else 'mantida'}"
                 + (f" ({m.note})" if m.note else "")
             )
-        print(f"mutações={len(rows)}")
+        # No teto, `mutações=N` seria lido como "o ledger tem N": dizer que a
+        # lista bateu no limite é a diferença entre truncar e mentir.
+        teto = " (teto do --limit; pode haver mais)" if len(rows) == args.limit else ""
+        print(f"mutações={len(rows)}{teto}")
         return 0
 
     if not args.mutation:
         args.parser.error("informe --mutation <id> (ou --list para ver os ids)")
     try:
-        att = replay(args.mutation)
+        att = replay(args.mutation, limit=args.limit)
     except ReplayError as exc:
         print(exc, file=sys.stderr)
         return 1
@@ -655,8 +663,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="id da mutação (os ids saem no --list)")
     replay.add_argument("--list", action="store_true",
                         help="lista as mutações do ledger com veredito")
-    replay.add_argument("--limit", type=int, default=200,
-                        help="teto de linhas lidas do ledger (default 200)")
+    replay.add_argument("--limit", type=int, default=DEFAULT_LIMIT, metavar="N",
+                        help=f"teto de linhas lidas do ledger, nos DOIS modos "
+                             f"(default {DEFAULT_LIMIT})")
     replay.set_defaults(func=cmd_replay, parser=replay)
 
     doctor = sub.add_parser(

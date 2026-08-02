@@ -41,6 +41,11 @@ from harness.types import MutationRow, RunRow
 # Chave do experimento: os mesmos três eixos do prior do router.
 Key = tuple[str | None, str | None, str | None]
 NO_KEY: Key = (None, None, None)
+# Teto de linhas lidas do ledger. Alto porque as janelas são fatias do
+# histórico: teto curto não erra por excesso, erra por medir menos amostra do
+# que existe — e um id fora do teto vira "mutação desconhecida" num ledger que
+# a tem. Quem quer janela curta pede.
+DEFAULT_LIMIT = 2000
 
 
 class ReplayError(Exception):
@@ -216,7 +221,7 @@ def attribute(
 
 
 def replay(
-    mutation_id: str, path: Path | None = None, limit: int = 2000
+    mutation_id: str, path: Path | None = None, limit: int = DEFAULT_LIMIT
 ) -> Attribution:
     """Atribuição de uma mutação do ledger. `limit` é o teto de runs lidas."""
     rows = store.mutations(limit=limit, path=path)

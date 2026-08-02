@@ -786,8 +786,15 @@ def _pending_rules(rules: Sequence[Rule], base: Path, db: Path) -> list[str]:
     uma versão antiga do config), e acusar isso de sujeira trava para sempre um
     loop cujo repo está limpo. O falso positivo custa mais que o falso negativo
     aqui: o negativo ainda esbarra no `from` conferido pelo `mutate.apply`.
+
+    Ledger sem teto de propósito: `node_payloads` lê TODAS as marcas de `apply`,
+    e casá-las com uma janela das mutações mais recentes é comparar conjuntos de
+    tamanhos diferentes. Bastavam 500 mutações depois de um KEEP para o veredito
+    dele sair da janela: a marca antiga viraria "apply sem veredito", a regra
+    viraria suspeita, e o boot recusaria para sempre um repo limpo — o mesmo
+    falso positivo que esta função existe para eliminar.
     """
-    ledger = store.mutations(path=db)
+    ledger = store.mutations(limit=None, path=db)
     judged = {m.mutation_id for m in ledger}
     kept = {m.rule_id for m in ledger if m.verdict == "KEEP"}
     suspect = {m.rule_id for m in ledger if m.verdict == ABORTED and not m.reverted}

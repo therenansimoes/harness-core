@@ -158,14 +158,24 @@ def record_mutation(row: MutationRow, path: Path | None = None) -> bool:
 
 
 def mutations(
-    rule_id: str | None = None, limit: int = 500, path: Path | None = None
+    rule_id: str | None = None, limit: int | None = 500, path: Path | None = None
 ) -> list[MutationRow]:
-    """Mutações mais recentes primeiro (ordem de gravação)."""
+    """Mutações mais recentes primeiro (ordem de gravação). `limit=None` = todas.
+
+    Sem teto é para quem pergunta sobre o histórico INTEIRO, e não sobre a
+    janela recente: "este `mutation_id` já foi julgado?" respondida por uma
+    janela erra por omissão — o veredito antigo cai fora e a mutação parece
+    pendente. Prior e listagem continuam com teto: lá a janela é o que se quer.
+    """
     clause = " WHERE rule_id = ?" if rule_id is not None else ""
-    params: list[object] = ([rule_id] if rule_id is not None else []) + [limit]
+    params: list[object] = [rule_id] if rule_id is not None else []
+    ceiling = ""
+    if limit is not None:
+        ceiling = " LIMIT ?"
+        params.append(limit)
     with connect(path) as conn:
         rows = conn.execute(
-            f"SELECT * FROM mutations{clause} ORDER BY rowid DESC LIMIT ?", params
+            f"SELECT * FROM mutations{clause} ORDER BY rowid DESC{ceiling}", params
         ).fetchall()
     return [_mutation(r) for r in rows]
 

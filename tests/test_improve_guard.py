@@ -268,6 +268,39 @@ def test_start_aceita_config_mutada_com_keep_no_ledger(sandbox):
     assert report.escalation["reason"] == escalate.NO_GRADIENT
 
 
+def test_keep_antigo_nao_vira_pendencia_depois_de_500_mutacoes(sandbox):
+    """O veredito não expira. Antes, `node_payloads` lia TODAS as marcas de
+    `apply` e as mutações vinham pela janela de 500: 500 experimentos depois, o
+    KEEP saía da janela, a marca virava "apply sem veredito" e o boot recusava
+    para sempre um repo em que ninguém deixou nada pendente.
+    """
+    rules, _ = load_catalog(root=sandbox)
+    m = mutate.apply(next(r for r in rules if r.id == "floor_up"), "t", root=sandbox)
+    store.record_node(
+        "improve-antigo",
+        autopilot_graph.APPLY_NODE,
+        {"rule_id": m.rule_id, "mutation_id": m.mutation_id,
+         "target_file": m.target_file, "key": m.key},
+        path=db(sandbox),
+    )
+    store.record_mutation(
+        MutationRow(m.mutation_id, "floor_up", "KEEP", "0/6", "6/6", "t", False),
+        path=db(sandbox),
+    )
+    assert autopilot_graph._pending_rules(rules, sandbox, db(sandbox)) == []
+
+    for i in range(500):                     # experimentos de OUTRA regra depois
+        store.record_mutation(
+            MutationRow(f"outra-{i:04d}", "outra_regra", "REVERT", "3/6", "3/6",
+                        "t", True),
+            path=db(sandbox),
+        )
+
+    assert autopilot_graph._pending_rules(rules, sandbox, db(sandbox)) == []
+    report = run_autopilot(sandbox / "data", units=[UNIT], root=sandbox)
+    assert report.escalation["reason"] == escalate.NO_GRADIENT
+
+
 def test_ciclo_completo_deixa_marca_de_apply_e_nao_fica_pendente(sandbox):
     """A marca vem do nó `apply` de verdade, não só do teste que simula o crash:
     ciclo inteiro grava marca E veredito, e o boot seguinte não acusa nada."""

@@ -257,6 +257,37 @@ def test_cli_replay_list(data_dir, capsys):
     assert "mutações=1" in out
 
 
+def test_cli_replay_limit_vale_no_mutation_tambem(data_dir, capsys):
+    """A flag chega no `replay()`. Ignorá-la ali fazia o `--list --limit N`
+    mostrar id que o `--mutation --limit N` jurava não existir: teto de 200 na
+    lista, 2000 na atribuição, e o help anunciando um número que não valia."""
+    from harness import cli
+
+    seed(data_dir)
+    store.record_mutation(
+        mutation(mutation_id="bbbbbbbbbbbb", applied_at=ts(25)), path=db(data_dir)
+    )
+
+    assert cli.main(["replay", "--mutation", MID, "--limit", "1"]) == 1
+    assert "desconhecida" in capsys.readouterr().err
+    assert cli.main(["replay", "--mutation", MID, "--limit", "2"]) == 0
+    assert capsys.readouterr().out.startswith(f"mut {MID} ")
+
+
+def test_cli_replay_list_avisa_que_truncou(data_dir, capsys):
+    """`mutações=1` calado seria lido como "o ledger tem uma"."""
+    from harness import cli
+
+    seed(data_dir)
+    store.record_mutation(
+        mutation(mutation_id="bbbbbbbbbbbb", applied_at=ts(25)), path=db(data_dir)
+    )
+
+    assert cli.main(["replay", "--list", "--limit", "1"]) == 0
+
+    assert "mutações=1 (teto do --limit; pode haver mais)" in capsys.readouterr().out
+
+
 def test_cli_replay_id_inexistente_sai_1(data_dir, capsys):
     from harness import cli
 

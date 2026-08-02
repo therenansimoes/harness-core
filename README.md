@@ -1,141 +1,243 @@
 # harness-core
 
-Harness autônomo mínimo (stdlib, sem framework de agente) que executa tasks
-com um LLM, verifica o resultado de forma **determinística** — nunca confia
-no que o agente diz — e usa esse verify como sinal pra se auto-melhorar via
-gate A/B. Em cima disso existe uma **camada de juízes**: projetos derivados de
-código open source real, com o teste do próprio mantenedor como gabarito
-selado, pra medir se o harness resolve problema de terceiro — não só as
-tasks que ele mesmo aprendeu a passar.
+Harness de agente **provider-agnostic**. Você descreve uma unidade de trabalho
+(`unit.toml`: um prompt e um comando de verificação), o harness executa, e
+**verifica de forma determinística** — nunca confia no que o agente diz. Cada
+run vira uma linha num ledger SQLite com backend, kind, tier, tempo e custo.
 
-**Done = `verify.py`/teste do mantenedor sai 0.** O que o agent diz não conta.
+Em cima desse ledger roda um loop de auto-melhoria: ele lê os padrões de falha,
+escolhe uma mutação de config no catálogo, testa a mutação contra o baseline em
+**A/B com régua de Wilson** e mantém ou reverte por evidência. Nenhum knob muda
+por opinião.
 
-## A prova (números reais, citados)
+**Done = o `verify_cmd` sai 0.** O que o agente diz não conta.
 
-- **Bug real corrigido em código de terceiro:** o harness consertou um bug do
-  [schwifty](https://github.com/mdomke/schwifty) (biblioteca IBAN/BIC real),
-  com os **415 testes do upstream verdes** e 0 regressões
-  (`results.tsv`, `v0.4 judge task_j_b2b success=1`; commit `8e145d9`).
-- **Evolução medida, não sentida:** `v0.2 → v0.4` no juiz `j_b2b` foi de nota
-  **58 → 81** (`STATUS.md`), passando por três decisões A/B reais e
-  documentadas: `v0.1` MAX_TURNS 12→6 — **DISCARD** (piorou tempo e custo,
-  `evolution/decisions/v0.1.md`), `v0.2` prompt enxuto — **KEEP** (−17.8%
-  custo/run, `evolution/decisions/v0.2.md`), `v0.4` MAX_TURNS 12→30 — **KEEP**
-  (0/6 sucesso com 12 turnos vs 3/4 com 30, `evolution/decisions/v0.4.md`).
-- **Generalidade (M2):** rodando a melhor versão nos 3 domínios-juiz —
-  `j_b2b` (Python/schwifty), `j_web` (JS/nanostores), `j_hw` (C/jsmn) — notas
-  **j_web 93, j_hw 98** (estáveis, citações válidas, zero veto); **j_b2b
-  bimodal 47–81** com 5/8 sucessos no dia (spread real em tarefas ≥21 turnos).
-  Summary `inconclusive` por variância — correto: a sonda localizou a fraqueza
-  real (consistência do j_b2b é próximo alvo de evolução).
-- **Defesa contra trapaça pegando em produção, não em teste:** 2 tentativas
-  de editar arquivo de teste pra passar mais fácil foram barradas por
-  `tamper:test_file_modified` em runs reais (`evolution/decisions/v0.4.md`).
-- **121 testes automatizados** cobrindo agent, evolve, safety/proveniência,
-  juízes, trace, delivery, UI gate e outbound gate (`tests/*.py`), sem gastar
-  API.
+Núcleo sobre [LangGraph](https://github.com/langchain-ai/langgraph) (grafo +
+checkpointer SQLite). Executor default sobre
+[deepagents](https://github.com/langchain-ai/deepagents)/LangChain, que roda
+**modelo local via Ollama, custo zero**. Nenhum vendor no núcleo: backend é
+plugin por entry point (`harness.backends`), e trocar de provedor não toca em
+uma linha de `harness/`.
 
-## Como rodar
+## Instalar
 
-Requisitos: `python3` (stdlib só, `pytest` só dentro dos ambientes dos
-juízes), [`claude` CLI](https://github.com/anthropics/claude-code) autenticado
-(backend default), `git`.
+Requisitos: Python ≥ 3.11, [uv](https://docs.astral.sh/uv/), `git`. Para o
+quickstart de custo zero, [Ollama](https://ollama.com) local.
 
 ```bash
-# uma task da suite de lab
-python3 run_task.py tasks/task_01
-
-# a suite inteira, com repetição pra tirar ruído
-python3 run_task.py --all --repeat 3
-
-# um juiz: constrói o projeto-alvo real, roda o agente, verifica contra o
-# gabarito selado do mantenedor
-python3 judges/run_judge.py --judge j_b2b
-python3 judges/run_judge.py --all-judges
-
-# um ciclo de auto-evolução: proposta -> A/B -> gate -> merge|discard
-cp evolution/proposals/_template.md evolution/proposals/minha_ideia.md
-$EDITOR evolution/proposals/minha_ideia.md
-python3 evolve.py --proposal evolution/proposals/minha_ideia.md --repeat 3
+uv sync --extra deepagents      # o extra é o EXECUTOR; o núcleo não precisa dele
+uv run harness doctor
 ```
 
-`evolve.py` sai **0 = merge** (genoma promovido), **1 = discard** (baseline
-intacto), **2 = erro de infra** (não é veredito). `run_task.py --all` aceita
-`--suite fixed|sealed`; a suite `judge` roda por `judges/run_judge.py`, que já
-orquestra setup → run_task → verify selado → persona.
-
-## Arquitetura (~15 linhas)
+`doctor` é a verificação global em forma de comando — genoma, tracing, config,
+catálogo, dados, ledger, preflight de todo backend registrado:
 
 ```
-agent.py         # o loop do agente: prompt, tools, backend cli/api, trace
-run_task.py       # workspace efêmero -> fixtures -> agent -> verify -> results.tsv
-score.py          # gates normalizados por run (não por soma) + --ab A vs B
-evolve.py         # 1 ciclo: proposta -> sandbox -> fixed -> sealed -> decisão -> merge/discard
-graph.py          # store de auto-crítica: proposals, runs, decisions, sessions, governança
-safety.py         # guard_path (realpath) + safe_run (allowlist de binário) — código, não prompt
-
-judges/           # camada de juízes: registry.tsv (upstream+sha), _sealed/ (gabarito do mantenedor),
-                   #   run_judge.py, persona.py (opus, citação obrigatória, veto sem citação sustentada)
-benchmarks/
-  fixed  (tasks/)  # hill-climb: "melhorou?" — precisa de ganho >= piso
-  sealed            # held-out: "generaliza?" — precisa só do piso
-  judge             # código de terceiro real: "resolve problema que não escreveu?"
-  tb                # tasks portáveis do Terminal-Bench 2.0
+ok    genome               config/genome.toml fingerprint=79857c110726 imutáveis=24 padrões=6+2
+ok    tracing              LANGSMITH_*/LANGCHAIN_TRACING_* desligados
+ok    msgpack              LANGGRAPH_STRICT_MSGPACK=true
+ok    config               5 toml: catalog.toml, genome.toml, kinds.toml, models.toml, tools.toml
+ok    catalog              3 regra(s), n_per_arm=6 window=200
+ok    data                 data ainda não existe; . é gravável
+ok    ledger               data/runs.sqlite ainda não existe (nasce no primeiro run)
+ok    backend:claude_code  2.1.220 (Claude Code)
+ok    backend:deepagents   deepagents importável
+ok    backend:mock         mock sempre disponível
+doctor checks=10 falhas=0 avisos=0
 ```
 
-## Princípios de design
+**FALHA** (exit 1) é coisa nossa quebrada. Backend indisponível é **aviso**: um
+doctor que sai 1 porque o Ollama está desligado vira ruído que ninguém lê.
 
-- **Mecanismo, não instrução.** Sandbox, tamper check, allowlist de safety e
-  timeout são código que o agente não pode contornar escrevendo texto
-  diferente — nunca uma frase no prompt pedindo pra "não trapacear".
-- **Verify determinístico é o piso; persona é refinamento, nunca autoridade.**
-  `score.py`/`verify.py` decidem sucesso/fracasso sem LLM. A persona (juízes)
-  entra só depois, com peso menor, e citação obrigatória: sem citação o
-  critério é descartado; citação que o log não sustenta é **veto**, zera a
-  ficha.
-- **Citação obrigatória contra ruído de avaliador LLM.** Todo score de
-  persona aponta `arquivo:linha` ou `trace.jsonl:N` — sem isso não conta.
-- **Braços contemporâneos, sempre.** A/B de custo/tempo comparado entre dias
-  diferentes é inválido (variação de ruído de dia chegou a +23.7% em um caso
-  real — `evolution/decisions/v0.3.md`); todo A/B roda A e B na mesma janela.
-- **Tempo é o gargalo, imposto por mecanismo.** SIGTERM/teto de turnos, não
-  instrução de "seja rápido" — o que sobra de folga vira margem real, não
-  economia (lição do `v0.1.md`, que cortou turnos que nunca eram usados).
+## Quickstart: Ollama, custo zero
+
+```bash
+ollama serve &
+ollama pull qwen2.5:3b
+
+uv run harness run --unit tests/fixtures/tiny_fix \
+  --backend deepagents --model ollama:qwen2.5:3b
+```
+
+Saída real desta máquina (M3 Pro, 18GB):
+
+```
+e224de09e26c tiny_fix deepagents accept verify ok, sem regressão de KPI 7.82s ledger#2
+```
+
+O que aconteceu: workspace descartável → o modelo edita `target.py` → o harness
+roda `python3 -c 'from target import add; assert add(2,3)==5'` → o gate compara
+os KPIs de antes e depois → linha no `data/runs.sqlite`. `accept` saiu do
+verify, não do modelo.
+
+Sem Ollama, o mesmo caminho com o backend determinístico de teste:
+
+```bash
+uv run harness run --unit tests/fixtures/echo --backend mock
+# 99d6909de5c3 echo mock accept verify ok, sem regressão de KPI 0.01s ledger#1
+```
+
+Uma unidade é só isto (`tests/fixtures/tiny_fix/unit.toml`, sem os comentários):
+
+```toml
+id = "tiny_fix"
+kind = "code"
+prompt = """No seu diretório de trabalho existe o arquivo target.py com uma função
+add(a, b) que está errada: retorna a - b. Edite target.py trocando
+"return a - b" por "return a + b". Não faça mais nada depois disso."""
+verify_cmd = "python3 -c 'from target import add; assert add(2,3)==5'"
+```
+
+## Comandos
+
+| Comando | O que faz |
+|---|---|
+| `harness run --unit DIR --backend NOME [--model M]` | executa uma unidade e grava no ledger |
+| `harness run --unit DIR --route auto` | quem escolhe tier/backend/model é o router, pelo kind da unidade e pelo histórico |
+| `harness ab --a 5/6 --b 6/6` | veredito de Wilson entre dois braços já contados |
+| `harness ab --dim backend --unit DIR --a-backend X --b-backend Y --n 6` | o harness roda o experimento e decide o executor por evidência |
+| `harness improve [--cycles N] [--deadline-s S]` | um ciclo do loop: mutação → A/B → KEEP/DISCARD → registro |
+| `harness replay --list` / `--mutation ID` | atribuição: quanto do delta do histórico a mutação sustenta |
+| `harness doctor` | diagnóstico local, zero rede, zero LLM |
+| `harness backends` | backends registrados + preflight |
+| `harness bench provision --n 10` | custo de provisionar workspace (p50) |
+
+```bash
+uv run harness ab --a 5/6 --b 6/6
+# INCONCLUSIVE a=5/6 [0.44,0.97] b=6/6 [0.61,1.00]
+
+uv run harness backends
+# claude_code      ok             2.1.220 (Claude Code)
+# deepagents       ok             deepagents importável
+# mock             ok             mock sempre disponível
+```
+
+## O loop de melhoria
+
+O loop **não inventa mutação**: ele escolhe de `config/catalog.toml`, onde cada
+regra é uma hipótese falsificável sobre um knob ("trocar esta chave deste valor
+para aquele reduz este padrão de falha"), e ordena por ganho esperado
+`freq(padrão) × custo_médio(padrão) × prior(regra)`. Sem gradiente — catálogo
+esgotado ou ganho abaixo do piso — ele **para e chama o humano** via
+`interrupt()` do LangGraph, em vez de improvisar:
+
+```bash
+uv run harness improve --unit tests/fixtures/echo --backend mock
+# escalate no_gradient thread=improve-642faf7ac988 evidence={'history': 2, 'catalog': 3, 'applicable': 3}
+# improve ciclos=0 mutações=0 intervenções=0 intervention_rate=0.00 (n=2)
+```
+
+Escalação pendente se responde por `--resume <thread> --answer '<json>'`; a
+thread continua de onde parou, pelo checkpoint. `intervention_rate` sai em todo
+relatório porque o alvo do projeto é essa taxa, não o número de runs.
+
+Com veredito, `harness replay` faz a pergunta que o A/B não responde: o
+histórico DEPOIS da mutação é melhor que o de ANTES? Três fatias (antes /
+experimento / depois), IC de Wilson em cada janela, e os **confounders
+nomeados** — as outras mutações KEEP que entraram no meio. Exemplo (ledger
+sintético de `tests/test_replay.py`):
+
+```
+mut aaaaaaaaaaaa floor_up KEEP mantida exp=12 kind=code tier=t0 backend=mock
+antes 2/6 [0.10,0.70] depois 5/6 [0.44,0.97] delta=+0.50 intervalos=sobrepostos
+confounders=1 bbbbbbbbbbbb:turns_up@2026-08-02T12:25:00+00:00
+```
+
+`intervalos=sobrepostos` é o ponto: +0.50 com IC que se cruza não é ganho
+provado. Atribuição honesta nomeia o que não consegue separar em vez de
+publicar um número limpo que não é.
+
+## Arquitetura
+
+```
+harness/
+  types.py            # ExecRequest/ExecResult/RunRow/Selection — o contrato entre camadas
+  cli.py              # run / ab / improve / replay / doctor / backends / bench
+  backends/           # mock, deepagents (LangChain isolado em 1 arquivo), claude_code
+                      #   registro por entry point; slot harness.auth plugável
+  ledger/store.py     # SQLite: runs, mutations, node_events (idempotência dos nós)
+  ruler/              # wilson, kpi, verify, note, gate — a RÉGUA, imutável no genoma
+  routing/            # kinds ortogonais a tier + prior Wilson keyed (kind, tier, backend)
+  genome/             # mutable/immutable + tamper: o que o loop pode e não pode editar
+  graph/              # run_graph (um run) e autopilot_graph (um ciclo de melhoria)
+  improve/            # target (escolha da mutação), mutate, escalate, replay
+  workspace/          # provision por git worktree
+config/               # models.toml, kinds.toml, catalog.toml, tools.toml, genome.toml
+benchmarks/           # held_in (hill-climb), sealed (held-out), judge, tb
+legacy/               # o harness anterior, congelado (read-only, fora do pytest)
+```
+
+## Princípios que o código impõe
+
+- **Mecanismo, não instrução.** Sandbox, tamper check e teto de turnos são
+  código que o agente não contorna escrevendo texto diferente — nunca uma frase
+  no prompt pedindo para não trapacear.
+- **A régua não é mutável.** `harness/ruler/**`, `harness/genome/**`,
+  `harness/routing/**`, `harness/graph/**`, `uv.lock` e `benchmarks/sealed/**`
+  são immutable no genoma; o loop calibra só `config/*.toml`. Patch em
+  `harness/ruler/wilson.py` sai como `tamper:genome_violation`.
+- **Wilson com N mínimo.** Abaixo do piso de amostra a régua diz
+  `INCONCLUSIVE`, não "melhorou". Experimento interrompido no meio (deadline)
+  é descartado inteiro: braço com N diferente do outro é amostra envenenada,
+  não amostra pequena.
+- **Braços contemporâneos.** O A/B alterna A,B,A,B na mesma janela; comparar
+  dias diferentes mede ruído de dia.
+- **Telemetria de terceiro é opt-in.** O bootstrap da CLI desliga
+  `LANGSMITH_*`/`LANGCHAIN_TRACING_*` e liga `LANGGRAPH_STRICT_MSGPACK`; há
+  teste que falha se alguma dessas voltar ligada.
+- **Auth: só o slot.** O entry point `harness.auth` existe, e o único adapter
+  shippado é o nulo. Adapter de OAuth de assinatura em cliente de terceiro é
+  área cinzenta de ToS e não entra neste repo — nem o adapter, nem doc
+  ensinando.
+- **Nota humana é KPI, e KPI tem N mínimo.** A nota vive em
+  `projects/<projeto>/notes.tsv`, append-only, escrita por humano. Abaixo de 3
+  notas na janela o KPI é "não medido" — não é zero, e não vira gradiente.
+
+## Testes
+
+```bash
+uv run --extra deepagents pytest -q
+# 402 passed, 2 deselected
+```
+
+Os 2 deselecionados são os marcadores `ollama` e `claude_cli`: um exige
+servidor local no ar, o outro gasta dinheiro. Rodar a suíte inteira custa zero
+e não toca a rede.
 
 ## Estado honesto
 
-**Funciona, verificado por execução:** loop `evolve` com 3 decisões reais
-(`v0.1` discard, `v0.2` e `v0.4` keep); suites `fixed`/`sealed`/`tb` rodando;
-os 3 juízes (`j_b2b`/`j_web`/`j_hw`) produzindo `success=1` em código de
-terceiro real; tamper check e safety allowlist pegando tentativa real de
-trapaça; `harness_cli.py` como casca fina sobre tudo isso.
+O projeto anda por uma escada de PRs definida em `docs/SPEC-rebuild.md` §6, cada
+degrau com aceite executável: PR-0 a PR-8 fechados, PR-9 (loop dirigido) fechado
+com o canal causal do PR-9b, PR-10 (replay + docs) é este.
 
-**Dívidas conhecidas:**
+O que **não** está pronto, e é bom saber antes de clonar:
 
-- Só testado a fundo com `claude-haiku-4-5` via backend `cli`; backend `api`
-  e outros modelos nunca foram exercitados num A/B sério.
-- **Variância de consistência do j_b2b:** spread real em tarefas ≥21 turnos
-  (47–81, mediana 68). Próximo alvo de evolução: prompt do genoma / tier de
-  modelo / decomposição — decidir por A/B.
-- `D4` (custo/turnos até o verde) pune sucesso caro tanto quanto falha
-  barata — defeito de régua já registrado, correção prevista em `RUBRIC-J2`.
+- **A CLI ainda não roda pelo grafo.** `graph/run_graph.py` tem os nós
+  idempotentes, o checkpointer e o provision por `git worktree`, com teste de
+  resume depois de `kill -9` de verdade — mas `harness run`/`ab`/`improve`
+  executam pelo caminho direto (`run_once`, workspace em tmpdir ou `--repo`).
+  Fiar a CLI no grafo é dívida aberta.
+- **Fan-out do A/B é sequencial de propósito.** Os braços diferem por um
+  arquivo de config, que é estado global do processo: dois braços em paralelo
+  leriam o mesmo arquivo e mediriam a mesma coisa. Paralelismo real depende de
+  injetar config por run.
+- **Exercitado a fundo em modelo pequeno local** (`ollama:qwen2.5:3b`) e no
+  backend `mock`. O backend `claude_code` roda e grava no ledger, mas não tem
+  A/B sério contra os outros.
+- O histórico do harness antigo (`legacy/results.tsv`) **não** entra no prior:
+  aquelas linhas não têm `backend`/`kind` e envenenariam a chave.
 
-**FASE 2 (ainda não construída):** juízes `j_web`/`j_hw` com peso pleno
-(P3/P4 — recuperação de erro e adoção), tabela `judgements` no graph,
-`judge_ok` automático no gate do `evolve.py`, segundo modelo/backend no A/B.
+## De onde veio
 
-## Satélites congelados
+`legacy/` é o harness anterior — stdlib puro, sem framework de agente —
+congelado como referência read-only, fora do pytest e do genoma. Foi ele que
+consertou um bug real do [schwifty](https://github.com/mdomke/schwifty) com os
+415 testes do upstream verdes, e que produziu as decisões A/B documentadas em
+`legacy/evolution/decisions/`. **Aqueles números são dele, não deste núcleo**;
+estão preservados porque foram medidos, e o que sobreviveu deles renasceu aqui
+como mecanismo (router com prior Wilson, tamper, gate com revert). O caminho de
+volta está em `docs/SPEC-rebuild.md` §5.
 
-`whatsapp.py`, `channel/`, `delivery.py`, `assist.py` e o gate de UI
-(Playwright) existem, têm teste e já foram usados — mas estão **congelados**
-até o core provar valor em código de terceiro (decisão registrada em
-`STATUS.md`). Não é dívida técnica: é ordem de prioridade.
+## Licença
 
-## História
-
-`arena/` é o método generativo que produziu os mecanismos deste harness —
-gerações de candidatos competindo sob briefing mínimo e julgamento por
-persona, antes de qualquer linha aqui existir. Está preservada, commitada,
-não roda mais: quando a camada de juízes provar que mede honesto sobre
-código de terceiro, o método volta pra gerar a próxima geração de candidatos
-sobre esta base (ver `STATUS.md`, "Método generativo v2").
+MIT (`LICENSE`).
