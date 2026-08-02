@@ -69,6 +69,8 @@ def run_case(pid, fixed_cand, expect_rc, sealed=None, sealed_base=None,
         (tmp / "harness_version.txt").write_text("vA\n")
         (tmp / "evolution" / "proposals").mkdir(parents=True)
         (tmp / "evolution" / "decisions").mkdir(parents=True)
+        # o genoma é fail-closed: sem genome.toml o ciclo nem sai do lugar
+        shutil.copy2(REPO / "evolution" / "genome.toml", tmp / "evolution" / "genome.toml")
         prop = tmp / "evolution" / "proposals" / f"{pid}.md"
         prop.write_text(PROPOSAL.format(pid=pid))
 

@@ -1,0 +1,27 @@
+# quem julga não se muda.
+#
+# `mutable` é o que uma proposta pode tocar — o genoma 360° do harness.
+# `immutable` é a blocklist: régua, gate, exames e histórico. A blocklist
+# SEMPRE vence: um path que casa nas duas listas é contradição de
+# configuração, não ambiguidade — `load_genome()` recusa carregar.
+#
+# Matching é por fnmatch sobre o path relativo à raiz do repo (posix).
+
+mutable = [
+    "agent.py",
+    "prompts/**",
+    "profile.py",
+]
+
+immutable = [
+    "evolve.py",
+    "score.py",
+    "safety.py",
+    "kpi.py",
+    "evolution/genome.toml",
+    "benchmarks/sealed/**",
+    "benchmarks/held_in/**",
+    "tests/**",
+    "results.tsv",
+    ".harness/**",
+]

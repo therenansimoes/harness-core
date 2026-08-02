@@ -14,11 +14,15 @@ Regras que este loop NÃO negocia:
 - O baseline não é tocado até a decisão. A candidata vive na sandbox.
 - Quem julga é o `score.py` (`ab_report`). Não existe segundo score aqui.
 - Todo ciclo é gravado no graph, inclusive DISCARD — descarte também é dado.
+- O que uma proposta pode tocar é o `evolution/genome.toml`, não uma constante
+  aqui. A blocklist de lá vence sempre: quem julga não se muda.
 """
 
 from __future__ import annotations
 
 import argparse
+import fnmatch
+import hashlib
 import json
 import os
 import shutil
@@ -26,7 +30,7 @@ import subprocess
 import sys
 import tomllib
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).parent.resolve()
 sys.path.insert(0, str(ROOT))
@@ -38,8 +42,9 @@ RESULTS = ROOT / "results.tsv"
 SANDBOXES = ROOT / "evolution" / "sandboxes"
 DECISIONS = ROOT / "evolution" / "decisions"
 DECISIONS_JSONL = ROOT / "evolution" / "decisions.jsonl"
-# O genome: o que a sandbox copia e o que um merge promove de volta.
-GENOME = ["agent.py"]
+# O genome não é mais uma constante: quem define o que pode mudar é o toml.
+GENOME_TOML = ROOT / "evolution" / "genome.toml"
+GENOME_VIOLATION = "tamper:genome_violation"
 
 
 class InfraError(Exception):
@@ -48,6 +53,110 @@ class InfraError(Exception):
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+# -------------------------------------------------------------------- genome
+
+
+def load_genome(path: Path | None = None) -> dict:
+    """Lê `evolution/genome.toml` -> {"mutable": [...], "immutable": [...]}.
+
+    Fail-closed: sem o toml não existe genoma e nenhuma mutação é legítima.
+    Um path presente nas duas listas é contradição de configuração — recusa
+    carregar em vez de "resolver" no silêncio (o silêncio aqui seria a brecha).
+    """
+    p = path or GENOME_TOML
+    if not p.exists():
+        raise InfraError(f"genome.toml não existe: {p}")
+    try:
+        data = tomllib.loads(p.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as e:
+        raise InfraError(f"{p.name}: TOML inválido — {e}")
+
+    genome = {}
+    for key in ("mutable", "immutable"):
+        v = data.get(key)
+        if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+            raise InfraError(f"{p.name}: '{key}' precisa ser uma lista de strings")
+        genome[key] = [_norm(x) for x in v]
+    if not genome["immutable"]:
+        raise InfraError(f"{p.name}: 'immutable' vazia — a blocklist é o ponto do arquivo")
+
+    overlap = sorted(set(genome["mutable"]) & set(genome["immutable"]))
+    if overlap:
+        raise InfraError(
+            f"{p.name}: padrão nas duas listas (mutable ∩ immutable): {', '.join(overlap)}"
+        )
+    return genome
+
+
+def _norm(path: str) -> str:
+    """Path relativo, posix, sem './' — a forma em que tudo é comparado."""
+    return PurePosixPath(str(path).replace("\\", "/")).as_posix().removeprefix("./")
+
+
+def _matches(rel: str, patterns: list[str]) -> bool:
+    return any(fnmatch.fnmatchcase(rel, pat) for pat in patterns)
+
+
+def genome_violations(files, genome: dict | None = None) -> list[str]:
+    """Os paths da proposta que o genoma não autoriza.
+
+    Duas formas de violar, e a segunda vence a primeira: estar fora de
+    `mutable` (não é genoma, ninguém pediu para evoluir isso) ou estar em
+    `immutable` (é régua/exame/histórico — quem julga não se muda). Path
+    absoluto ou com '..' é violação por construção: só se compara o que é
+    relativo à raiz.
+    """
+    g = genome or load_genome()
+    bad = []
+    for f in files:
+        rel = _norm(f)
+        p = PurePosixPath(rel)
+        if p.is_absolute() or ".." in p.parts:
+            bad.append(rel)
+        elif _matches(rel, g["immutable"]) or not _matches(rel, g["mutable"]):
+            bad.append(rel)
+    return bad
+
+
+def genome_files(genome: dict | None = None, root: Path | None = None) -> list[str]:
+    """Os arquivos que existem hoje e o genoma autoriza — o que a sandbox copia."""
+    g = genome or load_genome()
+    base = root or ROOT
+    out = set()
+    for pat in g["mutable"]:
+        # o prefixo literal do padrão diz onde procurar — varrer o repo inteiro
+        # só para descartar sandbox/.git/node_modules seria desperdício.
+        head = pat.split("*", 1)[0].rstrip("/")
+        start = base / head if head else base
+        candidates = [start] if start.is_file() else (
+            [p for p in start.rglob("*") if p.is_file()] if start.is_dir() else []
+        )
+        for p in candidates:
+            rel = p.relative_to(base).as_posix()
+            if "__pycache__" in p.parts:
+                continue
+            if _matches(rel, g["immutable"]) or not _matches(rel, g["mutable"]):
+                continue
+            out.add(rel)
+    return sorted(out)
+
+
+def genome_fingerprint(root: Path | None = None) -> dict:
+    """SHA-256 do que define o genoma (hoje: o próprio genome.toml).
+
+    Mesmo mecanismo do `hash_test_files` do run_task.py, mesmo motivo: uma
+    mutação que reescreve a própria régua enquanto roda passaria despercebida
+    se ninguém guardasse o hash de antes.
+    """
+    base = root or ROOT
+    hashes = {}
+    for rel in ("evolution/genome.toml",):
+        p = base / rel
+        if p.exists():
+            hashes[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
+    return hashes
 
 
 # ------------------------------------------------------------------ proposal
@@ -72,15 +181,26 @@ def parse_proposal(path: Path) -> dict:
     for field in ("id", "from_version", "to_version", "hypothesis"):
         if not meta.get(field):
             raise InfraError(f"{path.name}: campo obrigatório ausente: {field}")
+    # `[change]` (um arquivo) ou `[[change]]` (vários) — a segunda forma existe
+    # porque o gate de genoma precisa julgar a proposta inteira, não um arquivo.
     change = meta.get("change")
-    if not isinstance(change, dict) or not change.get("old") or not change.get("new"):
+    changes = change if isinstance(change, list) else [change]
+    if not changes or not all(
+        isinstance(c, dict) and c.get("old") and c.get("new") for c in changes
+    ):
         raise InfraError(f"{path.name}: [change] precisa de 'old' e 'new'")
-    change.setdefault("file", "agent.py")
-    if change["file"] not in GENOME:
-        raise InfraError(f"{path.name}: change.file '{change['file']}' fora do genome {GENOME}")
+    for c in changes:
+        c.setdefault("file", "agent.py")
+    meta["changes"] = changes
+    meta["change"] = changes[0]
     meta["body"] = body.strip()
     meta["path"] = str(path)
     return meta
+
+
+def proposal_files(meta: dict) -> list[str]:
+    """Os arquivos que a proposta toca — a entrada do gate de genoma."""
+    return [c.get("file", "agent.py") for c in meta.get("changes", [meta.get("change", {})])]
 
 
 def apply_change(sandbox: Path, change: dict) -> str:
@@ -100,15 +220,18 @@ def apply_change(sandbox: Path, change: dict) -> str:
 # ------------------------------------------------------------------- sandbox
 
 
-def build_sandbox(pid: str, to_version: str, change: dict) -> tuple[Path, str]:
+def build_sandbox(pid: str, to_version: str, changes: list[dict],
+                  genome: dict | None = None) -> tuple[Path, str]:
     sandbox = SANDBOXES / pid
     if sandbox.exists():
         shutil.rmtree(sandbox)
     sandbox.mkdir(parents=True)
-    for f in GENOME + ["run_task.py"]:
-        shutil.copy2(ROOT / f, sandbox / f)
+    for f in genome_files(genome) + ["run_task.py"]:
+        dst = sandbox / f
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / f, dst)
     (sandbox / "harness_version.txt").write_text(to_version + "\n")
-    diff_summary = apply_change(sandbox, change)
+    diff_summary = " · ".join(apply_change(sandbox, c) for c in changes)
     return sandbox, diff_summary
 
 
@@ -454,10 +577,78 @@ def write_decision(meta: dict, rep: dict, outcome: str, gid: int, diff_summary: 
     return out
 
 
+def reject_genome_violation(meta: dict, violations: list[str]) -> int:
+    """DISCARD por genoma, no mesmo trilho de registro dos outros DISCARDs.
+
+    Não roda suite e não chama juiz: proposta que toca a régua não é julgada
+    pelo mérito, é recusada. Quem julga não se muda.
+    """
+    pid = meta["id"]
+    va, vb = meta["from_version"], meta["to_version"]
+    reason = f"{GENOME_VIOLATION}: {', '.join(violations)}"
+
+    graph.record_proposal(
+        pid=pid, from_version=va, to_version_intended=vb,
+        hypothesis=meta["hypothesis"], diff_summary=reason, path=meta.get("path", ""),
+    )
+    gid = graph.record_decision(
+        proposal_id=pid,
+        outcome="discard",
+        scores_summary=json.dumps({"genome_violations": violations}, ensure_ascii=False),
+        reason=reason,
+        gates_json=json.dumps(
+            [{"name": GENOME_VIOLATION, "ok": False, "files": violations}], ensure_ascii=False
+        ),
+    )
+
+    DECISIONS.mkdir(parents=True, exist_ok=True)
+    doc = f"""# Decisão {pid} — DISCARD
+
+**proposal_id:** `{pid}` · **graph_decision_id:** `{gid}`
+**Ciclo:** {va} → {vb} · gerado por `evolve.py` em {now()}
+
+**Hipótese:** {meta['hypothesis']}
+
+## Gates
+
+| Veredito | Gate |
+|---|---|
+| FAIL | {GENOME_VIOLATION} |
+
+## Razão
+
+A proposta toca arquivo fora do genoma (`evolution/genome.toml`): {', '.join(violations)}.
+Nenhuma suite rodou — não se julga pelo mérito uma mudança na régua.
+Baseline {va} permanece intacto.
+"""
+    (DECISIONS / f"{pid}.md").write_text(doc, encoding="utf-8")
+
+    DECISIONS_JSONL.parent.mkdir(parents=True, exist_ok=True)
+    with DECISIONS_JSONL.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "id": pid,
+            "va": va,
+            "vb": vb,
+            "accepted": False,
+            "reason": reason,
+            "gates_failed": [GENOME_VIOLATION],
+            "d_cost": None,
+            "d_med": None,
+            "judges_ok": None,
+        }, ensure_ascii=False) + "\n")
+
+    print(f"\n=> DISCARD: {reason} — {va} intacto")
+    return 1
+
+
 def promote(sandbox: Path, to_version: str) -> None:
     """MERGE: sandbox vira baseline. Só roda depois de todos os gates passarem."""
-    for f in GENOME:
-        shutil.copy2(sandbox / f, ROOT / f)
+    for f in genome_files():
+        src = sandbox / f
+        if not src.exists():
+            continue
+        (ROOT / f).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, ROOT / f)
     (ROOT / "harness_version.txt").write_text(to_version + "\n")
 
 
@@ -478,8 +669,15 @@ def cycle(proposal_path: Path, repeat: int, suite: str, force: bool,
     if va == vb:
         raise InfraError("from_version e to_version são iguais — nada a comparar")
 
+    genome = load_genome()
+    violations = genome_violations(proposal_files(meta), genome)
+    if violations:
+        print(f"== ciclo {pid}: {va} -> {vb} — bloqueado pelo gate de genoma")
+        return reject_genome_violation(meta, violations)
+    fingerprint = genome_fingerprint()
+
     print(f"== ciclo {pid}: {va} -> {vb} (suite={suite}, repeat={repeat})")
-    sandbox, diff_summary = build_sandbox(pid, vb, meta["change"])
+    sandbox, diff_summary = build_sandbox(pid, vb, meta["changes"], genome)
     print(f"   sandbox: {sandbox.relative_to(ROOT)}  [{diff_summary}]")
 
     graph.record_proposal(
@@ -490,6 +688,11 @@ def cycle(proposal_path: Path, repeat: int, suite: str, force: bool,
     before = len(tsv_rows())
     print(f"   rodando suite... ({repeat}x cada task)")
     run_suite(sandbox, suite, repeat)
+
+    # Tamper check do próprio genoma: se o toml mudou enquanto a candidata
+    # rodava, a régua foi reescrita no meio do exame.
+    if genome_fingerprint() != fingerprint:
+        return reject_genome_violation(meta, ["evolution/genome.toml"])
 
     rows = tsv_rows()
     n_new = len(rows) - before
