@@ -37,7 +37,9 @@ class Workspace:
 
 
 def ws_root() -> Path:
-    return data_dir() / WS_SUBDIR
+    """Sempre absoluto: `git -C <repo> worktree add data/ws/x` resolveria o path
+    relativo dentro do repo alvo, não no cwd do processo."""
+    return (data_dir() / WS_SUBDIR).resolve()
 
 
 def workspace_path(run_id: str) -> Path:
@@ -166,7 +168,7 @@ def _link_caches(repo: Path, ws: Path, names: Iterable[str]) -> None:
 
 def _assert_inside_ws_root(path: Path) -> None:
     """Guarda-corpo: nenhum rm fora de `$HARNESS_DATA_DIR/ws`."""
-    root = ws_root().resolve()
+    root = ws_root()
     target = path.resolve()
     if root not in target.parents:
         raise ValueError(f"recusado: {target} está fora de {root}")

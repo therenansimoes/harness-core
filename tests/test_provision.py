@@ -137,6 +137,27 @@ def test_cache_versionado_nao_vira_symlink(repo, data_dir):
     assert (ws.path / ".cache" / "keep.txt").is_file()
 
 
+def test_data_dir_relativo_nao_nasce_dentro_do_repo(repo, tmp_path, monkeypatch):
+    """Sem HARNESS_DATA_DIR o default é `data`, relativo ao cwd — e `git -C <repo>`
+    resolveria esse path dentro do repo do usuário."""
+    monkeypatch.delenv("HARNESS_DATA_DIR", raising=False)
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+
+    ws = prov.provision(repo, "run-rel", config_path=CONFIG)
+
+    assert ws.path == cwd / "data" / "ws" / "run-rel"
+    assert (ws.path / "src" / "app.py").is_file()  # o checkout está onde dizemos
+    assert not (repo / "data").exists()  # e o repo alvo fica limpo
+
+    assert prov.provision(repo, "run-rel", config_path=CONFIG).path == ws.path  # idempotente
+
+    prov.dispose(ws, keep=False)
+    assert not ws.path.exists()
+    assert not (repo / "data").exists()
+
+
 def test_config_declara_os_cache_links():
     assert prov.cache_links(CONFIG) == ("node_modules", ".venv", ".cache")
 
