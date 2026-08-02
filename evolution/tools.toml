@@ -1,0 +1,6 @@
+# Que ferramentas cada tipo de run recebe. Mutável (uma proposta pode mexer);
+# o teto é safety.ALLOWED_TOOLS_MAX, que é imutável e derruba o load se
+# violado. Kind desconhecido cai em [default].
+
+[default]
+tools = ["Bash", "Read", "Write", "Edit"]

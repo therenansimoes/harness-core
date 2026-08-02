@@ -174,7 +174,13 @@ def _system_prompt(workspace: Path) -> str:
     return SYSTEM_PROMPT + block
 
 
-def _run_cli(prompt: str, workspace: Path) -> AgentResult:
+def _run_cli(prompt: str, workspace: Path, plan=None) -> AgentResult:
+    # plan=None (run_task.py e chamadas legadas) monta exatamente o comando de
+    # sempre: constantes do módulo + env. Com plan, quem manda é o RunPlan —
+    # ele já resolveu tools/prompt/turns antes da run.
+    tools = plan.tools if plan else ALLOWED_TOOLS
+    turns = plan.max_turns if plan else _max_turns()
+    system_prompt = plan.system_prompt if plan else _system_prompt(workspace)
     cmd = [
         "claude",
         "-p",
@@ -185,13 +191,13 @@ def _run_cli(prompt: str, workspace: Path) -> AgentResult:
         "--model",
         _model(),
         "--max-turns",
-        str(_max_turns()),
+        str(turns),
         "--allowed-tools",
-        *ALLOWED_TOOLS,
+        *tools,
         "--permission-mode",
         "bypassPermissions",
         "--append-system-prompt",
-        _system_prompt(workspace),
+        system_prompt,
     ]
     t0 = time.time()
     returncode, stdout, stderr = safety.safe_run(
@@ -253,10 +259,13 @@ def _run_cli(prompt: str, workspace: Path) -> AgentResult:
     )
 
 
-def _run_api(prompt: str, workspace: Path) -> AgentResult:
+def _run_api(prompt: str, workspace: Path, plan=None) -> AgentResult:
     """Backend API: loop bash manual. Só use quando quiser medir tokens crus."""
     import anthropic  # import tardio: o backend cli não precisa do SDK
 
+    # aqui só duas coisas do plano se aplicam: a única tool deste backend é o
+    # bash local (plan.tools não tem onde entrar), o resto sim. Sem plan, teto e
+    # system prompt seguem sendo recalculados a cada turn, como antes.
     client = anthropic.Anthropic()
     bash_tool = {
         "name": "bash",
@@ -270,12 +279,12 @@ def _run_api(prompt: str, workspace: Path) -> AgentResult:
     messages = [{"role": "user", "content": prompt}]
     t0, tokens, turns = time.time(), 0, 0
 
-    while turns < _max_turns():
+    while turns < (plan.max_turns if plan else _max_turns()):
         turns += 1
         resp = client.messages.create(
             model=_model(),
             max_tokens=8192,
-            system=_system_prompt(workspace),
+            system=plan.system_prompt if plan else _system_prompt(workspace),
             tools=[bash_tool],
             messages=messages,
         )
@@ -309,15 +318,16 @@ def _run_api(prompt: str, workspace: Path) -> AgentResult:
     return AgentResult(False, time.time() - t0, tokens, 0.0, turns, notes="max_turns")
 
 
-def run_agent(prompt: str, workspace: Path) -> AgentResult:
+def run_agent(prompt: str, workspace: Path, plan=None) -> AgentResult:
+    """`plan` é um runplan.RunPlan (opcional). None = comportamento de sempre."""
     if os.environ.get("HARNESS_MOCK_AGENT") == "1":
         import mockagent
 
         return mockagent.run(prompt, workspace)
     if BACKEND == "api":
-        return _run_api(prompt, workspace)
+        return _run_api(prompt, workspace, plan)
     if BACKEND == "cli":
-        return _run_cli(prompt, workspace)
+        return _run_cli(prompt, workspace, plan)
     raise SystemExit(f"HARNESS_BACKEND desconhecido: {BACKEND}")
 
 

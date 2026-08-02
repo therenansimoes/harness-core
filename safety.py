@@ -26,6 +26,13 @@ ROOT = os.path.realpath(str(Path(__file__).parent))
 ALLOWED_BINARIES = {"python3", "python", "pytest", "sh", "claude"}
 ALLOWED_BINARY_PATTERN = re.compile(r"^python3(\.\d+)?$")
 
+# Teto duro das tools que um plano de run (runplan.py) pode pedir ao agente.
+# Mesma lógica do ALLOWED_BINARIES: allowlist, não denylist. Este teto é
+# imutável (evolution/genome.toml) enquanto evolution/tools.toml — quem escolhe
+# o subconjunto de cada run — é mutável; o teto é o que impede uma proposta de
+# se dar uma tool que ninguém revisou.
+ALLOWED_TOOLS_MAX = ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "Task"]
+
 
 class SafetyViolation(Exception):
     pass
@@ -72,6 +79,17 @@ def guard_command(argv: list) -> None:
             )
     if binary == "sh":
         raise SafetyViolation("bare shell invocation is never allowed (argv={!r})".format(argv))
+
+
+def validate_tools(tools: list) -> None:
+    """Rejeita qualquer tool fora de ALLOWED_TOOLS_MAX. Nunca filtra: quem pediu
+    tool inválida tem config errada, e run com tool silenciosamente removida
+    falha depois por um motivo que não é o de verdade."""
+    for tool in tools:
+        if tool not in ALLOWED_TOOLS_MAX:
+            raise SafetyViolation(
+                f"tool not in allowlist: {tool!r} (max={ALLOWED_TOOLS_MAX!r})"
+            )
 
 
 def safe_run(argv: list, cwd: str, timeout: int = 20, env: dict | None = None):

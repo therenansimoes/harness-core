@@ -42,6 +42,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import graph  # noqa: E402
 import kpi  # noqa: E402
 import router  # noqa: E402
+import runplan  # noqa: E402
 
 ROOT = Path(__file__).parent.resolve()
 PROJECTS_ROOT = Path(os.environ.get("HARNESS_PROJECTS_ROOT", ROOT / "projects"))
@@ -232,12 +233,12 @@ def _mock_agent(prompt: str, ws: Path):
     return mockagent.run(prompt, ws)
 
 
-def _call_agent(prompt: str, ws: Path):
+def _call_agent(prompt: str, ws: Path, plan=None):
     if os.environ.get("HARNESS_MOCK_AGENT") == "1":
         return _mock_agent(prompt, ws)
     import agent
 
-    return agent.run_agent(prompt, ws)
+    return agent.run_agent(prompt, ws, plan)
 
 
 # ----------------------------------------------------------------- execução
@@ -279,12 +280,16 @@ def _execute(proj_dir: Path, project_name: str, row: dict, all_rows: list[dict],
         cfg=rcfg,
     )
 
+    # O que vai pro agente (system prompt, tools, teto de turns) é montado aqui,
+    # explícito, em vez de o agent ler as próprias constantes globais.
+    plan = runplan.build("default", sel.tier, ws, project_name)
+
     run_id = f"{project_name}_{unit_id}_{uuid.uuid4().hex[:6]}"
     overrides = {"HARNESS_RUN_ID": run_id, "HARNESS_TRACE_ROOT": str(proj_dir / "runs"), **router.env_for(sel)}
     prev_env = {k: os.environ.get(k) for k in overrides}
     os.environ.update(overrides)
     try:
-        res = _call_agent(prompt, ws)
+        res = _call_agent(prompt, ws, plan)
     finally:
         for key, prev in prev_env.items():
             if prev is None:

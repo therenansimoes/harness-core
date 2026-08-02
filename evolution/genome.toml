@@ -11,6 +11,9 @@ mutable = [
     "agent.py",
     "prompts/**",
     "profile.py",
+    # que tools cada kind de run recebe; o teto (safety.ALLOWED_TOOLS_MAX) é
+    # imutável, então mexer aqui só escolhe subconjunto — não amplia poder.
+    "evolution/tools.toml",
 ]
 
 immutable = [
@@ -27,6 +30,9 @@ immutable = [
     # router pode se dar o tier caro e falsear o próprio A/B (D7).
     "router.py",
     "evolution/models.toml",
+    # quem MONTA o plano da run (e valida as tools contra o teto) também não se
+    # muda: uma proposta que reescreve runplan.py contorna ALLOWED_TOOLS_MAX.
+    "runplan.py",
     # quem MEDE a qualidade não se muda: nota humana fora do alcance do genoma.
     "note.py",
     "projects/**/notes.tsv",
