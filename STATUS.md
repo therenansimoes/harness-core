@@ -43,9 +43,22 @@ O projeto patinou por meta-recursão: arena (agentes construindo harnesses conco
   4. Isolamento multi-projeto (padrão event-sourcing do OpenHands V1 / sessões independentes do Agent SDK) — só quando existir 2º projeto real.
   5. Mem0/Letta/vector DB — ignorar; reavaliar só se markdown+SQLite não escalar.
 
+## Método generativo v2 (princípios do Renan, 2026-08-01)
+
+A arena volta como método de construção QUANDO a camada de juízes provar que mede honesto (a v1 morreu por medição quebrada, não pelo conceito). Regras do método:
+
+- **Briefing mínimo:** goal + base de código a menor possível + regras do que pode/não pode + bullets curtos de dicas. Detalhe é ruído; pedido não é mecanismo.
+- **Recursos máximos, tempo mínimo:** candidatos recebem todas as tools, time (subagentes) e recursos — mas o TEMPO é o gargalo, imposto por mecanismo (SIGTERM), nunca por instrução.
+- **Juiz avalia escopo por escopo, resultado E processo:** cada juiz usa o harness candidato pra construir um projeto fake no domínio dele, e pontua (a) o resultado entregue e (b) o processo de desenvolvimento com aquele harness (fricção, autonomia, recuperação de erro). Mesma lista de critérios pra todos.
+- **Alvo do artefato:** harness super, auto-melhorável, autônomo, auto-organizável — capaz de organizar, planejar, melhorar continuamente e desenvolver projetos de forma autônoma.
+
+Sequência que protege o investimento: (1) juiz j_b2b rodando honesto ← estamos aqui; (2) rubrica ganha a dimensão "processo" (P3/P4 + uso end-to-end); (3) só então reabrir gerações de candidatos sobre a base atual.
+
 ## Radar de tecnologia (nunca parar de estudar — veredito registrado antes de adotar)
 
 - **deer-flow (ByteDance, MIT, 78k stars, ativo, 2026-08-01):** SuperAgent harness sobre LangGraph. ROUBAR padrão: sandbox isolado por run (versão subprocess simples, não Docker/K8s); SkillScan (scan determinístico antes de carregar capacidade); memória com escopo explícito (fazer com SQLite/markdown, depois do "saiu do lugar"). IGNORAR: LangGraph como runtime, multi-worker Redis, gateway de canais — contraria stdlib-only e a escada.
+
+- **Confiabilidade de juiz LLM (2026-08-01):** citação obrigatória + veto (já temos) é a mitigação nº1 da literatura. ADOTAR custo-zero: CoT estilo G-Eval antes do score na persona (mesma chamada). QUANDO ESCALAR: swap de posição 2× no pairwise de versões A/B (flip = disputa). IGNORAR: self-consistency N× (60% determinístico já blinda) e pairwise nas fichas J1 (perderia granularidade por critério; pointwise por critério está certo). Fontes: arXiv 2504.14716, 2606.13685, 2507.10535.
 
 ## Critério de "saiu do lugar"
 

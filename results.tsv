@@ -58,3 +58,4 @@ timestamp	harness_version	backend	model	suite	task_id	success	seconds	tokens	cos
 2026-08-02T01:49:22+00:00	v0.2	cli	claude-haiku-4-5-20251001	fixed	task_01	1	12.5	1052	0.0635	2	
 2026-08-02T02:02:06+00:00	v0.2	cli	claude-haiku-4-5-20251001	fixed	task_01	1	17.8	939	0.0315	2	
 2026-08-02T02:02:39+00:00	v0.2	cli	claude-haiku-4-5-20251001	fixed	task_03	1	28.9	2254	0.0625	8	
+2026-08-02T02:27:06+00:00	v0.2	cli	claude-haiku-4-5-20251001	judge	task_j_b2b	0	128.8	0	0.0000	0	cli_exit_1:; verify:ess_task_j_b2b_xsjfi2n8/.venv/bin/python: No module named pytest  JUDGE_RESULT={"target_ok": false, "full": {"passed": 0, "failed": 0, "errors": 0, "total": 0}}

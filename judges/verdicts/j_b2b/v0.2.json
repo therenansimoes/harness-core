@@ -5,33 +5,22 @@
   "base_sha": "a84d35818306f613b2e70721dbb5ad72d5ed8cf6",
   "sealed_sha256": "ccd0fe01337c1bdce254958ad32760e1cfdd1efb9af86772c03beae138a94c19",
   "deterministic": {
-    "D1": 25,
+    "D1": 0,
     "D2": 15,
-    "D3": 10,
+    "D3": 0,
     "D4": 10,
     "veto": false,
     "evidence": {
-      "target_test": "passed (sintético --dry-run)",
-      "full_suite": "414 passed, 0 failed (sintético --dry-run)",
-      "cost_usd": 0.42,
-      "turns": 4
+      "target_test": "failed",
+      "full_suite": "0 passed, 0 regressions / 0 total",
+      "cost_usd": 0.0,
+      "turns": 0
     }
   },
-  "persona": {
-    "P1": {
-      "score": 12,
-      "citation": "schwifty/checksum/germany.py:1",
-      "quote": "return super().reconcile(checksum)"
-    },
-    "P2": {
-      "score": 8,
-      "citation": "trace.jsonl:1",
-      "quote": "DONE: corrigido Algorithm11.reconcile para delegar ao método base"
-    }
-  },
+  "persona": {},
   "discarded": [],
-  "veto_reason": "",
-  "judge_score": 94,
-  "cost_usd": 0.42,
-  "ts": "2026-08-02T02:23:24+00:00"
+  "veto_reason": "citação inválida em P1: 'schwifty/checksum/germany.py:221' não sustentada pelo material",
+  "judge_score": 0,
+  "cost_usd": 0.0,
+  "ts": "2026-08-02T02:27:28+00:00"
 }

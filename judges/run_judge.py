@@ -211,6 +211,32 @@ def build_verdict(
     }
 
 
+def build_infra_error_verdict(judge_id: str, reg: dict, row: dict | None) -> dict:
+    """Curto-circuito quando o agente consumiu 0 tokens: a run nem chegou a
+    trabalhar (ex.: `claude -p` saiu antes de emitir JSON parseável — infra
+    quebrada, não a run de fato tentando e falhando). Sem trabalho do
+    agente não há o que julgar: persona nunca é chamada, D1-D4 não são
+    calculados, e judge_score fica None — 0 significa "trabalho ruim",
+    não "infra quebrada", e não pode ser confundido com ele."""
+    notes = row.get("notes", "") if row else "(sem linha em results.tsv)"
+    return {
+        "judge_id": judge_id,
+        "harness_version": harness_version(),
+        "rubric_version": reg["rubric_version"],
+        "base_sha": reg["base_sha"],
+        "sealed_sha256": reg["sealed_sha256"],
+        "infra_error": True,
+        "infra_error_reason": f"agente consumiu 0 tokens — notes={notes!r}",
+        "deterministic": None,
+        "persona": {},
+        "discarded": [],
+        "veto_reason": "",
+        "judge_score": None,
+        "cost_usd": 0.0,
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+
+
 def write_verdict(verdict: dict) -> Path:
     out_dir = VERDICTS_DIR / verdict["judge_id"]
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -257,6 +283,16 @@ def run_real() -> dict:
     verify_result = json.loads(jm.group(1)) if jm else {"target_ok": False, "full": {}}
 
     row = last_results_row("task_j_b2b")
+    tokens = int(row["tokens"]) if row and row.get("tokens", "").strip() else 0
+    if tokens == 0:
+        # infra quebrou antes do agente trabalhar (0 tokens = nenhuma
+        # chamada ao modelo aconteceu) — curto-circuita: sem persona, sem
+        # D1-D4, judge_score fica None em vez de um 0 que pareceria "o
+        # agente tentou e foi mal".
+        shutil.rmtree(ws, ignore_errors=True)
+        reg = read_registry_row(JUDGE_ID)
+        return build_infra_error_verdict(JUDGE_ID, reg, row)
+
     cost_usd = float(row["cost_usd"]) if row else 0.0
     turns = int(row["turns"]) if row else 0
     # run_task.py grava "tamper:test_file_modified" nas notes quando o

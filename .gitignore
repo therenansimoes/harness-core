@@ -15,3 +15,4 @@ projects/*/ui/test-results/
 test-results/
 benchmarks/judge/task_*/fixtures/
 benchmarks/judge/task_*/.setup_base_sha
+judges/_env/

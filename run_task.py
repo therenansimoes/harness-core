@@ -84,7 +84,15 @@ def run_once(task_dir: Path, suite: str, keep: bool) -> bool:
     try:
         fixtures = task_dir / "fixtures"
         if fixtures.is_dir():
-            shutil.copytree(fixtures, ws, dirs_exist_ok=True)
+            # fixtures/ nunca deveria ter .venv/venv (setup.sh reclona limpo),
+            # mas se algum provisionamento antigo/manual deixou um venv
+            # (shebang aponta pro python que gerou, não pro do workspace),
+            # copiá-lo faz verify.py achar um interpretador quebrado sem
+            # pytest. Defesa em profundidade: nunca copiar isso pro workspace.
+            shutil.copytree(
+                fixtures, ws, dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns(".venv", "venv"),
+            )
 
         tests_before = hash_test_files(ws)
         res = run_agent(prompt, ws)

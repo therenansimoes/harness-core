@@ -86,14 +86,22 @@ def _run_cli(prompt: str, workspace: Path) -> AgentResult:
     if stderr == "TIMEOUT" and returncode == -1:
         return AgentResult(False, elapsed, notes="timeout")
 
-    if returncode != 0:
-        return AgentResult(
-            False, elapsed, notes=f"cli_exit_{returncode}:{stderr[-200:].strip()}"
-        )
-
+    # `claude -p --output-format json` sai com exit != 0 sempre que
+    # is_error=true no JSON — inclusive em desfechos NORMAIS do harness
+    # como estourar --max-turns (subtype=error_max_turns), que ainda assim
+    # carregam usage/cost/turns reais no stdout. Tratar todo returncode!=0
+    # como falha de infra (como fazia antes) descarta esses números e
+    # reporta 0 tokens/$0 pra uma run que trabalhou de verdade. Por isso:
+    # tenta parsear o JSON primeiro, independente do returncode; só cai em
+    # "cli_exit_N" (infra quebrada de fato, sem trabalho do agente) quando
+    # não sobrou JSON nenhum pra parsear.
     try:
         data = json.loads(stdout)
     except json.JSONDecodeError:
+        if returncode != 0:
+            return AgentResult(
+                False, elapsed, notes=f"cli_exit_{returncode}:{stderr[-200:].strip()}"
+            )
         return AgentResult(False, elapsed, text=stdout[-500:], notes="bad_json")
 
     usage = data.get("usage") or {}

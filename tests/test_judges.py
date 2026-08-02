@@ -231,6 +231,21 @@ def test_veto_zera_judge_score():
     assert verdict["veto_reason"] == "citação inválida em P1"
 
 
+def test_infra_error_verdict_nao_pontua_e_nao_chama_persona():
+    """0 tokens = agente nunca trabalhou (infra quebrada, ex. cli saiu
+    antes de emitir JSON) — curto-circuito não pode virar um judge_score=0
+    (isso significaria "trabalho ruim", não "infra quebrada")."""
+    reg = run_judge.read_registry_row("j_b2b")
+    row = {"tokens": "0", "cost_usd": "0.0000", "turns": "0", "notes": "cli_exit_1:"}
+    verdict = run_judge.build_infra_error_verdict("j_b2b", reg, row)
+
+    assert verdict["infra_error"] is True
+    assert verdict["judge_score"] is None
+    assert verdict["deterministic"] is None
+    assert verdict["persona"] == {}
+    assert "0 tokens" in verdict["infra_error_reason"]
+
+
 def test_criterio_descartado_recalcula_denominador():
     reg = run_judge.read_registry_row("j_b2b")
     deterministic = run_judge.synthetic_deterministic()  # D1..D4 = 25+15+10+10 = 60/60 (cheio)
