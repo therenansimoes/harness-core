@@ -246,6 +246,133 @@ def test_worktrees_removidos_mesmo_com_excecao(tmp_path, monkeypatch):
 # ------------------------------------------------------------------- CLI
 
 
+# -------------------------------------------------------------- parallel
+
+
+PARALLEL_TOML = """
+name = "{name}"
+task = "benchmarks/judge/task_j_b2b"
+n_per_arm = {n}
+budget_usd = {budget}
+parallel = true
+est_cost_per_run = {est}
+
+[mutation]
+file = "agent.py"
+old = "MAX_TURNS = 30"
+new = "MAX_TURNS = 25"
+"""
+
+
+def _write_parallel_cfg(tmp_path: Path, name: str, n: int, budget: float, est: float = 0.35) -> Path:
+    p = tmp_path / f"{name}.toml"
+    p.write_text(PARALLEL_TOML.format(name=name, n=n, budget=budget, est=est))
+    return p
+
+
+def _make_fake_popen(script):
+    """Substitui subprocess.Popen usado por run_task_launch no modo parallel.
+
+    Cada Popen "roda" a run de forma síncrona no construtor: grava a linha de
+    resultado no arquivo apontado por env["HARNESS_RESULTS"] (o mesmo
+    contrato que run_task.py real segue) — .wait() só devolve o returncode.
+    `script`: lista de (success, cost) consumida na ordem em que os
+    Popen são CRIADOS, ou seja, a ordem de disparo do laço em
+    _run_experiment_parallel (A0, B0, A1, B1, ...).
+    """
+    calls: list[dict] = []
+
+    class FakePopen:
+        def __init__(self, cmd, cwd=None, env=None, stdout=None, stderr=None):
+            calls.append({"cmd": cmd, "cwd": Path(cwd), "run_id": env["HARNESS_RUN_ID"]})
+            if not script:
+                raise AssertionError("Popen chamado além do script combinado no teste")
+            success, cost = script.pop(0)
+            results_path = Path(env["HARNESS_RESULTS"])
+            header = "\t".join(experiment.RESULTS_HEADER)
+            row = "\t".join(str(v) for v in [
+                "2026-08-02T00:00:00+00:00", "vtest", "cli", "m", "fixed", "task_j_b2b",
+                success, "1.0", "100", f"{cost:.4f}", "1", "",
+            ])
+            results_path.write_text(header + "\n" + row + "\n")
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    FakePopen.calls = calls
+    return FakePopen
+
+
+def test_parallel_dispara_tudo_e_coleta(tmp_path, monkeypatch):
+    cfg = experiment.parse_experiment(_write_parallel_cfg(tmp_path, "par1", n=3, budget=100.0))
+    fake_run = FakeRun(script=[])  # só git worktree add/remove + bash setup.sh — sem run_task.py aqui
+    fake_popen = _make_fake_popen(script=[(1, 0.1)] * 6)  # 3 pares, tudo sucesso
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    result = experiment.run_experiment(cfg)
+
+    assert result["mode"] == "parallel"
+    assert len(fake_popen.calls) == 6  # TODOS disparados, nenhum esperado antes do próximo
+    assert [c["run_id"] for c in fake_popen.calls] == [
+        "par1_A_0_" + result["timestamp"], "par1_B_0_" + result["timestamp"],
+        "par1_A_1_" + result["timestamp"], "par1_B_1_" + result["timestamp"],
+        "par1_A_2_" + result["timestamp"], "par1_B_2_" + result["timestamp"],
+    ]
+    assert result["n_per_arm_effective"] == 3
+    assert result["budget_capped"] is False
+    assert result["aggregates"]["A"]["successes"] == 3
+    assert result["aggregates"]["B"]["successes"] == 3
+    assert len(result["runs"]) == 6
+    assert set(fake_run.created) == set(fake_run.removed)
+
+
+def test_parallel_reduz_n_pelo_budget_antes_de_disparar(tmp_path, monkeypatch):
+    # n_per_arm=10, est_cost_per_run=0.4 -> nominal = 10*2*0.4 = 8.0 > budget 1.0
+    # n_efetivo = floor(1.0 / (2*0.4)) = 1
+    cfg = experiment.parse_experiment(_write_parallel_cfg(tmp_path, "par2", n=10, budget=1.0, est=0.4))
+    fake_run = FakeRun(script=[])
+    fake_popen = _make_fake_popen(script=[(1, 0.1)] * 2)  # só 1 par -> 2 Popen, nunca 20
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    result = experiment.run_experiment(cfg)
+
+    assert result["n_per_arm_requested"] == 10
+    assert result["n_per_arm_effective"] == 1
+    assert result["budget_capped"] is True
+    assert len(fake_popen.calls) == 2
+    assert len(result["runs"]) == 2
+
+
+def test_parallel_budget_insuficiente_para_1_par_da_erro(tmp_path, monkeypatch):
+    # est_cost_per_run=1.0 -> mínimo 1 par custa 2.0, budget é 0.5
+    cfg = experiment.parse_experiment(_write_parallel_cfg(tmp_path, "par3", n=5, budget=0.5, est=1.0))
+    fake_run = FakeRun(script=[])
+    fake_popen = _make_fake_popen(script=[])
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    with pytest.raises(experiment.ExperimentError):
+        experiment.run_experiment(cfg)
+
+
+def test_cli_parallel_flag_forca_modo_mesmo_sem_toml(tmp_path, monkeypatch):
+    monkeypatch.setattr(experiment, "EXPERIMENTS_DIR", tmp_path / "experiments")
+    cfg_path = _write_cfg(tmp_path, "cli_par", n=2, budget=100.0)  # TOML sem `parallel = true`
+    fake_run = FakeRun(script=[])
+    fake_popen = _make_fake_popen(script=[(1, 0.05)] * 4)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(sys, "argv", ["experiment.py", "run", str(cfg_path), "--parallel"])
+
+    rc = experiment.main()
+
+    assert rc == 0
+    assert len(fake_popen.calls) == 4
+
+
 def test_main_run_produz_json_e_draft(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(experiment, "EXPERIMENTS_DIR", tmp_path / "experiments")
     cfg_path = _write_cfg(tmp_path, "cli_smoke", n=2, budget=100.0)

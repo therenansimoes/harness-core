@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -82,6 +83,11 @@ def parse_experiment(path: Path) -> dict:
 
     cfg.setdefault("decision_rule", {})
     cfg["decision_rule"].setdefault("min_diff_successes", 2)
+    cfg.setdefault("parallel", False)
+    # custo estimado por run, usado SÓ no modo parallel para pré-calcular um
+    # teto nominal de n_per_arm antes de disparar (não dá pra parar no meio
+    # quando tudo sobe de uma vez via Popen — ver run_experiment).
+    cfg.setdefault("est_cost_per_run", 0.35)
     return cfg
 
 
@@ -131,20 +137,14 @@ def run_setup(worktree: Path, task: str) -> None:
 # -------------------------------------------------------------------- runs
 
 
-def run_task_once(worktree: Path, task: str) -> dict:
-    """Roda UMA run de `task` via run_task.py do worktree e devolve a última
-    linha gravada em <worktree>/results.tsv (o run_task.py daquele worktree
-    grava lá por padrão, um results.tsv por braço)."""
-    subprocess.run(
-        [sys.executable, str(worktree / "run_task.py"), task],
-        cwd=worktree, capture_output=True, text=True,
-    )
-    results_path = worktree / "results.tsv"
+def collect_result(results_path: Path, origin: str) -> dict:
+    """Lê a última linha de um results.tsv (formato HEADER de run_task.py) e
+    converte os campos numéricos. `origin` só entra na mensagem de erro."""
     if not results_path.exists():
-        raise ExperimentError(f"run_task.py não gravou results.tsv em {worktree}")
+        raise ExperimentError(f"run_task.py não gravou results.tsv em {origin}")
     lines = results_path.read_text(encoding="utf-8").splitlines()
     if len(lines) < 2:
-        raise ExperimentError(f"results.tsv em {worktree} sem linha de dado após a run")
+        raise ExperimentError(f"results.tsv em {origin} sem linha de dado após a run")
     header = lines[0].split("\t")
     values = lines[-1].split("\t")
     row = dict(zip(header, values))
@@ -153,6 +153,35 @@ def run_task_once(worktree: Path, task: str) -> dict:
     row["tokens"] = int(row.get("tokens") or 0)
     row["turns"] = int(row.get("turns") or 0)
     return row
+
+
+def run_task_once(worktree: Path, task: str) -> dict:
+    """Roda UMA run de `task` via run_task.py do worktree e devolve a última
+    linha gravada em <worktree>/results.tsv (o run_task.py daquele worktree
+    grava lá por padrão, um results.tsv por braço). Modo sequencial: as runs
+    nunca coexistem no mesmo worktree, então o results.tsv compartilhado do
+    braço não corre risco de colisão de append."""
+    subprocess.run(
+        [sys.executable, str(worktree / "run_task.py"), task],
+        cwd=worktree, capture_output=True, text=True,
+    )
+    return collect_result(worktree / "results.tsv", str(worktree))
+
+
+def run_task_launch(worktree: Path, task: str, run_id: str, results_path: Path) -> subprocess.Popen:
+    """Dispara (sem esperar) UMA run de `task` via run_task.py do worktree —
+    usado só no modo parallel. HARNESS_RESULTS aponta pra um arquivo EXCLUSIVO
+    desta run (run_task.py já respeita essa env, ver ROOT/run_task.py) — é
+    assim que evitamos runs paralelas colidindo no append do mesmo
+    results.tsv, sem precisar de lock de arquivo. HARNESS_RUN_ID identifica a
+    run pro trace (agent.py já lê essa env para nomear o trace)."""
+    env = dict(os.environ)
+    env["HARNESS_RESULTS"] = str(results_path)
+    env["HARNESS_RUN_ID"] = run_id
+    return subprocess.Popen(
+        [sys.executable, str(worktree / "run_task.py"), task],
+        cwd=worktree, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
 
 
 def aggregate(runs: list[dict]) -> dict:
@@ -188,7 +217,13 @@ def decide(agg: dict, decision_rule: dict) -> dict:
 # --------------------------------------------------------------- orquestra
 
 
-def run_experiment(cfg: dict) -> dict:
+def run_experiment(cfg: dict, parallel: bool | None = None) -> dict:
+    """`parallel=None` (default) usa o campo `parallel` do TOML; True/False
+    força o modo, é o que a flag --parallel da CLI usa."""
+    use_parallel = cfg.get("parallel", False) if parallel is None else parallel
+    if use_parallel:
+        return _run_experiment_parallel(cfg)
+
     name = cfg["name"]
     task = cfg["task"]
     n_per_arm = cfg["n_per_arm"]
@@ -241,6 +276,92 @@ def run_experiment(cfg: dict) -> dict:
         "stopped_early": stopped_at_pair is not None,
         "stopped_at_pair": stopped_at_pair,
         "decision": decision,
+        "mode": "sequential",
+    }
+
+
+def _run_experiment_parallel(cfg: dict) -> dict:
+    """Modo parallel: TODAS as runs de A e B sobem juntas via Popen — A e B
+    contemporâneos por construção (melhor garantia que intercalar). Sem jeito
+    de parar no meio quando tudo já foi disparado, então o budget vira um
+    teto NOMINAL calculado ANTES de disparar (n_per_arm x 2 x
+    est_cost_per_run); se estourar, n_per_arm é reduzido ali, nunca depois."""
+    name = cfg["name"]
+    task = cfg["task"]
+    n_requested = cfg["n_per_arm"]
+    budget = cfg["budget_usd"]
+    mutation = cfg["mutation"]
+    est_cost = cfg.get("est_cost_per_run", 0.35)
+
+    n_per_arm = n_requested
+    budget_capped = False
+    if n_requested * 2 * est_cost > budget:
+        n_per_arm = int(budget // (2 * est_cost))
+        budget_capped = True
+        if n_per_arm < 1:
+            raise ExperimentError(
+                f"budget_usd={budget} insuficiente p/ 1 par ao custo estimado "
+                f"est_cost_per_run={est_cost} (mínimo ${2 * est_cost:.2f}/par)"
+            )
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    base = Path(tempfile.mkdtemp(prefix=f"experiment_{name}_"))
+    wt_a, wt_b = base / "A", base / "B"
+    results_dir = Path(tempfile.mkdtemp(prefix=f"experiment_{name}_results_"))
+
+    runs: list[dict] = []
+    mutation_summary = ""
+    try:
+        create_worktree(wt_a)
+        create_worktree(wt_b)
+        mutation_summary = apply_mutation(wt_b, mutation)  # só B recebe a mutação
+        run_setup(wt_a, task)
+        run_setup(wt_b, task)
+
+        # dispara tudo de uma vez (A e B, todos os pares) — cada run com seu
+        # próprio HARNESS_RESULTS, então nada colide no append.
+        launched = []
+        for i in range(n_per_arm):
+            for arm, wt in (("A", wt_a), ("B", wt_b)):
+                run_id = f"{name}_{arm}_{i}_{ts}"
+                results_path = results_dir / f"{run_id}.tsv"
+                proc = run_task_launch(wt, task, run_id, results_path)
+                launched.append((proc, arm, i, results_path))
+
+        for proc, arm, i, results_path in launched:
+            proc.wait()
+            row = collect_result(results_path, str(results_path))
+            row["arm"] = arm
+            row["pair_index"] = i
+            runs.append(row)
+    finally:
+        remove_worktree(wt_a)
+        remove_worktree(wt_b)
+        shutil.rmtree(results_dir, ignore_errors=True)
+
+    runs.sort(key=lambda r: (r["pair_index"], r["arm"]))
+    total_cost = sum(r["cost_usd"] for r in runs)
+    agg = aggregate(runs)
+    decision = decide(agg, cfg["decision_rule"])
+    return {
+        "name": name,
+        "task": task,
+        "mutation": mutation,
+        "mutation_summary": mutation_summary,
+        "n_per_arm_requested": n_requested,
+        "n_per_arm_effective": n_per_arm,
+        "budget_usd": budget,
+        "budget_capped": budget_capped,
+        "est_cost_per_run": est_cost,
+        "decision_rule": cfg["decision_rule"],
+        "timestamp": ts,
+        "runs": runs,
+        "aggregates": agg,
+        "cost_total_usd": total_cost,
+        "stopped_early": False,
+        "stopped_at_pair": None,
+        "decision": decision,
+        "mode": "parallel",
     }
 
 
@@ -260,6 +381,10 @@ def print_table(result: dict) -> None:
     if result["stopped_early"]:
         print(f"\nPAROU no par {result['stopped_at_pair']} — custo acumulado ${result['cost_total_usd']:.4f} "
               f">= budget ${result['budget_usd']:.4f}")
+    if result.get("budget_capped"):
+        print(f"\nn_per_arm reduzido de {result['n_per_arm_requested']} para {result['n_per_arm_effective']} "
+              f"ANTES de disparar — budget nominal (2 x n x est_cost_per_run) excedia "
+              f"${result['budget_usd']:.4f} (est_cost_per_run=${result['est_cost_per_run']:.2f})")
     d = result["decision"]
     print(f"\ndiff de sucessos (B-A): {d['diff_successes']} · min_diff_successes={d['min_diff_successes']} "
           f"-> {d['outcome'].upper()}")
@@ -283,6 +408,13 @@ def render_draft(result: dict) -> str:
     ]
     if result["stopped_early"]:
         lines.append(f"- Parou no par {result['stopped_at_pair']} por teto de custo.")
+    if result.get("budget_capped"):
+        lines.append(
+            f"- Modo parallel: n_per_arm reduzido de {result['n_per_arm_requested']} para "
+            f"{result['n_per_arm_effective']} ANTES de disparar (teto nominal pré-calculado, "
+            f"est_cost_per_run=${result['est_cost_per_run']:.2f}/run) — não dá pra parar no meio "
+            f"com todas as runs em paralelo."
+        )
     lines += [
         "",
         "## Regra de decisão",
@@ -318,12 +450,16 @@ def main() -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     run_p = sub.add_parser("run", help="roda um experimento a partir de um .toml/.json")
     run_p.add_argument("config", help="ex: evolution/experiments_def/exp.toml")
+    run_p.add_argument(
+        "--parallel", action="store_true",
+        help="força modo parallel (todas as runs via Popen simultâneo), mesmo sem `parallel = true` no TOML",
+    )
     args = ap.parse_args()
 
     if args.cmd == "run":
         try:
             cfg = parse_experiment(Path(args.config))
-            result = run_experiment(cfg)
+            result = run_experiment(cfg, parallel=True if args.parallel else None)
         except ExperimentError as e:
             print(f"ERRO DE INFRA: {e}", file=sys.stderr)
             return 2

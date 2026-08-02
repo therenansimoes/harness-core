@@ -18,3 +18,8 @@ benchmarks/judge/task_*/.setup_base_sha
 judges/_env/
 _env/
 runs/
+arena/gen4/seed/
+arena/gen4/v1/
+arena/gen4/v2/
+arena/gen4/v3/
+arena/gen4/v4/
