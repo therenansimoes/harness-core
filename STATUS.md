@@ -58,6 +58,7 @@ Sequência que protege o investimento: (1) juiz j_b2b rodando honesto ← estamo
 
 - **deer-flow (ByteDance, MIT, 78k stars, ativo, 2026-08-01):** SuperAgent harness sobre LangGraph. ROUBAR padrão: sandbox isolado por run (versão subprocess simples, não Docker/K8s); SkillScan (scan determinístico antes de carregar capacidade); memória com escopo explícito (fazer com SQLite/markdown, depois do "saiu do lugar"). IGNORAR: LangGraph como runtime, multi-worker Redis, gateway de canais — contraria stdlib-only e a escada.
 
+- **Terminal-Bench 2.0 import (2026-08-01): PARCIAL.** Maioria das 89 tasks exige Docker (ambiente embutido no Dockerfile). Pool portável pequeno (dígito único a baixa dezena); 1 task (`cancel-async-tasks`) adaptada e validada red/green no scratchpad, ~30-45min/task portável. Decisão: importar as portáveis quando precisarmos de largura de benchmark; suporte Docker fica na fila de longo prazo (junto do A/B sério).
 - **Confiabilidade de juiz LLM (2026-08-01):** citação obrigatória + veto (já temos) é a mitigação nº1 da literatura. ADOTAR custo-zero: CoT estilo G-Eval antes do score na persona (mesma chamada). QUANDO ESCALAR: swap de posição 2× no pairwise de versões A/B (flip = disputa). IGNORAR: self-consistency N× (60% determinístico já blinda) e pairwise nas fichas J1 (perderia granularidade por critério; pointwise por critério está certo). Fontes: arXiv 2504.14716, 2606.13685, 2507.10535.
 
 ## Critério de "saiu do lugar"
