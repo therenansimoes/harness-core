@@ -19,6 +19,7 @@ DeerFlow tem cliente MCP nativo com OAuth por servidor (refresh_token/client_cre
 ## Backlog de PR (anotado, priorizar depois)
 | Prioridade | Item | Via | Tamanho | Valor | Risco |
 |---|---|---|---|---|---|
+| **TOPO** | **Form "Add MCP server" em Settings→Tools** — o backend JÁ tem CRUD completo (`backend/app/gateway/routers/mcp.py`: GET/PUT `update_mcp_configuration` aceita server novo + PATCH estado + atomic write). Falta SÓ a tela de criar no frontend; hoje o painel só liga/desliga o que já está no extensions_config.json. Dor real sentida pelo Renan 2026-08-02. | **frontend-only** (backend pronto) | médio (form + validação) | altíssimo: conserta gap visível, melhora produto = visibilidade | baixo (zero core, backend valida) |
 | Alta | Skill pública `inbox-triage`/`email-digest` que orquestra tools MCP (autonomia: lê email → decide → age) | skill em skills/public/, molde newsletter-generation | ~100-150 linhas | narrativa de autonomia, área que eles aceitam | baixo |
 | Média | Generalizar bridge de credencial do sandbox: `lark-cli` hardcoded (`sandbox/tools.py:1739`) → registry `{provider: cli}` | PR upstream de core (genérico, não vendor) | ~80-150 linhas + testes | destrava toda integration skill de 3º | médio (área sandbox; mitigar mantendo lark como 1º entry) |
 | Baixa | Canal WhatsApp Cloud API oficial (pywa) — crava slot `whatsapp` upstream | PR upstream | ~400-600 linhas | slot + UI de conexão | médio (Renan escolheu Baileys-only por ora) |
