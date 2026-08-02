@@ -1,0 +1,6 @@
+# Ferramentas e workspace. Calibrável pelo loop — não é régua, não é topologia.
+
+[workspace]
+# Caches pesados entram no workspace por symlink, nunca por cópia.
+# Só vale para o que existe na origem e NÃO está versionado.
+cache_links = ["node_modules", ".venv", ".cache"]
