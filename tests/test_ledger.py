@@ -68,11 +68,13 @@ def test_record_run_once_rolls_back_row_if_marker_fails(data_dir, monkeypatch):
     def boom(*args, **kwargs):
         raise RuntimeError("morreu entre o INSERT e o marcador")
 
-    monkeypatch.setattr(store, "_insert_node", boom)
-    with pytest.raises(RuntimeError):
-        store.record_run_once(_row())
+    # context(): undo() desfaria TAMBÉM o HARNESS_DATA_DIR da fixture, e o
+    # history() abaixo leria o data/ real do repo.
+    with monkeypatch.context() as m:
+        m.setattr(store, "_insert_node", boom)
+        with pytest.raises(RuntimeError):
+            store.record_run_once(_row())
 
-    monkeypatch.undo()
     assert store.history() == []
     assert store.get_node("r1", "record") is None
 
