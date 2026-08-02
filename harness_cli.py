@@ -11,6 +11,12 @@ vivo e o exit code real de run_task.py / evolve.py.
     python3 harness_cli.py whatsapp-cancel <id> [--note ...]
     python3 harness_cli.py init [--path DIR]
 
+    python3 harness_cli.py project add <nome> --path <abs> [--priority N]
+    python3 harness_cli.py project list
+    python3 harness_cli.py project queue <nome> add "<título>" --prompt f.md --verify v.py
+    python3 harness_cli.py project run [--project N] [--once|--loop K] [--keep]
+    python3 harness_cli.py project status [<nome>]
+
     python3 harness_cli.py project-init <nome> [--path DIR] [--ui]
     python3 harness_cli.py session-new --project X --session Y [--brief-file FILE]
     python3 harness_cli.py verify --project X --session Y
@@ -26,6 +32,12 @@ isso é o gate, não um detalhe de implementação.
 Eixo de ENTREGA (project-init, session-new, verify, post-work, resume,
 promote-checks, governance-approve) é casca fina sobre delivery.py: toda a
 lógica de verify/governança/post-work vive lá, não aqui.
+
+`project` (add/list/queue/run/status) é o eixo MULTI-PROJETO (SPEC-MULTIPROJECT
+FASE 1): vários projetos com work_path fora do repo, fila própria, lock
+próprio, results.tsv próprio — delega inteiro para project.py via subprocess
+(mesmo padrão de run/evolve), independente do eixo project-init/session-new
+acima (que é single-project, formato demo_site).
 """
 
 from __future__ import annotations
@@ -64,6 +76,12 @@ def cmd_run(a: argparse.Namespace) -> int:
     if a.task:
         cmd.append(a.task)
     return subprocess.run(cmd).returncode
+
+
+def cmd_project(a: argparse.Namespace) -> int:
+    import subprocess
+
+    return subprocess.run([sys.executable, str(ROOT / "project.py"), *a.args]).returncode
 
 
 def cmd_evolve(a: argparse.Namespace) -> int:
@@ -434,6 +452,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_uib.add_argument("--project", required=True, help="nome (projects/<nome>) ou path do projeto")
     p_uib.add_argument("--note", default="", help="motivo da atualização (registrado na governança)")
     p_uib.set_defaults(func=cmd_ui_baseline)
+
+    p_project = sub.add_parser(
+        "project",
+        help="eixo multi-projeto: add/list/queue/run/status (delega para project.py, "
+             "SPEC-MULTIPROJECT FASE 1)",
+    )
+    p_project.add_argument("args", nargs=argparse.REMAINDER, help="subcomando e args de project.py")
+    p_project.set_defaults(func=cmd_project)
 
     return ap
 
