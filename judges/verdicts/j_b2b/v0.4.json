@@ -8,30 +8,19 @@
     "D1": 25,
     "D2": 15,
     "D3": 10,
-    "D4": 0,
+    "D4": 2,
     "veto": false,
     "evidence": {
       "target_test": "passed",
       "full_suite": "415 passed, 0 regressions / 415 total",
-      "cost_usd": 0.2845,
-      "turns": 21
+      "cost_usd": 0.5237,
+      "turns": 1
     }
   },
-  "persona": {
-    "P1": {
-      "score": 11,
-      "citation": "schwifty/checksum/germany.py:221",
-      "quote": "return 0 if checksum > 10 else checksum"
-    },
-    "P2": {
-      "score": 8,
-      "citation": "trace.jsonl:264",
-      "quote": "Account 1000000060 with DE:11 validates: True"
-    }
-  },
+  "persona": {},
   "discarded": [],
-  "veto_reason": "",
-  "judge_score": 81,
-  "cost_usd": 0.2845,
-  "ts": "2026-08-02T03:21:17+00:00"
+  "veto_reason": "citação inválida em P2: 'trace.jsonl:160' não sustentada pelo material",
+  "judge_score": 0,
+  "cost_usd": 0.5237,
+  "ts": "2026-08-02T03:32:47+00:00"
 }

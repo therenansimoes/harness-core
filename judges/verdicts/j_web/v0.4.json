@@ -1,0 +1,37 @@
+{
+  "judge_id": "j_web",
+  "harness_version": "v0.4",
+  "rubric_version": "J1",
+  "base_sha": "d703421c90965909b19165d7c5bcdf62db0c5b48",
+  "sealed_sha256": "08963b0383437e63a5e785644b2315fa190ab053000852db4f6567110ab0dd5d",
+  "deterministic": {
+    "D1": 25,
+    "D2": 15,
+    "D3": 10,
+    "D4": 10,
+    "veto": false,
+    "evidence": {
+      "target_test": "passed",
+      "full_suite": "49 passed, 0 regressions / 49 total",
+      "cost_usd": 0.1389,
+      "turns": 17
+    }
+  },
+  "persona": {
+    "P1": {
+      "score": 12,
+      "citation": "listen-keys/index.js:6",
+      "quote": "} else if (changed === undefined) {"
+    },
+    "P2": {
+      "score": 7,
+      "citation": "trace.jsonl:247",
+      "quote": "Todos os 47 testes passam."
+    }
+  },
+  "discarded": [],
+  "veto_reason": "",
+  "judge_score": 93,
+  "cost_usd": 0.1389,
+  "ts": "2026-08-02T03:34:41+00:00"
+}
