@@ -24,6 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from agent import BACKEND, MODEL, run_agent  # noqa: E402
+import isolation  # noqa: E402
 
 ROOT = Path(__file__).parent.resolve()
 # evolve.py roda o runner a partir de uma sandbox (agent.py patchado) mas grava
@@ -98,7 +99,7 @@ def gc_traces() -> None:
         shutil.rmtree(p, ignore_errors=True)
 
 
-def run_once(task_dir: Path, suite: str, keep: bool) -> bool:
+def run_once(task_dir: Path, suite: str, keep: bool, isolation_mode: str = "tmpdir") -> bool:
     task_id = task_dir.name
     prompt = (task_dir / "prompt.md").read_text()
     verify = task_dir / "verify.py"
@@ -125,10 +126,17 @@ def run_once(task_dir: Path, suite: str, keep: bool) -> bool:
         tampered = tests_after != tests_before
 
         # verify roda NO workspace, sempre — mesmo se o agent falhou/estourou turns.
+        # --isolation docker: só o verify roda dentro do container (--network
+        # none, sem acesso ao host); o agent acima já rodou fora, editando ws
+        # diretamente. Ver isolation.py para a limitação dessa divisão.
         try:
-            v = subprocess.run(
-                [sys.executable, str(verify)], cwd=ws, capture_output=True, text=True, timeout=120
-            )
+            if isolation_mode == "docker":
+                isolation.ensure_image()
+                v = isolation.run_verify_in_container(ws, verify)
+            else:
+                v = subprocess.run(
+                    [sys.executable, str(verify)], cwd=ws, capture_output=True, text=True, timeout=120
+                )
             success = 1 if v.returncode == 0 else 0
             vnote = "" if success else f"verify:{(v.stdout + v.stderr).strip()[-160:]}"
         except subprocess.TimeoutExpired:
@@ -180,7 +188,14 @@ def main() -> int:
     ap.add_argument("--suite", default="fixed", help="fixed | sealed")
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--keep", action="store_true", help="não apagar o workspace")
+    ap.add_argument(
+        "--isolation", default="tmpdir", choices=["tmpdir", "docker"],
+        help="tmpdir (default, atual) | docker: verify roda em container --rm --network none",
+    )
     a = ap.parse_args()
+
+    if a.isolation == "docker" and not isolation.docker_available():
+        ap.error("--isolation docker: docker indisponível (binário ausente ou daemon parado)")
 
     gc_traces()
 
@@ -192,7 +207,7 @@ def main() -> int:
     for _ in range(a.repeat):
         for t in tasks:
             total += 1
-            passed += run_once(t, a.suite, a.keep)
+            passed += run_once(t, a.suite, a.keep, a.isolation)
 
     print(f"\n{harness_version()} [{a.suite}] {passed}/{total} = {passed / total:.0%}")
     return 0 if passed == total else 1
