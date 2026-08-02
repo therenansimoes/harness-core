@@ -5,17 +5,22 @@
               accept ──┐   retry → route   escalate ──┐   revert ──┐
                        └──────────── record ──────────┴────────────┘ → END
 
-Nós `route`, `measure` e `gate` são stubs determinísticos neste PR — o router
-real é PR-6 e a régua real é PR-4. O que este PR entrega de verdade é a
-idempotência: toda escrita externa passa por `(run_id, node, attempt)` no
-ledger, então matar o processo no meio de `execute` e reinvocar o mesmo
-`thread_id` retoma sem reexecutar nada que já aconteceu.
+Nós `measure` e `gate` ainda são stubs determinísticos — a régua real é PR-4. O
+que este PR entrega de verdade é a idempotência: toda escrita externa passa por
+`(run_id, node, attempt)` no ledger, então matar o processo no meio de `execute`
+e reinvocar o mesmo `thread_id` retoma sem reexecutar nada que já aconteceu.
 
 O `attempt` faz parte da chave só dos nós por-tentativa (`execute`, `verify`):
 sem ele o braço `retry` seria decorativo — a segunda passagem acharia o registro
 da primeira e devolveria o resultado cacheado, e nem `max_attempts` nem a
 escalação de tier do router mudariam o desfecho. Os nós que rodam uma vez por
 run (`plan`, `provision`, `record`) ficam no attempt 0.
+
+`route` tem dois modos (`harness_route`): `manual` honra o backend que o
+chamador fixou — é o default, e o que a CLI faz hoje — e `auto` entrega a
+escolha ao `routing.router`. `route` de propósito NÃO é idempotente por
+attempt: é o único nó que precisa recalcular a cada passagem, senão o braço
+`retry` voltaria a rodar no mesmo tier que acabou de falhar.
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ from harness.backends import registry
 from harness.graph.checkpoint import open_checkpointer
 from harness.graph.state import Budget, Decision, Event, RunState
 from harness.ledger import store
+from harness.routing import MANUAL_TIER, ROUTE_AUTO, ROUTE_MANUAL, ROUTE_MODES, router
 from harness.types import ExecRequest, ExecResult, RunRow, Selection, UnitSpec, Verdict
 
 # Chaves nossas dentro de `config["configurable"]`. O que não é estado do run
@@ -39,6 +45,7 @@ CFG_DATA_DIR = "harness_data_dir"
 CFG_BACKEND = "harness_backend"
 CFG_MODEL = "harness_model"
 CFG_MAX_TURNS = "harness_max_turns"
+CFG_ROUTE = "harness_route"
 
 DEFAULT_MAX_TURNS = 8
 VERIFY_TIMEOUT_S = 120.0
@@ -149,19 +156,46 @@ def _plan(state: RunState, config=None) -> dict:
 
 
 def _route(state: RunState, config=None) -> dict:
-    """Stub determinístico: honra o pedido. Router com prior é PR-6."""
+    """Quem paga esta tentativa. `auto` pergunta ao router, `manual` obedece.
+
+    No modo `auto` o histórico do ledger vai inteiro para o `select`: o filtro
+    que importa (kind, tier, backend) é do router, e recortar aqui por fora
+    esconderia amostra dele. O `attempt` corrente é o que faz a segunda passagem
+    subir de tier — a escalação é do router, não deste nó.
+    """
     unit = state["unit"]
-    selection = Selection(
-        backend=_cfg(config, CFG_BACKEND, "mock"),
-        model=_cfg(config, CFG_MODEL) or "",
-        tier="t0",
-        kind=unit.kind or "code",
-        max_turns=int(_cfg(config, CFG_MAX_TURNS, DEFAULT_MAX_TURNS)),
-        reasons=("stub:pedido_do_chamador",),
-    )
+    attempt = state.get("attempt", 0)
+
+    if _cfg(config, CFG_ROUTE, ROUTE_MANUAL) == ROUTE_AUTO:
+        selection = router.select(
+            unit,
+            history=store.history(path=_db(config)),
+            attempt=attempt,
+        )
+    else:
+        selection = Selection(
+            backend=_cfg(config, CFG_BACKEND, "mock"),
+            model=_cfg(config, CFG_MODEL) or "",
+            tier=MANUAL_TIER,
+            kind=unit.kind or "code",
+            max_turns=int(_cfg(config, CFG_MAX_TURNS, DEFAULT_MAX_TURNS)),
+            reasons=("manual:pedido_do_chamador",),
+        )
+
     return {
         "selection": selection,
-        "events": [_event("route", backend=selection.backend, tier=selection.tier)],
+        "events": [
+            _event(
+                "route",
+                backend=selection.backend,
+                model=selection.model,
+                tier=selection.tier,
+                kind=selection.kind,
+                attempt=attempt,
+                # `reasons` no trace: sem ela a escolha vira número sem porquê.
+                reasons=list(selection.reasons),
+            )
+        ],
     }
 
 
@@ -450,16 +484,29 @@ def initial_state(unit: UnitSpec, run_id: str, max_attempts: int) -> RunState:
 
 def run_unit(
     unit_dir: Path,
-    backend: str,
+    backend: str | None,
     model: str | None,
     data_dir: Path,
     thread_id: str,
     max_attempts: int = 2,
+    route: str = ROUTE_MANUAL,
 ) -> RunState:
-    """Roda uma unidade ponta a ponta. Mesmo `thread_id` + `data_dir` = retomada."""
+    """Roda uma unidade ponta a ponta. Mesmo `thread_id` + `data_dir` = retomada.
+
+    `route="auto"` entrega backend/model/tier ao router e por isso é excludente
+    com `backend`: aceitar os dois e ignorar um em silêncio seria mentir sobre
+    quem executou.
+    """
     # Import tardio: o cli vai chamar o grafo, então o grafo não importa o cli
     # no topo (ciclo).
     from harness.cli import load_unit
+
+    if route not in ROUTE_MODES:
+        raise ValueError(f"route precisa ser um de {list(ROUTE_MODES)}: {route!r}")
+    if route == ROUTE_AUTO and (backend or model):
+        raise ValueError("route='auto': quem escolhe backend/model é o router")
+    if route == ROUTE_MANUAL and not backend:
+        raise ValueError("route='manual' exige backend")
 
     unit = load_unit(Path(unit_dir))
     data_dir = Path(data_dir)
@@ -473,6 +520,7 @@ def run_unit(
                 CFG_BACKEND: backend,
                 CFG_MODEL: model,
                 CFG_MAX_TURNS: DEFAULT_MAX_TURNS,
+                CFG_ROUTE: route,
             },
             # Cada tentativa gasta ~8 supersteps; sobra folga para o loop de retry.
             "recursion_limit": 12 * (max_attempts + 1),
