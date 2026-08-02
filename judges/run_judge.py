@@ -26,9 +26,11 @@ Fluxo real (§6 do SPEC-J1), por juiz:
 Este harness ainda não faz nenhuma chamada paga — o caminho real acima
 existe mas só foi exercitado com --dry-run / PERSONA_MOCK=1 até aqui.
 
---all-judges roda os 3 em sequência (real ou --dry-run) e agrega score por
+--all-judges roda os 3 em paralelo (real ou --dry-run) e agrega score por
 juiz + mediana + spread num summary em
-judges/verdicts/summary_<harness_version>.json.
+judges/verdicts/summary_<harness_version>.json. O paralelismo é por thread
+(cada juiz é subprocess-bound: run_task.py, accept.py, `claude -p`), com a
+saída de cada juiz bufferizada e impressa na ordem do registry.
 """
 from __future__ import annotations
 
@@ -41,6 +43,8 @@ import statistics
 import subprocess
 import sys
 import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -56,6 +60,15 @@ REGISTRY = REPO_ROOT / "judges" / "registry.tsv"
 VERDICTS_DIR = REPO_ROOT / "judges" / "verdicts"
 RESULTS = REPO_ROOT / "results.tsv"
 SPREAD_INCONCLUSIVE_THRESHOLD = 25
+
+# --all-judges: quantos juízes rodam ao mesmo tempo. 3 = os 3 juízes da J1
+# hoje; teto baixo de propósito, cada juiz sobe um agente/subprocess pesado.
+JUDGE_MAX_WORKERS = 3
+
+# Serializa os dois únicos pontos onde juízes paralelos compartilham
+# recurso mutável: o append no results.tsv do repo e o stdout do processo.
+_RESULTS_LOCK = threading.Lock()
+_STDOUT_LOCK = threading.Lock()
 
 # --------------------------------------------------------- trilha build (J2)
 # SPEC-J2 §Design 2: mesma orquestração da trilha A (J1), trocando
@@ -530,21 +543,41 @@ def load_trace(notes: str) -> str:
 def run_real(judge_id: str = DEFAULT_JUDGE_ID) -> dict:
     """Roda run_task.py de verdade (agente real via `claude -p`, custo
     real) e monta a ficha a partir do resultado. Não exercitado neste PR
-    (proibido chamar API paga) — implementado, não testado end-to-end."""
+    (proibido chamar API paga) — implementado, não testado end-to-end.
+
+    O run_task.py deste juiz grava num results.tsv EXCLUSIVO (via
+    HARNESS_RESULTS, mesmo padrão de experiment.run_task_launch): com
+    --all-judges paralelo, dois run_task.py coexistem e appends
+    intercalados no results.tsv do repo poderiam quebrar a leitura da
+    "última linha do task_id". As linhas voltam pro results.tsv do repo em
+    merge_judge_results(), sob lock — o histórico continua lá (é dele que
+    median_baseline_cost_turns vive)."""
+    tmp_dir = Path(tempfile.mkdtemp(prefix="harness_judge_results_"))
+    try:
+        return _run_real(judge_id, tmp_dir / "results.tsv")
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _run_real(judge_id: str, results_path: Path) -> dict:
     task_dir = task_dir_for(judge_id)
     task_id = f"task_{judge_id}"
 
     if not task_dir.joinpath("fixtures", "pyproject.toml").exists():
         subprocess.run(["bash", str(task_dir / "setup.sh")], check=True)
 
+    env = dict(os.environ)
+    env["HARNESS_RESULTS"] = str(results_path)
     proc = subprocess.run(
         [sys.executable, str(REPO_ROOT / "run_task.py"), str(task_dir), "--suite", "judge", "--keep"],
         cwd=REPO_ROOT,
+        env=env,
         capture_output=True,
         text=True,
         timeout=700,
     )
-    print(proc.stdout)
+    with _STDOUT_LOCK:
+        print(proc.stdout)
     m = re.search(r"workspace:\s*(\S+)", proc.stdout)
     if not m:
         raise SystemExit(f"run_judge: não achei o workspace na saída de run_task.py:\n{proc.stdout}\n{proc.stderr}")
@@ -564,7 +597,8 @@ def run_real(judge_id: str = DEFAULT_JUDGE_ID) -> dict:
     jm = re.search(r"JUDGE_RESULT=(\{.*\})", verify_out)
     verify_result = json.loads(jm.group(1)) if jm else {"target_ok": False, "full": {}}
 
-    row = last_results_row(task_id)
+    row = last_results_row(task_id, results_path)
+    merge_judge_results(results_path)
     tokens = int(row["tokens"]) if row and row.get("tokens", "").strip() else 0
     if tokens == 0:
         # infra quebrou antes do agente trabalhar (0 tokens = nenhuma
@@ -596,12 +630,33 @@ def run_real(judge_id: str = DEFAULT_JUDGE_ID) -> dict:
     )
 
 
-def last_results_row(task_id: str) -> dict | None:
-    if not RESULTS.exists():
+def merge_judge_results(results_path: Path) -> None:
+    """Anexa as linhas de dados de um results.tsv exclusivo de juiz ao
+    results.tsv do repo. Único ponto de escrita compartilhada entre juízes
+    paralelos, por isso o lock — o resto do fluxo de cada juiz é
+    workspace/arquivo próprio."""
+    if not results_path.exists():
+        return
+    lines = [line for line in results_path.read_text().splitlines() if line.strip()]
+    if len(lines) < 2:
+        return
+    with _RESULTS_LOCK:
+        if not RESULTS.exists():
+            RESULTS.write_text(lines[0] + "\n")
+        with RESULTS.open("a") as fh:
+            for line in lines[1:]:
+                fh.write(line + "\n")
+
+
+def last_results_row(task_id: str, results_path: Path | None = None) -> dict | None:
+    """`results_path` default = results.tsv do repo (compat); run_real
+    passa o arquivo exclusivo daquele juiz."""
+    results = results_path or RESULTS
+    if not results.exists():
         return None
     header = None
     last = None
-    with RESULTS.open() as fh:
+    with results.open() as fh:
         for i, line in enumerate(fh):
             cols = line.rstrip("\n").split("\t")
             if i == 0:
@@ -774,7 +829,13 @@ def run_real_build(judge_id: str = DEFAULT_BUILD_JUDGE_ID) -> dict:
     ws.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(bdir / "seed", ws)
 
-    os.environ["HARNESS_RUN_ID"] = run_id
+    # Não setar HARNESS_RUN_ID aqui (era o que este trecho fazia): os.environ é
+    # global do processo e com --all-judges paralelo um juiz sobrescreveria o
+    # run_id do outro. Como ws.name == run_id por construção acima, agent.py
+    # chega no mesmo run_id pelo fallback workspace.name (agent.py:184) — o pop
+    # só garante que um HARNESS_RUN_ID herdado do pai não vença esse fallback,
+    # e é idempotente, então não corre risco entre threads.
+    os.environ.pop("HARNESS_RUN_ID", None)
     result = agent.run_agent(brief, ws)
 
     if result.tokens == 0:
@@ -821,14 +882,10 @@ def run_real_build(judge_id: str = DEFAULT_BUILD_JUDGE_ID) -> dict:
 
 
 def run_all_judges_build(dry_run: bool) -> dict:
-    """Espelha run_all_judges pra trilha build — hoje só build_j_b2b em
+    """Espelha run_all_judges (mesmo paralelismo) pra trilha build — hoje só build_j_b2b em
     registry_build.tsv, mas generalizado do mesmo jeito (nada hardcoded
     além do default de compatibilidade)."""
-    scores: dict[str, int | None] = {}
-    for judge_id in all_build_judge_ids():
-        verdict = run_one(judge_id, dry_run, track="build")
-        scores[judge_id] = verdict["judge_score"]
-
+    scores = run_judges_parallel(all_build_judge_ids(), dry_run, track="build")
     summary = build_summary(scores)
     out = write_summary(summary, prefix="summary_build")
 
@@ -846,16 +903,44 @@ def run_all_judges_build(dry_run: bool) -> dict:
 # ------------------------------------------------------------------ --all-judges
 
 
-def run_one(judge_id: str, dry_run: bool, track: str = "result") -> dict:
+def run_one_quiet(judge_id: str, dry_run: bool, track: str = "result") -> tuple[dict, str]:
+    """Roda um juiz e devolve (verdict, saída) em vez de imprimir — é o que
+    o modo paralelo usa pra não intercalar linhas de dois juízes no stdout."""
     if track == "build":
         verdict = run_dry_build(judge_id) if dry_run else run_real_build(judge_id)
     else:
         verdict = run_dry(judge_id) if dry_run else run_real(judge_id)
     out = write_verdict(verdict)
-    print(json.dumps(verdict, indent=2, ensure_ascii=False))
-    print(f"\nverdict gravado em {out}")
-    print(f"judge_score = {verdict['judge_score']}")
+    report = "\n".join([
+        json.dumps(verdict, indent=2, ensure_ascii=False),
+        f"\nverdict gravado em {out}",
+        f"judge_score = {verdict['judge_score']}",
+    ])
+    return verdict, report
+
+
+def run_one(judge_id: str, dry_run: bool, track: str = "result") -> dict:
+    verdict, report = run_one_quiet(judge_id, dry_run, track)
+    print(report)
     return verdict
+
+
+def run_judges_parallel(judge_ids: list[str], dry_run: bool, track: str) -> dict[str, int | None]:
+    """Roda os juízes da trilha em paralelo (thread basta: cada juiz é
+    subprocess-bound — run_task.py/agent, accept.py, `claude -p`) e devolve
+    os scores na ordem do registry, determinística, independente de quem
+    terminou primeiro. A saída de cada juiz sai inteira, em ordem, no fim."""
+    if not judge_ids:
+        return {}
+    with ThreadPoolExecutor(max_workers=min(JUDGE_MAX_WORKERS, len(judge_ids))) as pool:
+        futures = [pool.submit(run_one_quiet, judge_id, dry_run, track) for judge_id in judge_ids]
+        results = [f.result() for f in futures]
+
+    scores: dict[str, int | None] = {}
+    for judge_id, (verdict, report) in zip(judge_ids, results):
+        print(report)
+        scores[judge_id] = verdict["judge_score"]
+    return scores
 
 
 def build_summary(scores: dict[str, int | None]) -> dict:
@@ -884,11 +969,7 @@ def write_summary(summary: dict, prefix: str = "summary") -> Path:
 
 
 def run_all_judges(dry_run: bool) -> dict:
-    scores: dict[str, int | None] = {}
-    for judge_id in all_judge_ids():
-        verdict = run_one(judge_id, dry_run)
-        scores[judge_id] = verdict["judge_score"]
-
+    scores = run_judges_parallel(all_judge_ids(), dry_run, track="result")
     summary = build_summary(scores)
     out = write_summary(summary)
 
@@ -917,7 +998,11 @@ def main() -> int:
         default=None,
         help="qual judge_id rodar (default: j_b2b em --track result, build_j_b2b em --track build)",
     )
-    ap.add_argument("--all-judges", action="store_true", help="roda os juízes da trilha em sequência e agrega um summary")
+    ap.add_argument(
+        "--all-judges",
+        action="store_true",
+        help=f"roda os juízes da trilha em paralelo (até {JUDGE_MAX_WORKERS} juntos) e agrega um summary",
+    )
     a = ap.parse_args()
 
     if a.track == "build":
