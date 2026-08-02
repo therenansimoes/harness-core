@@ -18,11 +18,11 @@ Overrides de teste (nunca usados em produção):
     HARNESS_PROJECTS_ROOT   raiz alternativa para projects/ (isola tmp_path)
     HARNESS_WS_ROOT         raiz alternativa para os workspaces efêmeros
     HARNESS_MOCK_AGENT=1    troca agent.run_agent por um agente sintético
-                            (ver _mock_agent) — NUNCA liga rede/custo. O
+                            (ver mockagent.py) — NUNCA liga rede/custo. O
                             "agente" mockado lê diretivas de uma linha do
-                            prompt (MOCK_TAMPER:/MOCK_FAIL:/MOCK_SLEEP:) para
-                            simular tamper, falha e corrida de lock nos
-                            testes sem depender do backend real.
+                            prompt (MOCK_TAMPER:/MOCK_FAIL:/MOCK_SLEEP:/
+                            MOCK_NOTES:) para simular tamper, falha, corrida
+                            de lock e notes nos testes sem backend real.
 """
 from __future__ import annotations
 
@@ -201,34 +201,13 @@ def release_lock(proj_dir: Path) -> None:
 
 
 def _mock_agent(prompt: str, ws: Path):
-    """HARNESS_MOCK_AGENT=1: nunca chama claude/API. Diretivas lidas linha a
-    linha do prompt (invisíveis para um agente real, que só vê texto comum):
-        MOCK_TAMPER: <path abs>   apenda uma linha nesse arquivo (simula o
-                                   agente escapando do ws e editando o
-                                   verificador de controle)
-        MOCK_FAIL: 1              devolve ok=False
-        MOCK_SLEEP: <segundos>    dorme antes de responder (testa corrida de lock)
-    Sempre escreve ws/AGENT_OUTPUT.txt como artefato — é o que os verify.py
-    de teste checam por padrão."""
-    from agent import AgentResult
+    """HARNESS_MOCK_AGENT=1: nunca chama claude/API. A lógica (e a lista de
+    diretivas MOCK_*) vive em mockagent.py — um mock só, usado tanto por
+    agent.run_agent quanto aqui, senão os dois caminhos divergem e o aceite
+    passa a testar um agente que não existe."""
+    import mockagent
 
-    t0 = time.time()
-    fail = False
-    for line in prompt.splitlines():
-        line = line.strip()
-        if line.startswith("MOCK_TAMPER:"):
-            target = Path(line.split(":", 1)[1].strip())
-            with target.open("a") as fh:
-                fh.write("\n# tampered-by-mock-agent\n")
-        elif line.startswith("MOCK_FAIL:"):
-            fail = line.split(":", 1)[1].strip() == "1"
-        elif line.startswith("MOCK_SLEEP:"):
-            time.sleep(float(line.split(":", 1)[1].strip()))
-    (ws / "AGENT_OUTPUT.txt").write_text("mock:done\n")
-    return AgentResult(
-        ok=not fail, seconds=time.time() - t0, tokens=0, cost_usd=0.0,
-        turns=1, text="DONE: mock", notes="mock_fail" if fail else "",
-    )
+    return mockagent.run(prompt, ws)
 
 
 def _call_agent(prompt: str, ws: Path):

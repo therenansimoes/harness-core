@@ -19,6 +19,11 @@ immutable = [
     "safety.py",
     "kpi.py",
     "evolution/genome.toml",
+    # quem PROPÕE também não se muda: o loop e o catálogo que decide o que
+    # propor ficam fora do alcance das propostas que eles mesmos geram (D6).
+    "autopilot.py",
+    "mockagent.py",
+    "evolution/catalog.toml",
     "benchmarks/sealed/**",
     "benchmarks/held_in/**",
     "tests/**",
