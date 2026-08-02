@@ -7,9 +7,9 @@ sobre [LangGraph](https://github.com/langchain-ai/langgraph). Roda de graça com
 Ollama local; a mesma unidade roda em qualquer backend registrado.
 
 O que o harness acrescenta a um loop de agente comum é a **régua**: verify
-determinístico, KPI medido antes/depois, gate único de decisão, veredito de
-Wilson no A/B e um genoma que declara o que o próprio loop **não** pode mudar.
-Sem isso, "o agente melhorou" é opinião.
+determinístico, KPI medido antes/depois, um gate que concentra a decisão,
+veredito de Wilson no A/B e um genoma que declara o que o próprio loop **não**
+pode mudar. Sem isso, "o agente melhorou" é opinião.
 
 Licença MIT (`LICENSE`). Python ≥ 3.11.
 
@@ -36,21 +36,28 @@ config/*.toml   models kinds tools catalog genome   ← a zona calibrável pelo 
 `SqliteSaver` com `thread_id = run_id` e nós idempotentes: matar o processo no
 meio do `execute` e reinvocar a mesma thread completa a run sem executar duas
 vezes (`tests/test_resume.py` faz isso com `kill -9` de verdade). A topologia é
-imutável no genoma — o loop calibra TOML, não nós.
+imutável no genoma — o loop calibra TOML, não nós. Ressalva: nesse grafo,
+`measure` e `gate` ainda são stubs — decidem pelo veredito do verify, sem KPI
+antes/depois e sem tamper. Quem roda a régua com KPI é `harness run`
+(`cli.run_once`); detalhes em `docs/ARCHITECTURE.md`.
 
 **ruler** (`harness/ruler/`) é a régua, e é uma peça só de propósito.
 `verify.py` roda o `verify_cmd` da unidade (sucesso = exit 0, nunca o que o
 agente diz); `kpi.py` coleta os KPIs do projeto com as specs lidas **antes** da
 mudança; `wilson.py` dá o intervalo e o veredito KEEP/DISCARD/INCONCLUSIVE;
 `note.py` guarda a nota humana 1–5, o único KPI que o harness não sabe medir
-sozinho; `gate.py` é o combinador único: tamper → `revert`, verify vermelho →
-`retry`, KPI regrediu → `revert`, senão `accept`.
+sozinho; `gate.py` combina tudo num lugar só: tamper → `revert`, verify
+vermelho → `retry`, KPI regrediu → `revert`, senão `accept`. Quem chama esse
+gate é `cli.run_once` — o nó `gate` do run_graph é o stub citado acima e não
+passa por aqui.
 
 **genome** (`harness/genome/` + `config/genome.toml`) separa o mutável do
 imutável. Imutável: `harness/ruler/**`, `harness/genome/**`, `harness/routing/**`,
 `harness/graph/**`, `uv.lock`, `benchmarks/sealed/**`. Mutável: `config/*.toml`
-e `prompts/**`. `tamper.py` tira fingerprint antes e compara depois; violação
-não vira aviso, vira `revert` no gate.
+e `prompts/**`. `tamper.py` sabe tirar fingerprint antes e comparar depois, e
+violação que chegue ao gate vira `revert` — mas o que barra escrita em zona
+imutável hoje é o `genome_check` do autopilot, fail-closed ANTES de escrever;
+nenhum dos dois caminhos de run liga a checagem de fingerprint ainda.
 
 **router** (`harness/routing/`) separa duas perguntas que o harness velho
 misturava: `kinds.py` classifica **o que** a unidade é (`code`, `content`,

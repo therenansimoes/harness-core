@@ -100,6 +100,16 @@ worktree existente, `execute` consulta o ledger por `(run_id, node, attempt)`
 antes de chamar o backend. É isso que faz o resume pós-`kill -9` completar sem
 executar duas vezes (`tests/test_resume.py`, com processo filho de verdade).
 
+**No grafo, `measure` e `gate` ainda são stubs** (é o que os próprios
+docstrings de `_measure`/`_gate` dizem): `measure` devolve `kpi_before` e
+`kpi_after` vazios e `gate` decide só pelo veredito do verify — `accept` se
+passou, senão `retry` até `max_attempts` e depois `escalate_human`. Ou seja,
+`run_unit()` **não** chama `ruler/gate.py`, não compara KPI antes/depois e não
+checa tamper; unidade que passa no verify e regride KPI sai como `accept` e
+entra no ledger com `ok=1`. A régua com KPI roda no caminho da CLI (`run_once`,
+abaixo). Ligar `ruler.gate` no grafo é trabalho pendente, não detalhe de
+implementação.
+
 **autopilot_graph** (`harness/graph/autopilot_graph.py`, entrada
 `run_autopilot()`):
 
@@ -117,17 +127,31 @@ a mesma coisa. `Budget.max_parallel` fica em 1 até a config ser injetável por
 run.
 
 **A CLI não passa pelo grafo.** `harness run` chama `harness/cli.py:run_once()`,
-que é a mesma sequência linear sem checkpoint nem retry; `harness ab` e
-`harness improve` também executam por `run_once` (via `harness/ab.py`). O
-grafo é o caminho programático (`run_unit`) e o que os testes de resume
-exercitam. Antes de "consertar" um dos dois, leia os dois.
+sequência linear sem checkpoint nem retry; `harness ab` e `harness improve`
+também executam por `run_once` (via `harness/ab.py`). O grafo é o caminho
+programático (`run_unit`) e o que os testes de resume exercitam.
+
+Os dois caminhos não são o mesmo run com e sem checkpoint — cada um tem menos
+que o outro em algum eixo. `run_once` é o único que roda a régua de verdade:
+`ruler/kpi.py` coleta antes com as specs do ANTES, coleta depois e entrega tudo
+a `ruler/gate.py`, que faz o `revert` do worktree em regressão de KPI; em troca,
+não tem checkpoint, retry nem escalação de tier por attempt. O grafo tem
+checkpoint, retry e router, e decide por um gate stub. **Nenhum dos dois liga o
+tamper**: os dois passam lista de tamper vazia para o gate (o grafo literalmente
+`"tamper": []`, `run_once` um `[]` no argumento). Antes de "consertar" um dos
+dois, leia os dois.
 
 ## Zonas: quem pode mudar o quê
 
 `config/genome.toml` é a fonte; `harness/genome/genome.py` carrega (falha
 fechado se um path casar `mutable` e `immutable`) e `harness/genome/tamper.py`
-tira fingerprint antes e compara depois. Violação vira `tamper:…` e o gate
-transforma em `revert`.
+sabe responder as duas perguntas — `check_patch` (o patch declarado tocou o
+proibido?) e `fingerprint` (o conteúdo do imutável mudou?). Uma violação de
+tamper que chegue ao gate vira `revert`, mas **nada no caminho de run chama
+`fingerprint` hoje**: quem barra é o `genome_check` do autopilot, que roda
+`improve/mutate.py:check` (via `check_patch`) ANTES de escrever e recusa
+fail-closed. Isso cobre a mutação que o próprio loop propõe; não cobre um
+backend que escreva em `harness/ruler/**` por conta própria durante a run.
 
 | zona | por quê |
 |---|---|
@@ -155,7 +179,7 @@ O legado está em `legacy/` (read-only). O que renasceu e o que mudou:
 |---|---|---|
 | `router.py` (tier + Wilson + escalation) | `harness/routing/` | prior era keyed em `(task_class, task_class)` — classe e tier colapsados, impossível aprender "tier X é ruim pro kind Y". Agora `(kind, tier, backend)`, com `kind` ortogonal ao custo |
 | tamper + genoma | `harness/genome/` + `config/genome.toml` | zonas declaradas em config, não hardcoded; falha fechado em contradição |
-| verify + KPI + gate + revert | `harness/ruler/` | gate é combinador ÚNICO (nenhum outro módulo decide); specs de KPI lidas ANTES da mudança |
+| verify + KPI + gate + revert | `harness/ruler/` | a decisão virou um combinador só (`ruler/gate.py`), em vez de espalhada pelo executor; specs de KPI lidas ANTES da mudança. Ressalva: hoje quem chama `ruler.gate` é `cli.run_once` — o nó `gate` do run_graph ainda decide sozinho (stub, ver "Estado do grafo") |
 | nota humana | `harness/ruler/note.py` | append-only, `HARNESS_PROJECTS_ROOT`, sem tool de escrita para o agente |
 | `run_task.py` + copytree de workspace | `harness/workspace/provision.py` | `git worktree` + symlink de cache; `harness bench provision --n 10` mede p50 (0,069s na máquina onde esta doc foi escrita) |
 | `results.tsv` como fonte | `harness/ledger/store.py` | SQLite é fonte, TSV é export; linhas velhas NÃO migram (sem `backend`/`kind`, envenenariam o prior) |
