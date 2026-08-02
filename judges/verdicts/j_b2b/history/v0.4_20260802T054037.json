@@ -8,31 +8,31 @@
     "D1": 25,
     "D2": 15,
     "D3": 10,
-    "D4": 7,
+    "D4": 9,
     "veto": false,
     "evidence": {
       "target_test": "passed",
       "full_suite": "415 passed, 0 regressions / 415 total",
-      "cost_usd": 0.3172,
+      "cost_usd": 0.2503,
       "turns": 31
     }
   },
   "persona": {
     "P1": {
-      "score": 11,
+      "score": 12,
       "citation": "schwifty/checksum/germany.py:221",
       "quote": "+        if checksum == 11:\n+            return 0"
     },
     "P2": {
       "score": 8,
-      "citation": "trace.jsonl:370",
-      "quote": "Validation result: False\nComputed check digit: 11\nExpected check digit (position 10): 0"
+      "citation": "trace.jsonl:285",
+      "quote": "Validation result: True\nComputed checksum: 0\nExpected checksum (last digit): 0"
     }
   },
   "discarded": [],
   "persona_vetoed": false,
   "veto_reason": "",
-  "judge_score": 89,
-  "cost_usd": 0.3172,
-  "ts": "2026-08-02T05:54:59+00:00"
+  "judge_score": 93,
+  "cost_usd": 0.2503,
+  "ts": "2026-08-02T05:40:37+00:00"
 }
