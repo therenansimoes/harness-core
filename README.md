@@ -1,141 +1,258 @@
 # harness-core
 
-Harness autônomo mínimo (stdlib, sem framework de agente) que executa tasks
-com um LLM, verifica o resultado de forma **determinística** — nunca confia
-no que o agente diz — e usa esse verify como sinal pra se auto-melhorar via
-gate A/B. Em cima disso existe uma **camada de juízes**: projetos derivados de
-código open source real, com o teste do próprio mantenedor como gabarito
-selado, pra medir se o harness resolve problema de terceiro — não só as
-tasks que ele mesmo aprendeu a passar.
+Harness de agente **provider-agnostic** que se auto-melhora com prova. O núcleo
+(`harness/`) não conhece vendor: quem executa é um **backend** plugável, e o
+executor default é [deepagents](https://github.com/langchain-ai/deepagents)
+sobre [LangGraph](https://github.com/langchain-ai/langgraph). Roda de graça com
+Ollama local; a mesma unidade roda em qualquer backend registrado.
 
-**Done = `verify.py`/teste do mantenedor sai 0.** O que o agent diz não conta.
+O que o harness acrescenta a um loop de agente comum é a **régua**: verify
+determinístico, KPI medido antes/depois, gate único de decisão, veredito de
+Wilson no A/B e um genoma que declara o que o próprio loop **não** pode mudar.
+Sem isso, "o agente melhorou" é opinião.
 
-## A prova (números reais, citados)
+Licença MIT (`LICENSE`). Python ≥ 3.11.
 
-- **Bug real corrigido em código de terceiro:** o harness consertou um bug do
-  [schwifty](https://github.com/mdomke/schwifty) (biblioteca IBAN/BIC real),
-  com os **415 testes do upstream verdes** e 0 regressões
-  (`results.tsv`, `v0.4 judge task_j_b2b success=1`; commit `8e145d9`).
-- **Evolução medida, não sentida:** `v0.2 → v0.4` no juiz `j_b2b` foi de nota
-  **58 → 81** (`STATUS.md`), passando por três decisões A/B reais e
-  documentadas: `v0.1` MAX_TURNS 12→6 — **DISCARD** (piorou tempo e custo,
-  `evolution/decisions/v0.1.md`), `v0.2` prompt enxuto — **KEEP** (−17.8%
-  custo/run, `evolution/decisions/v0.2.md`), `v0.4` MAX_TURNS 12→30 — **KEEP**
-  (0/6 sucesso com 12 turnos vs 3/4 com 30, `evolution/decisions/v0.4.md`).
-- **Generalidade (M2):** rodando a melhor versão nos 3 domínios-juiz —
-  `j_b2b` (Python/schwifty), `j_web` (JS/nanostores), `j_hw` (C/jsmn) — notas
-  **j_web 93, j_hw 98** (estáveis, citações válidas, zero veto); **j_b2b
-  bimodal 47–81** com 5/8 sucessos no dia (spread real em tarefas ≥21 turnos).
-  Summary `inconclusive` por variância — correto: a sonda localizou a fraqueza
-  real (consistência do j_b2b é próximo alvo de evolução).
-- **Defesa contra trapaça pegando em produção, não em teste:** 2 tentativas
-  de editar arquivo de teste pra passar mais fácil foram barradas por
-  `tamper:test_file_modified` em runs reais (`evolution/decisions/v0.4.md`).
-- **121 testes automatizados** cobrindo agent, evolve, safety/proveniência,
-  juízes, trace, delivery, UI gate e outbound gate (`tests/*.py`), sem gastar
-  API.
+## Arquitetura
 
-## Como rodar
+```
+harness/
+  cli.py        run · ab · backends · improve · bench
+  types.py      UnitSpec ExecRequest ExecResult Selection Verdict RunRow MutationRow
+  backends/     base(Protocol) registry(entry point) mock deepagents claude_code auth/
+  graph/        run_graph (topologia de 1 run)  autopilot_graph (1 ciclo de melhoria)
+  ruler/        wilson kpi verify note gate      ← quem mede e quem decide
+  genome/       genome tamper                    ← o que pode mudar
+  routing/      kinds (o QUE é)  router (QUANTO custa)
+  workspace/    provision (git worktree + symlink de cache)
+  improve/      target mutate escalate           ← o que vale a pena mudar
+  ledger/       store (SQLite; TSV é export)     ← fonte de verdade das runs
+config/*.toml   models kinds tools catalog genome   ← a zona calibrável pelo loop
+```
 
-Requisitos: `python3` (stdlib só, `pytest` só dentro dos ambientes dos
-juízes), [`claude` CLI](https://github.com/anthropics/claude-code) autenticado
-(backend default), `git`.
+**run_graph** (`harness/graph/run_graph.py`) é a topologia de uma run:
+`plan → route → provision → execute → verify → measure → gate →
+[accept | retry → route | escalate | revert] → record → END`. Checkpoint em
+`SqliteSaver` com `thread_id = run_id` e nós idempotentes: matar o processo no
+meio do `execute` e reinvocar a mesma thread completa a run sem executar duas
+vezes (`tests/test_resume.py` faz isso com `kill -9` de verdade). A topologia é
+imutável no genoma — o loop calibra TOML, não nós.
+
+**ruler** (`harness/ruler/`) é a régua, e é uma peça só de propósito.
+`verify.py` roda o `verify_cmd` da unidade (sucesso = exit 0, nunca o que o
+agente diz); `kpi.py` coleta os KPIs do projeto com as specs lidas **antes** da
+mudança; `wilson.py` dá o intervalo e o veredito KEEP/DISCARD/INCONCLUSIVE;
+`note.py` guarda a nota humana 1–5, o único KPI que o harness não sabe medir
+sozinho; `gate.py` é o combinador único: tamper → `revert`, verify vermelho →
+`retry`, KPI regrediu → `revert`, senão `accept`.
+
+**genome** (`harness/genome/` + `config/genome.toml`) separa o mutável do
+imutável. Imutável: `harness/ruler/**`, `harness/genome/**`, `harness/routing/**`,
+`harness/graph/**`, `uv.lock`, `benchmarks/sealed/**`. Mutável: `config/*.toml`
+e `prompts/**`. `tamper.py` tira fingerprint antes e compara depois; violação
+não vira aviso, vira `revert` no gate.
+
+**router** (`harness/routing/`) separa duas perguntas que o harness velho
+misturava: `kinds.py` classifica **o que** a unidade é (`code`, `content`,
+`config`, `refactor`, `infra`) de forma determinística, e `router.py` escolhe
+**quanto** ela pode custar (tier `t0`/`t1`/`t2` de `config/models.toml`). O
+prior de sucesso é keyed em `(kind, tier, backend)` — histórico ruim de
+`(code, t0)` não condena `(content, t0)` — e Wilson abaixo do `prior_floor`
+sobe um tier, assim como falha repetida escala por attempt.
+
+**autopilot** (`harness/graph/autopilot_graph.py` + `harness/improve/`) é o
+loop de melhoria: `pick_target → propose → genome_check → apply → fanout_ab →
+score → [KEEP: commit_cfg | DISCARD/INCONCLUSIVE: revert_cfg] → attribute →
+record`. Qualquer nó pode desviar para `escalate`, que é `interrupt()` do
+LangGraph: o grafo para e espera um humano em vez de improvisar.
+
+## Quickstart (Ollama, custo $0)
 
 ```bash
-# uma task da suite de lab
-python3 run_task.py tasks/task_01
-
-# a suite inteira, com repetição pra tirar ruído
-python3 run_task.py --all --repeat 3
-
-# um juiz: constrói o projeto-alvo real, roda o agente, verifica contra o
-# gabarito selado do mantenedor
-python3 judges/run_judge.py --judge j_b2b
-python3 judges/run_judge.py --all-judges
-
-# um ciclo de auto-evolução: proposta -> A/B -> gate -> merge|discard
-cp evolution/proposals/_template.md evolution/proposals/minha_ideia.md
-$EDITOR evolution/proposals/minha_ideia.md
-python3 evolve.py --proposal evolution/proposals/minha_ideia.md --repeat 3
+uv sync --extra deepagents
+ollama pull qwen2.5:3b      # laptop de 18GB: modelo local ≤ 8B (30B trava a máquina)
 ```
 
-`evolve.py` sai **0 = merge** (genoma promovido), **1 = discard** (baseline
-intacto), **2 = erro de infra** (não é veredito). `run_task.py --all` aceita
-`--suite fixed|sealed`; a suite `judge` roda por `judges/run_judge.py`, que já
-orquestra setup → run_task → verify selado → persona.
+Backends registrados e preflight (determinístico, zero chamada de LLM):
 
-## Arquitetura (~15 linhas)
-
-```
-agent.py         # o loop do agente: prompt, tools, backend cli/api, trace
-run_task.py       # workspace efêmero -> fixtures -> agent -> verify -> results.tsv
-score.py          # gates normalizados por run (não por soma) + --ab A vs B
-evolve.py         # 1 ciclo: proposta -> sandbox -> fixed -> sealed -> decisão -> merge/discard
-graph.py          # store de auto-crítica: proposals, runs, decisions, sessions, governança
-safety.py         # guard_path (realpath) + safe_run (allowlist de binário) — código, não prompt
-
-judges/           # camada de juízes: registry.tsv (upstream+sha), _sealed/ (gabarito do mantenedor),
-                   #   run_judge.py, persona.py (opus, citação obrigatória, veto sem citação sustentada)
-benchmarks/
-  fixed  (tasks/)  # hill-climb: "melhorou?" — precisa de ganho >= piso
-  sealed            # held-out: "generaliza?" — precisa só do piso
-  judge             # código de terceiro real: "resolve problema que não escreveu?"
-  tb                # tasks portáveis do Terminal-Bench 2.0
+```console
+$ uv run harness backends
+claude_code      ok             2.1.220 (Claude Code)
+deepagents       ok             deepagents importável
+mock             ok             mock sempre disponível
 ```
 
-## Princípios de design
+A terceira coluna depende da máquina: sem o extra `deepagents` instalado a
+linha vira `indisponível`, e sem o CLI oficial a do `claude_code` também.
 
-- **Mecanismo, não instrução.** Sandbox, tamper check, allowlist de safety e
-  timeout são código que o agente não pode contornar escrevendo texto
-  diferente — nunca uma frase no prompt pedindo pra "não trapacear".
-- **Verify determinístico é o piso; persona é refinamento, nunca autoridade.**
-  `score.py`/`verify.py` decidem sucesso/fracasso sem LLM. A persona (juízes)
-  entra só depois, com peso menor, e citação obrigatória: sem citação o
-  critério é descartado; citação que o log não sustenta é **veto**, zera a
-  ficha.
-- **Citação obrigatória contra ruído de avaliador LLM.** Todo score de
-  persona aponta `arquivo:linha` ou `trace.jsonl:N` — sem isso não conta.
-- **Braços contemporâneos, sempre.** A/B de custo/tempo comparado entre dias
-  diferentes é inválido (variação de ruído de dia chegou a +23.7% em um caso
-  real — `evolution/decisions/v0.3.md`); todo A/B roda A e B na mesma janela.
-- **Tempo é o gargalo, imposto por mecanismo.** SIGTERM/teto de turnos, não
-  instrução de "seja rápido" — o que sobra de folga vira margem real, não
-  economia (lição do `v0.1.md`, que cortou turnos que nunca eram usados).
+Uma unidade é um diretório com `unit.toml` (`id`, `prompt`, `verify_cmd`,
+`kind` opcional). Rodando a fixture `tiny_fix` com o modelo local:
 
-## Estado honesto
+```bash
+uv run harness run --unit tests/fixtures/tiny_fix \
+  --backend deepagents --model ollama:qwen2.5:3b
+```
 
-**Funciona, verificado por execução:** loop `evolve` com 3 decisões reais
-(`v0.1` discard, `v0.2` e `v0.4` keep); suites `fixed`/`sealed`/`tb` rodando;
-os 3 juízes (`j_b2b`/`j_web`/`j_hw`) produzindo `success=1` em código de
-terceiro real; tamper check e safety allowlist pegando tentativa real de
-trapaça; `harness_cli.py` como casca fina sobre tudo isso.
+Modelo `ollama:*` custa $0 na tabela `[pricing]` de `config/models.toml`, então
+a linha do ledger sai com `cost_usd = 0.0`. A saída dessa run depende do modelo
+que você tem instalado e por isso não está colada aqui; o formato é o mesmo do
+exemplo com `mock` abaixo.
 
-**Dívidas conhecidas:**
+Deixando o router escolher:
 
-- Só testado a fundo com `claude-haiku-4-5` via backend `cli`; backend `api`
-  e outros modelos nunca foram exercitados num A/B sério.
-- **Variância de consistência do j_b2b:** spread real em tarefas ≥21 turnos
-  (47–81, mediana 68). Próximo alvo de evolução: prompt do genoma / tier de
-  modelo / decomposição — decidir por A/B.
-- `D4` (custo/turnos até o verde) pune sucesso caro tanto quanto falha
-  barata — defeito de régua já registrado, correção prevista em `RUBRIC-J2`.
+```bash
+uv run harness run --unit tests/fixtures/tiny_fix --route auto
+```
 
-**FASE 2 (ainda não construída):** juízes `j_web`/`j_hw` com peso pleno
-(P3/P4 — recuperação de erro e adoção), tabela `judgements` no graph,
-`judge_ok` automático no gate do `evolve.py`, segundo modelo/backend no A/B.
+`--route auto` imprime uma linha a mais antes da run
+(`route auto <unit> kind=… tier=… <backend> <model> [motivos]`) e é exclusivo
+com `--backend`/`--model` — quem escolhe é o router. **Atenção ao custo:** na
+config que vem no repo, `[router.kind] code = "t1"`, e o tier `t1` é
+`claude_code` (pago). Para um setup 100% local, aponte `code` para `t0` em
+`config/models.toml` ou fixe `--backend deepagents` na mão.
 
-## Satélites congelados
+Tudo que não precisa de modelo roda com o backend `mock`, que é determinístico:
 
-`whatsapp.py`, `channel/`, `delivery.py`, `assist.py` e o gate de UI
-(Playwright) existem, têm teste e já foram usados — mas estão **congelados**
-até o core provar valor em código de terceiro (decisão registrada em
-`STATUS.md`). Não é dívida técnica: é ordem de prioridade.
+```console
+$ uv run harness run --unit tests/fixtures/echo --backend mock
+a10bc523d66d echo mock accept verify ok, sem regressão de KPI 0.01s ledger#1
 
-## História
+$ uv run harness run --unit tests/fixtures/tiny_fix --backend mock
+c103bdb4c96a tiny_fix mock retry verify_failed:exit=1 0.03s ledger#2
+```
 
-`arena/` é o método generativo que produziu os mecanismos deste harness —
-gerações de candidatos competindo sob briefing mínimo e julgamento por
-persona, antes de qualquer linha aqui existir. Está preservada, commitada,
-não roda mais: quando a camada de juízes provar que mede honesto sobre
-código de terceiro, o método volta pra gerar a próxima geração de candidatos
-sobre esta base (ver `STATUS.md`, "Método generativo v2").
+(o `mock` só escreve o prompt num arquivo: `echo` passa, `tiny_fix` reprova no
+verify — é assim que o gate se prova sem gastar API).
+
+Exit code do `harness run` é 0 quando o gate deu `accept`, 1 no resto. Os dados
+ficam em `$HARNESS_DATA_DIR` (default `data/`, gitignored):
+`runs.sqlite` (ledger), `checkpoints.sqlite`, `ws/` (worktrees das runs).
+
+Outros comandos:
+
+```console
+$ uv run harness ab --a 5/6 --b 6/6
+INCONCLUSIVE a=5/6 [0.44,0.97] b=6/6 [0.61,1.00]
+
+$ uv run harness bench provision --n 10
+provision n=10 p50=0.069s p95=0.072s
+```
+
+## Backends
+
+Um backend implementa três métodos (`harness/backends/base.py`):
+`capabilities()`, `preflight()` — determinístico, **zero chamada de LLM** — e
+`execute(ExecRequest) -> ExecResult`. O núcleo não conhece nada além disso.
+
+| backend | o que é | notas |
+|---|---|---|
+| `mock` | determinístico, escreve o prompt num arquivo | é o backend dos testes; não toca rede |
+| `deepagents` | default; modelo por `init_chat_model` (`ollama:…`, ou qualquer provider do LangChain) | único arquivo do repo que importa LangChain, e o import é lazy |
+| `claude_code` | subprocess do CLI oficial; `resumable=True` via `--resume` | exige o CLI instalado e autenticado; gasta dinheiro |
+
+Backend de terceiro não precisa tocar no núcleo: publique um pacote que se
+anuncie no entry point `harness.backends`.
+
+```toml
+# pyproject.toml do SEU pacote
+[project.entry-points."harness.backends"]
+meu_backend = "meu_pacote.backend:MeuBackend"
+```
+
+`harness.backends.registry` funde os entry points instalados com os embutidos
+(e com `registry.register(nome, factory)`, que é o caminho dos testes). Depois
+do `pip install`, `harness backends` já lista o seu.
+
+Auth segue o mesmo padrão, no entry point `harness.auth`
+(`AuthAdapter`: `env()` + `check()`). O repo shippa só o `NullAuth`.
+
+> Adapter de OAuth de assinatura em cliente de terceiro é **área cinzenta de
+> ToS e está fora deste repo** — existe só o slot `harness.auth` para quem
+> quiser publicar o próprio, por conta e risco próprios.
+
+## Auto-melhoria
+
+O loop não inventa mudança: ele escolhe de um catálogo declarado
+(`config/catalog.toml`). Cada `[[rule]]` é uma hipótese falsificável sobre um
+knob — arquivo alvo, chave, `from`, `to`, e o `fails_on` que amarra a regra a
+`exit_reason` reais do ledger. `improve/target.py` ordena por ganho esperado
+(`freq(falha) × custo_médio × prior`) e o `improve/mutate.py` aplica.
+
+```console
+$ uv run harness improve --cycles 1 --backend mock --unit tests/fixtures/echo
+ciclo0 max_attempts_3_to_4 router.max_attempts 3->4 INCONCLUSIVE a=6/6 b=6/6 delta=+0.00 revertida mut=f4dff79cc02c
+improve ciclos=1 mutações=1 intervenções=0 intervention_rate=0.00 (n=15)
+```
+
+A mutação é medida em A/B com os braços **alternados** (A,B,A,B — ambiente que
+degrada no meio pune os dois igual) e o veredito é o de Wilson: `KEEP` commita
+a config, `DISCARD`/`INCONCLUSIVE` revertem na hora. Sucesso do braço é a
+decisão do gate, não o "terminei" do executor.
+
+Sem gradiente, o loop **para e chama gente** — em vez de mutar qualquer coisa
+para parecer produtivo (mesmo comando, outro ledger: sem padrão de falha que
+sustente uma regra, não há mutação que valha o experimento):
+
+```console
+$ uv run harness improve --cycles 1 --backend mock --unit tests/fixtures/echo
+escalate no_gradient thread=improve-80f6a036afbe evidence={'history': 14, 'catalog': 3, 'applicable': 3}
+improve ciclos=0 mutações=0 intervenções=0 intervention_rate=0.00 (n=14)
+```
+
+São quatro motivos de escalação (`harness/improve/escalate.py`):
+`no_gradient`, `genome_violation`, `deadline`, `error`. A parada é
+`interrupt()` do LangGraph, então ela sobrevive ao fim do processo: o
+`thread=` da linha é o que se responde depois.
+
+```bash
+uv run harness improve --unit tests/fixtures/echo --backend mock \
+  --resume improve-80f6a036afbe --answer '{"action":"continue"}'
+```
+
+O default do `--answer` é `{"action":"abort"}`: retomar um loop sem dizer o que
+fazer nunca pode significar "continua sozinho". Run retomada por humano entra
+no ledger com `intervention=1`, que é o que alimenta o `intervention_rate` —
+a métrica de autonomia mora fora do que ela mede.
+
+`harness improve` sem `--unit` usa `benchmarks/held_in/*/unit.toml`; enquanto
+esse diretório não tiver unidades no formato novo, passe `--unit` (repetível).
+
+`harness replay` (atribuição de delta por mutação) e `harness doctor`
+(preflight de todos os backends + tamper + tracing desligado) chegam em PR-10,
+num PR paralelo a este — por isso não têm exemplo aqui.
+
+## Régua e genoma
+
+A régua e o genoma existem pelo mesmo motivo: **um loop que pode reescrever o
+próprio critério não mede nada**. Uma mutação com acesso a `ruler/` aprovaria a
+si mesma baixando a barra; com acesso a `routing/` se daria o tier caro e
+falsearia o próprio A/B; com acesso a `benchmarks/sealed/**` reescreveria a
+prova. Por isso essas zonas são `immutable` em `config/genome.toml`, o
+`uv.lock` também é (trocar versão de dep por baixo invalida qualquer
+comparação), e o que sobra para o loop calibrar é `config/*.toml` + `prompts/**`.
+
+Três detalhes que fazem parte da mesma defesa:
+
+- as specs de KPI são lidas **antes** da mudança — a mudança avaliada não
+  redefine a direção da régua reescrevendo o `kpis.toml`;
+- o `catalog.toml` é mutável (para o humano calibrar) mas o loop não pode
+  apontar uma regra para ele: isso é `genome:self_edit`;
+- a nota humana é append-only em `projects/<projeto>/notes.tsv` e nenhuma
+  função de escrita dela é exposta a backend ou agente. Abaixo de 3 notas na
+  janela, ela vale `None` ("não medido") — uma opinião solta não reverte uma
+  versão. Hoje ela é API (`harness.ruler.note.add`), ainda sem subcomando na
+  CLI.
+
+## Estado
+
+`uv run --extra deepagents pytest -q` → **364 passed, 2 deselected**. Os 2
+deselecionados são os testes que exigem máquina de verdade: marker `ollama`
+(servidor local) e `claude_cli` (gasta dinheiro). Ver `CONTRIBUTING.md`.
+
+O histórico numérico do harness antigo **não** foi migrado: aquelas linhas não
+têm `backend`/`kind` e envenenariam o prior. Ele fica em `legacy/` como
+referência read-only, fora do pytest e fora do genoma.
+
+Docs: `docs/ARCHITECTURE.md` (contratos e estado), `STATUS.md` (o que está
+feito e verificado), `docs/SPEC-rebuild.md` (a spec do rebuild, já executada),
+`CONTRIBUTING.md`.
