@@ -1,6 +1,10 @@
 # STATUS — fonte de verdade do harness-core
 
-**Atualizado:** 2026-08-02 (noite — escada D0–D6 completa). Este arquivo substitui PLAN.md, FAST_START.md e generative-project.md como norte. Eles ficam como referência histórica — não seguir mais.
+**Atualizado:** 2026-08-02 (noite — escada D0–D6 completa; desvio DeerFlow encerrado). Este arquivo substitui PLAN.md, FAST_START.md e generative-project.md como norte. Eles ficam como referência histórica — não seguir mais.
+
+## Desvio DeerFlow — ENCERRADO (2026-08-02 noite)
+
+Passamos parte do dia avaliando construir SOBRE o DeerFlow 2.0 (bytedance/deer-flow). Renan testou a UI e vetou: fraca, plataforma imatura apesar de 78.9k stars. **Decisão: DeerFlow NÃO é a base do nosso produto.** O que fica: (a) 2 PRs já abertos por visibilidade (deer-flow#4644 skillscan tests, #4645 fix teste config) — deixar rolar, custo zero; (b) 3 entregas prontas no GELO, não publicar sem querer holofote: fork llm-space `feat/custom-eval-methods` (eval Wilson/KPI, 569 testes), canal Baileys `deer-flow-wa/feat/whatsapp-baileys-channel`, form Add-MCP `deer-flow-mcp/feat/add-mcp-server-ui`. Clones em ~/projects/{deer-flow,llm-space} + worktrees deer-flow-wa/deer-flow-mcp — podem ser removidos. Lição: star count ≠ maturidade; nosso diferencial (meta-loop) NUNCA precisou deles. Detalhes em evolution/PR-CANDIDATES.md. **Voltar ao plano principal: meta-loop no nosso harness + site da fazenda.**
 
 ## Visão (destino, confirmada pelo Renan em 2026-08-01)
 
