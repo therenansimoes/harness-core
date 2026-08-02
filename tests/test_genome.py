@@ -308,6 +308,85 @@ def test_genome_toml_editado_durante_a_run_e_tamper():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_runtime_files_traz_o_que_o_genoma_nao_traz():
+    """A sandbox precisa importar `safety`/`kpi`/`score` — genoma não é runtime."""
+    tmp = Path(tempfile.mkdtemp(prefix="genome_runtime_"))
+    try:
+        for f in ("evolve.py", "score.py", "graph.py", "safety.py", "kpi.py", "agent.py"):
+            shutil.copy2(REPO / f, tmp / f)
+        (tmp / "evolution").mkdir()
+        shutil.copy2(REPO / "evolution" / "genome.toml", tmp / "evolution" / "genome.toml")
+        (tmp / "prompts").mkdir()
+        (tmp / "prompts" / "x.md").write_text("texto\n")
+        (tmp / "__pycache__").mkdir()
+        (tmp / "__pycache__" / "lixo.py").write_text("# nada\n")
+        evolve = load_evolve(tmp)
+        files = evolve.runtime_files()
+        for f in ("safety.py", "kpi.py", "score.py", "agent.py", "prompts/x.md",
+                  "evolution/genome.toml"):
+            assert f in files, f"{f} fora do runtime: {files}"
+        assert not any("__pycache__" in f for f in files), files
+        # o genoma continua sendo um subconjunto — runtime não é licença
+        assert "safety.py" not in evolve.genome_files()
+    finally:
+        unload(tmp)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_sandbox_tamper_pega_imutavel_e_ignora_genoma():
+    tmp, prop = make_repo("g_tamper_unit", [("agent.py", "MAX_TURNS = 30", "MAX_TURNS = 25")])
+    try:
+        shutil.copy2(REPO / "safety.py", tmp / "safety.py")
+        evolve = load_evolve(tmp)
+        meta = evolve.parse_proposal(prop)
+        sandbox, _ = evolve.build_sandbox("g_tamper_unit", "vB", meta["changes"])
+        # a sandbox nasce limpa: o patch em agent.py é genoma, não tamper
+        assert evolve.sandbox_tamper(sandbox) == []
+        (sandbox / "safety.py").write_text(
+            (sandbox / "safety.py").read_text() + "\n# editado pela candidata\n"
+        )
+        assert evolve.sandbox_tamper(sandbox) == ["safety.py"]
+    finally:
+        unload(tmp)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_sandbox_suja_vira_discard_de_tamper():
+    """Editar imutável na sandbox é DISCARD, não InfraError: veredito, não erro."""
+    def sujar(tmp):
+        p = tmp / "evolution" / "sandboxes" / "g_sandbox" / "safety.py"
+        p.write_text(p.read_text() + "\n# a candidata mexeu no que a julga\n")
+
+    tmp, prop = make_repo("g_sandbox", [("agent.py", "MAX_TURNS = 30", "MAX_TURNS = 25")])
+    try:
+        shutil.copy2(REPO / "safety.py", tmp / "safety.py")
+        evolve = load_evolve(tmp)
+        calls = []
+
+        def fake_suite(sandbox, suite, repeat):
+            calls.append(suite)
+            sujar(tmp)
+            return 0
+
+        evolve.run_suite = fake_suite
+        rc = evolve.cycle(prop, repeat=1, suite="fixed", force=False)
+
+        assert rc == 1, "sandbox suja é DISCARD (exit 1), nunca exit 2"
+        assert calls == ["fixed"], f"tamper tem que ser pego DEPOIS da suite: {calls}"
+        entry = jsonl_last(tmp)
+        assert entry["accepted"] is False
+        assert entry["gates_failed"] == [evolve.SANDBOX_TAMPER]
+        assert entry["reason"].startswith(evolve.SANDBOX_TAMPER)
+        assert "safety.py" in entry["reason"]
+        assert (tmp / "harness_version.txt").read_text().strip() == "vA"
+        assert "MAX_TURNS = 25" not in (tmp / "agent.py").read_text()
+        md = (tmp / "evolution" / "decisions" / "g_sandbox.md").read_text()
+        assert "DISCARD" in md and evolve.SANDBOX_TAMPER in md
+    finally:
+        unload(tmp)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_proposta_em_prompts_passa_o_gate_de_genoma():
     """`prompts/**` é genoma: o gate deixa passar (o mérito quem julga é o score)."""
     tmp, prop = make_repo("g_prompt", [("prompts/x.md", "velho", "novo")])
