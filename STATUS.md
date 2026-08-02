@@ -80,3 +80,7 @@ Timeboxes duros (mecanismo, não pedido): dev de candidato ≤12min (SIGTERM); e
 Uma linha no `results.tsv` onde o harness melhorou código que ele não escreveu, com verify passando em cópia limpa.
 
 **✅ ATINGIDO (2026-08-02, v0.4, commit 8e145d9):** `results.tsv` linha `v0.4 judge task_j_b2b success=1` — bug real do schwifty corrigido, 415 testes do upstream verdes, 0 regressões, verdict 58→**81**. Caminho: M0 (v0.2=58, D1=0) → v0.3 trace (KEEP, +0.9% custo) → v0.4 MAX_TURNS 12→30 (A/B: 0/6 vs 3/4). Defeito de régua registrado: D4 pune sucesso caro vs falha barata (X3 da J2 corrige). **M2 medido (2026-08-02):** j_web **93**, j_hw **98** (estáveis, citações válidas, zero veto), j_b2b **bimodal 47–81** (5/8 sucessos no dia; 2 tentativas de trapaça pegas pelo tamper check). Summary `inconclusive` por spread — correto: a sonda localizou a fraqueza real (consistência em tarefas ≥21 turnos). Próximo alvo de evolução: consistência do j_b2b (prompt do genoma / tier de modelo / decomposição — decidir por A/B). Próximo marco: M3 = repo publicável.
+
+## Divisao de trabalho (Renan + evidencia, 2026-08-02)
+
+**Nos (Fable orquestra + tiers) = motor de construcao** do harness — dev direto com A/B e juizes (aproveitamento ~100% hoje). **Geracional = sonda sobre a nossa base**, tres usos provados: diagnostico convergente (3/4 mesmo #1 na gen4), stress test da base, exploracao quando nao sabemos a resposta. Geracao nao constroi o produto; informa o motor. Colheita de geracao = diagnosticos e hipoteses medidas, nao codigo.
