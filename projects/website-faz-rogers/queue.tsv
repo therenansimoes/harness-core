@@ -1,0 +1,14 @@
+id	state	priority	created	claimed_at	prompt_file	verify	notes
+0001	pending	13	2026-08-02T11:06:09+00:00		queue/0001.md	verify/0001.py	Layout Base.astro com head completo e JSON-LD LocalBusiness
+0002	pending	12	2026-08-02T11:06:09+00:00		queue/0002.md	verify/0002.py	Header mobile-first e Footer com WhatsApp
+0003	pending	11	2026-08-02T11:06:09+00:00		queue/0003.md	verify/0003.py	Componente WhatsAppCTA fixo no mobile e inline
+0004	pending	10	2026-08-02T11:06:09+00:00		queue/0004.md	verify/0004.py	content.config.ts: collections produtos e experiencias
+0005	pending	9	2026-08-02T11:06:09+00:00		queue/0005.md	verify/0005.py	Cinco produtos em markdown
+0006	pending	8	2026-08-02T11:06:09+00:00		queue/0006.md	verify/0006.py	Listagem /produtos/ com ProductCard
+0007	pending	7	2026-08-02T11:06:09+00:00		queue/0007.md	verify/0007.py	Pagina de produto com CTA WhatsApp pre-preenchido
+0008	pending	6	2026-08-02T11:06:09+00:00		queue/0008.md	verify/0008.py	Quatro experiencias em markdown
+0009	pending	5	2026-08-02T11:06:10+00:00		queue/0009.md	verify/0009.py	Listagem e detalhe de /experiencias/
+0010	pending	4	2026-08-02T11:06:10+00:00		queue/0010.md	verify/0010.py	Home final: hero, destaques e CTA
+0011	pending	3	2026-08-02T11:06:10+00:00		queue/0011.md	verify/0011.py	Paginas /contato/ e 404
+0012	pending	2	2026-08-02T11:06:10+00:00		queue/0012.md	verify/0012.py	Imagens placeholder com alt, width e height
+0013	pending	1	2026-08-02T11:06:10+00:00		queue/0013.md	verify/0013.py	sitemap.xml, robots.txt, og:image e descriptions unicas
