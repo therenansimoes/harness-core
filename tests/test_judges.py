@@ -9,6 +9,7 @@ Sem chamada de API/subprocess `claude` — persona roda em PERSONA_MOCK=1.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -29,6 +30,12 @@ import run_judge  # noqa: E402
 REGISTRY = REPO / "judges" / "registry.tsv"
 SEALED = REPO / "judges" / "_sealed" / "j_b2b" / "test_checksum.py"
 TASK_DIR = REPO / "benchmarks" / "judge" / "task_j_b2b"
+
+SEALED_WEB = REPO / "judges" / "_sealed" / "j_web" / "index.test.ts"
+TASK_DIR_WEB = REPO / "benchmarks" / "judge" / "task_j_web"
+
+SEALED_HW = REPO / "judges" / "_sealed" / "j_hw" / "tests.c"
+TASK_DIR_HW = REPO / "benchmarks" / "judge" / "task_j_hw"
 
 
 # ------------------------------------------------------------------ registry
@@ -57,6 +64,18 @@ def test_registry_tem_j_b2b():
     assert "j_b2b" in ids
 
 
+def test_registry_tem_j_web():
+    rows = _read_registry_rows()
+    ids = {r["judge_id"] for r in rows}
+    assert "j_web" in ids
+
+
+def test_registry_tem_j_hw():
+    rows = _read_registry_rows()
+    ids = {r["judge_id"] for r in rows}
+    assert "j_hw" in ids
+
+
 # --------------------------------------------------------------- sealed sha256
 
 
@@ -65,6 +84,22 @@ def test_sealed_sha256_bate_com_registry():
     row = next(r for r in rows if r["judge_id"] == "j_b2b")
     assert SEALED.exists(), f"sealed test ausente: {SEALED}"
     actual = hashlib.sha256(SEALED.read_bytes()).hexdigest()
+    assert actual == row["sealed_sha256"]
+
+
+def test_sealed_sha256_bate_com_registry_j_web():
+    rows = _read_registry_rows()
+    row = next(r for r in rows if r["judge_id"] == "j_web")
+    assert SEALED_WEB.exists(), f"sealed test ausente: {SEALED_WEB}"
+    actual = hashlib.sha256(SEALED_WEB.read_bytes()).hexdigest()
+    assert actual == row["sealed_sha256"]
+
+
+def test_sealed_sha256_bate_com_registry_j_hw():
+    rows = _read_registry_rows()
+    row = next(r for r in rows if r["judge_id"] == "j_hw")
+    assert SEALED_HW.exists(), f"sealed test ausente: {SEALED_HW}"
+    actual = hashlib.sha256(SEALED_HW.read_bytes()).hexdigest()
     assert actual == row["sealed_sha256"]
 
 
@@ -88,6 +123,64 @@ def test_verify_detecta_sealed_adulterado():
 
         proc = subprocess.run(
             [sys.executable, str(fake_repo / "benchmarks" / "judge" / "task_j_b2b" / "verify.py")],
+            cwd=ws,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert proc.returncode != 0, "verify.py deveria recusar um sealed adulterado"
+        assert "sealed_sha256" in (proc.stdout + proc.stderr)
+    finally:
+        shutil.rmtree(ws, ignore_errors=True)
+        shutil.rmtree(fake_repo, ignore_errors=True)
+
+
+def test_verify_j_web_detecta_sealed_adulterado():
+    """Mesma checagem do j_b2b, aplicada ao verify.py do j_web (sealed é
+    listen-keys/index.test.ts, não tests/test_checksum.py)."""
+    ws = Path(tempfile.mkdtemp(prefix="judge_verify_web_tamper_"))
+    fake_repo = Path(tempfile.mkdtemp(prefix="judge_fake_repo_web_"))
+    try:
+        (fake_repo / "judges" / "_sealed" / "j_web").mkdir(parents=True)
+        (fake_repo / "judges").joinpath("registry.tsv").write_text(REGISTRY.read_text())
+        # adultera o conteúdo do "selado" sem atualizar o hash no registry
+        (fake_repo / "judges" / "_sealed" / "j_web" / "index.test.ts").write_text(
+            "test('fake', () => {})\n"
+        )
+        (fake_repo / "benchmarks" / "judge" / "task_j_web").mkdir(parents=True)
+        shutil.copy(TASK_DIR_WEB / "verify.py", fake_repo / "benchmarks" / "judge" / "task_j_web" / "verify.py")
+
+        proc = subprocess.run(
+            [sys.executable, str(fake_repo / "benchmarks" / "judge" / "task_j_web" / "verify.py")],
+            cwd=ws,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert proc.returncode != 0, "verify.py deveria recusar um sealed adulterado"
+        assert "sealed_sha256" in (proc.stdout + proc.stderr)
+    finally:
+        shutil.rmtree(ws, ignore_errors=True)
+        shutil.rmtree(fake_repo, ignore_errors=True)
+
+
+def test_verify_j_hw_detecta_sealed_adulterado():
+    """Mesma checagem do j_b2b, aplicada ao verify.py do j_hw (sealed é
+    test/tests.c, o gabarito em C)."""
+    ws = Path(tempfile.mkdtemp(prefix="judge_verify_hw_tamper_"))
+    fake_repo = Path(tempfile.mkdtemp(prefix="judge_fake_repo_hw_"))
+    try:
+        (fake_repo / "judges" / "_sealed" / "j_hw").mkdir(parents=True)
+        (fake_repo / "judges").joinpath("registry.tsv").write_text(REGISTRY.read_text())
+        # adultera o conteúdo do "selado" sem atualizar o hash no registry
+        (fake_repo / "judges" / "_sealed" / "j_hw" / "tests.c").write_text(
+            "int main(void) { return 0; }\n"
+        )
+        (fake_repo / "benchmarks" / "judge" / "task_j_hw").mkdir(parents=True)
+        shutil.copy(TASK_DIR_HW / "verify.py", fake_repo / "benchmarks" / "judge" / "task_j_hw" / "verify.py")
+
+        proc = subprocess.run(
+            [sys.executable, str(fake_repo / "benchmarks" / "judge" / "task_j_hw" / "verify.py")],
             cwd=ws,
             capture_output=True,
             text=True,
@@ -133,6 +226,32 @@ def test_parse_pytest_counts():
     out = "........F..\n=== 1 failed, 10 passed, 2 errors in 0.5s ==="
     counts = task_verify.parse_pytest_counts(out)
     assert counts == {"passed": 10, "failed": 1, "errors": 2, "total": 13}
+
+
+def _load_verify_module(task_dir: Path, module_name: str):
+    """Carrega verify.py de um task_dir sob um nome de módulo próprio, pra
+    não colidir no sys.modules com o `verify` de outro juiz (todos os
+    task_j_*/verify.py se chamam igual)."""
+    spec = importlib.util.spec_from_file_location(module_name, task_dir / "verify.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_parse_bnt_counts_j_web():
+    task_verify = _load_verify_module(TASK_DIR_WEB, "task_j_web_verify")
+
+    out = "✔ some test (1ms)\nℹ tests 5\nℹ pass 4\nℹ fail 1"
+    counts = task_verify.parse_bnt_counts(out)
+    assert counts == {"passed": 4, "failed": 1, "total": 5}
+
+
+def test_parse_test_counts_j_hw():
+    task_verify = _load_verify_module(TASK_DIR_HW, "task_j_hw_verify")
+
+    out = "FAILED: test for unmatched brackets (at line 363)\n\nPASSED: 14\nFAILED: 1"
+    counts = task_verify.parse_test_counts(out)
+    assert counts == {"passed": 14, "failed": 1, "total": 15}
 
 
 # --------------------------------------------------------------------- persona
