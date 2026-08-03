@@ -53,6 +53,12 @@ from harness.governor.governor import (
 from harness.graph.checkpoint import open_checkpointer
 from harness.graph.state import Budget, Decision, Event, RunState
 from harness.ledger import store
+from harness.projects import (
+    deliver,
+    discard_run_branch,
+    get_project,
+    run_branch,
+)
 from harness.routing import (
     MANUAL_TIER,
     ROUTE_AUTO,
@@ -65,6 +71,7 @@ from harness.ruler.gate import gate as ruler_gate
 from harness.ruler.kpi import KpiSpec, collect, load_kpis
 from harness.ruler.verify import log_tail
 from harness.types import ExecRequest, ExecResult, RunRow, Selection, UnitSpec, Verdict
+from harness.workspace.provision import add_worktree, remove_worktree
 from harness.workspace.sealing import VERIFIER_NAMES, is_verifier, verifier_visible
 
 # Chaves nossas dentro de `config["configurable"]`. O que não é estado do run
@@ -86,6 +93,14 @@ IGNORE_NAMES = ("unit.toml", "__pycache__", ".git", ".venv", "node_modules")
 GRAPH_TOML = "graph.toml"
 DEFAULT_MAX_ATTEMPTS = 2
 
+# ui-verify dentro do grafo: build verde não é prova de tela viva (um dist cujo
+# único stylesheet aponta pra caminho morto sai 0 no build e chega cru no
+# navegador). Opt-in por `nodes.ui_verify`, porque só unidade com resultado
+# visual tem dist para olhar.
+UI_VERIFY_DIST = "dist"
+UI_VERIFY_EXPECT = ("css",)
+UI_VERIFY_EXIT = 65   # veredito derrubado pela TELA, não pelo `verify_cmd`
+
 
 # --- política calibrável ------------------------------------------------------
 
@@ -100,6 +115,8 @@ class GraphPolicy:
     verify_timeout_s: float = VERIFY_TIMEOUT_S
     measure: bool = True
     tamper: bool = True
+    ui_verify: bool = False
+    ui_verify_dist: str = UI_VERIFY_DIST
 
 
 def _policy_int(raw: Any, default: int) -> int:
@@ -122,6 +139,10 @@ def _policy_bool(raw: Any, default: bool) -> bool:
     return raw if isinstance(raw, bool) else default
 
 
+def _policy_str(raw: Any, default: str) -> str:
+    return raw if isinstance(raw, str) and raw.strip() else default
+
+
 def load_policy(path: Path | None = None) -> GraphPolicy:
     """`config/graph.toml` -> GraphPolicy. Falha aberta campo a campo: arquivo
     ausente/ilegível ou campo torto cai no default — config ruim degrada para o
@@ -141,6 +162,8 @@ def load_policy(path: Path | None = None) -> GraphPolicy:
         ),
         measure=_policy_bool(nodes.get("measure"), base.measure),
         tamper=_policy_bool(nodes.get("tamper"), base.tamper),
+        ui_verify=_policy_bool(nodes.get("ui_verify"), base.ui_verify),
+        ui_verify_dist=_policy_str(data.get("ui_verify_dist"), base.ui_verify_dist),
     )
 
 
@@ -395,7 +418,15 @@ def _provision(state: RunState, config=None) -> dict:
         }
 
     t0 = time.monotonic()
-    _copy_unit_files(state["unit"].path, ws)
+    unit = state["unit"]
+    if unit.project:
+        # Projeto real (opt-in por `project=` na unidade): o workspace é um git
+        # worktree do repo registrado, em branch efêmera a partir do HEAD. A
+        # working tree principal do repo nunca é tocada — isolamento por
+        # construção. Sem `project` o caminho default abaixo continua igual.
+        ws = ws.resolve()  # `git -C repo worktree add` exige path absoluto
+        add_worktree(get_project(unit.project).repo, ws, branch=run_branch(run_id))
+    _copy_unit_files(unit.path, ws)
     sec = time.monotonic() - t0
     # Baseline junto do workspace: um SIGKILL entre copiar e medir não pode
     # deixar um provision "pela metade" — payload único, escrita única.
@@ -445,6 +476,32 @@ def _execute(state: RunState, config=None) -> dict:
     }
 
 
+def _ui_verify(ws: Path, policy: GraphPolicy) -> list[str]:
+    """A régua olha a TELA: serve o `dist/` do workspace, exige que todo asset
+    local carregue e que o screenshot tenha tamanho de página com conteúdo.
+
+    Fail-open em tudo que não é a tela — dist ausente, navegador ausente, módulo
+    indisponível — porque aqui a falha derruba um veredito de run inteiro: em
+    máquina sem Chrome isso viraria DISCARD sem evidência nenhuma. Quem quer o
+    rigor de "não verificado é reprovado" põe `harness ui-verify` no próprio
+    `verify_cmd` da unidade, onde Chrome ausente É falha.
+    """
+    dist = ws / policy.ui_verify_dist
+    if not dist.is_dir():
+        return []
+    try:
+        from harness import uiverify
+
+        res = uiverify.verify(
+            dist, expect=UI_VERIFY_EXPECT, shot_out=ws / uiverify.SHOT_NAME
+        )
+    except Exception:
+        return []
+    if uiverify.MISSING_CHROME in res.failures:
+        return []
+    return list(res.failures)
+
+
 def _verify(state: RunState, config=None) -> dict:
     """A régua roda o `verify_cmd` da unidade. PR-4 troca isto por `ruler/verify`."""
     run_id = state["run_id"]
@@ -474,6 +531,15 @@ def _verify(state: RunState, config=None) -> dict:
             exit_code, out = proc.returncode, proc.stdout + proc.stderr
         except subprocess.TimeoutExpired:
             exit_code, out = 124, b"verify: timeout\n"
+
+    # `verify_cmd` verde ainda não é tela viva: com `nodes.ui_verify` a tela
+    # entra no MESMO veredito, e o motivo entra no MESMO log (é ele que vira o
+    # tail do ledger). Só sobre comando que passou — reprovado já reprovou.
+    policy = load_policy()
+    ui_fail = _ui_verify(ws, policy) if policy.ui_verify and exit_code == 0 else []
+    if ui_fail:
+        out += "".join(f"ui-verify FALHA {m}\n" for m in ui_fail).encode()
+        exit_code = UI_VERIFY_EXIT
     log_path.write_bytes(out)
 
     verdict = Verdict(
@@ -605,8 +671,30 @@ def _gate(state: RunState, config=None) -> dict:
 
 
 def _accept(state: RunState, config=None) -> dict:
-    # Slot do commit (PR-3 dá o worktree, PR-4 a régua completa).
-    return {"events": [_event("accept")]}
+    # No modo unidade o workspace é o próprio artefato. Com projeto, o aceite É
+    # a entrega: commit no worktree e a branch vira `harness/<unit_id>` para
+    # review humano — nada de merge automático.
+    unit = state["unit"]
+    if not unit.project:
+        return {"events": [_event("accept")]}
+
+    run_id = state["run_id"]
+    db = _db(config)
+    saved = store.get_node(run_id, "accept", db)
+    if saved is not None:
+        return {"events": [_event("accept", branch=saved["branch"], reused=True)]}
+
+    result = state.get("exec")
+    branch, commit = deliver(
+        Path(state["workspace"]),
+        unit.id,
+        run_id,
+        cost_usd=result.cost_usd if result else None,
+        # Material do run fora da entrega: log da régua e trace de ferramenta.
+        exclude=(VERIFY_LOG, TRACE_FILE),
+    )
+    store.record_node(run_id, "accept", {"branch": branch, "commit": commit}, db)
+    return {"events": [_event("accept", branch=branch, commit=commit)]}
 
 
 def _retry(state: RunState, config=None) -> dict:
@@ -670,7 +758,7 @@ def _record(state: RunState, config=None) -> dict:
         RunRow(
             run_id=run_id,
             unit_id=unit.id,
-            project=None,
+            project=unit.project,
             backend=sel.backend if sel else "unknown",
             model=(sel.model or None) if sel else None,
             tier=sel.tier if sel else None,
@@ -755,6 +843,27 @@ def build_run_graph(checkpointer):
     return b.compile(checkpointer=checkpointer)
 
 
+def dispose_project_worktree(final: RunState, data_dir: Path) -> bool:
+    """Poda pós-run do modo projeto: worktree fora, repo intocado.
+
+    No accept a branch de entrega FICA (é o artefato); em revert/escalate a
+    branch efêmera do run morre junto — o repo volta a não ter vestígio do run.
+    Só apaga dentro de `<data_dir>/ws`; fora dali, recusa em silêncio.
+    """
+    decision = final.get("decision")
+    ws_raw = final.get("workspace")
+    if decision is None or not ws_raw:
+        return False
+    target = Path(ws_raw).resolve()
+    if (Path(data_dir) / "ws").resolve() not in target.parents:
+        return False
+    proj = get_project(final["unit"].project)
+    remove_worktree(proj.repo, target)
+    if decision.action != "accept":
+        discard_run_branch(proj.repo, final["run_id"])
+    return True
+
+
 def initial_state(unit: UnitSpec, run_id: str, max_attempts: int) -> RunState:
     return RunState(
         run_id=run_id,
@@ -804,6 +913,13 @@ def run_unit(
         max_attempts = load_policy().max_attempts
 
     unit = load_unit(Path(unit_dir))
+    if unit.project:
+        proj = get_project(unit.project)  # falha cedo se não registrado
+        if proj.build_cmd:
+            # O verify do projeto é build + verify da unidade, no worktree.
+            unit = replace(
+                unit, verify_cmd=f"({proj.build_cmd}) && ({unit.verify_cmd})"
+            )
     data_dir = Path(data_dir)
 
     with open_checkpointer(data_dir) as checkpointer:
@@ -823,4 +939,8 @@ def run_unit(
         # `next` não vazio = thread parou no meio: retoma sem reinjetar entrada.
         pending = bool(graph.get_state(config).next)
         payload = None if pending else initial_state(unit, thread_id, max_attempts)
-        return graph.invoke(payload, config)
+        final = graph.invoke(payload, config)
+    # Worktree de projeto é transitório: o artefato é a branch, não o checkout.
+    if unit.project:
+        dispose_project_worktree(final, data_dir)
+    return final

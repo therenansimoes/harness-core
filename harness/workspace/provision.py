@@ -75,7 +75,7 @@ def provision(
     names = cache_links(config_path)
 
     if mode == "worktree":
-        _add_worktree(repo, path)
+        add_worktree(repo, path)
     elif mode == "tmpdir":
         _copy_tree(repo, path, names)
     else:
@@ -122,7 +122,10 @@ def _is_tracked(repo: Path, name: str) -> bool:
     return bool(_git(repo, "ls-files", "--", name).stdout.strip())
 
 
-def _add_worktree(repo: Path, path: Path) -> None:
+def add_worktree(repo: Path, path: Path, branch: str | None = None) -> None:
+    """Worktree do repo em `path`. Detached por default; com `branch`, cria a
+    branch a partir do HEAD (`-B`: sobra de run anterior morto é resetada).
+    Idempotente: path já registrado como worktree do repo é reuso."""
     if not is_git_repo(repo):
         raise ValueError(f"{repo} não é repositório git — use mode='tmpdir'")
     if path.exists():
@@ -134,13 +137,26 @@ def _add_worktree(repo: Path, path: Path) -> None:
             raise ValueError(f"{path} existe e não é worktree de {repo}")
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    proc = _git(repo, "worktree", "add", "--detach", str(path))
+    args = (
+        ("worktree", "add", "-B", branch, str(path), "HEAD")
+        if branch
+        else ("worktree", "add", "--detach", str(path))
+    )
+    proc = _git(repo, *args)
     if proc.returncode != 0:
         # registro órfão (workspace apagado na mão): limpa e tenta uma vez.
         _git(repo, "worktree", "prune")
-        proc = _git(repo, "worktree", "add", "--detach", str(path))
+        proc = _git(repo, *args)
     if proc.returncode != 0:
         raise RuntimeError(f"git worktree add falhou: {proc.stderr.strip()}")
+
+
+def remove_worktree(repo: Path, path: Path) -> None:
+    """Desregistra e apaga o worktree; o repo e as branches ficam intactos."""
+    _git(repo, "worktree", "remove", "--force", str(path))
+    _git(repo, "worktree", "prune")
+    if path.exists():
+        shutil.rmtree(path)
 
 
 def _copy_tree(repo: Path, path: Path, names: Iterable[str]) -> None:

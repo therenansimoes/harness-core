@@ -1,0 +1,13 @@
+# Projetos reais registrados. `harness init <repo> --name <nome>` escreve aqui;
+# `harness add --project <nome>` lê o `repo` daqui para montar o contexto real
+# (README/package.json/árvore) da chamada de autoria, e uma unidade com
+# `project = "<nome>"` roda num git worktree desse repo.
+#
+# [projects.<nome>]
+# repo = "/caminho/absoluto/ou/relativo/do/repo"
+# build_cmd = "npm run build"            # roda antes do verify_cmd, no worktree
+# verify_default = "npm test"            # verify de unidade que não declara um
+# queue_dir = "projects/<nome>/queue"    # default
+
+[projects.demo_site]
+repo = "projects/demo_site/site"

@@ -1,6 +1,6 @@
 """CLI do harness. `harness run` / `ab` / `backends` / `improve` / `replay` /
 `lineage` / `export` / `import` / `doctor` / `skills` / `actions` / `seal` /
-`frontier` / `evolve` / `bench`."""
+`frontier` / `evolve` / `ui-verify` / `bench`."""
 
 from __future__ import annotations
 
@@ -30,6 +30,7 @@ from harness.ruler.kpi import collect, load_kpis
 from harness.ruler.verify import log_tail, run_verify
 from harness.ruler.wilson import MIN_N, Arm, decide_ab, wilson_interval
 from harness.types import ExecRequest, ExecResult, RunRow, Selection, UnitSpec
+from harness.uiverify import ASSET_KINDS, DEFAULT_MIN_KB, SHOT_NAME
 from harness.workspace.provision import dispose, provision
 from harness.workspace.sealing import is_verifier, verifier_visible
 
@@ -58,15 +59,25 @@ def load_unit(path: Path) -> UnitSpec:
     if not unit_file.is_file():
         raise FileNotFoundError(f"unit não encontrada: {unit_file}")
     data = tomllib.loads(unit_file.read_text(encoding="utf-8"))
-    missing = [k for k in ("id", "prompt", "verify_cmd") if k not in data]
+    missing = [k for k in ("id", "prompt") if k not in data]
+    project = data.get("project")
+    verify_cmd = data.get("verify_cmd")
+    if verify_cmd is None and project:
+        # Unidade de projeto pode herdar o verify default do registro.
+        from harness.projects import get_project
+
+        verify_cmd = get_project(str(project)).verify_default
+    if verify_cmd is None:
+        missing.append("verify_cmd")
     if missing:
         raise ValueError(f"{unit_file}: campos faltando: {', '.join(missing)}")
     return UnitSpec(
         id=str(data["id"]),
         path=unit_file.parent,
         prompt=str(data["prompt"]),
-        verify_cmd=str(data["verify_cmd"]),
+        verify_cmd=str(verify_cmd),
         kind=data.get("kind"),
+        project=str(project) if project else None,
     )
 
 
@@ -711,6 +722,34 @@ def cmd_actions(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ui_verify(args: argparse.Namespace) -> int:
+    """`harness ui-verify`: a régua abre a página e olha a tela.
+
+    Sem severidade dupla, ao contrário do `doctor`: aqui não existe "o mundo não
+    estava pronto". Quem põe isto no `verify_cmd` já decidiu que a tela faz parte
+    do aceite, então qualquer falha derruba o exit code — inclusive Chrome
+    ausente, que significa "não foi verificado", não "passou".
+    """
+    from harness import uiverify
+
+    res = uiverify.verify(
+        args.dist,
+        url_path=args.url_path,
+        min_kb=args.min_kb,
+        expect=tuple(args.expect_asset or ()),
+        shot_out=args.shot_out,
+        ask=args.ask,
+    )
+    for motivo in res.failures:
+        print(f"ui-verify FALHA {motivo}", file=sys.stderr)
+    shot = f"{res.shot} ({res.shot_kb:.1f}kb)" if res.shot else "nenhum"
+    print(
+        f"ui-verify dist={args.dist} url={args.url_path} "
+        f"assets={res.ok_assets}/{res.checked} shot={shot} falhas={len(res.failures)}"
+    )
+    return 1 if res.failures else 0
+
+
 def _pct(values: list[float], q: int) -> float:
     """Percentil por rank mais próximo — sem dependência, honesto para n pequeno."""
     ordered = sorted(values)
@@ -730,6 +769,26 @@ def cmd_bench(args: argparse.Namespace) -> int:
         f"provision n={len(secs)} "
         f"p50={_pct(secs, 50):.3f}s p95={_pct(secs, 95):.3f}s"
     )
+    return 0
+
+
+def cmd_add(args: argparse.Namespace) -> int:
+    """Tarefa em português vira unit autorada (em quarentena, nunca selada)."""
+    from harness.add import ADD_MAX_USD, ADD_MODEL, AddError, add
+
+    try:
+        add(
+            args.task,
+            args.project,
+            model=args.model or ADD_MODEL,
+            max_usd=ADD_MAX_USD if args.max_usd is None else args.max_usd,
+            dry=args.dry,
+            projects_file=Path(args.projects) if args.projects else None,
+            out_dir=Path(args.out_dir) if args.out_dir else None,
+        )
+    except AddError as exc:
+        print(f"add falhou: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -851,6 +910,49 @@ def cmd_evolve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_init(args: argparse.Namespace) -> int:
+    """`harness init <repo> --name <nome>` registra um repo real como projeto."""
+    from harness.projects import init_project
+
+    try:
+        proj = init_project(
+            args.repo,
+            args.name,
+            build_cmd=args.build,
+            verify_default=args.verify_default,
+            queue_dir=args.queue_dir,
+        )
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    print(f"projeto {proj.name}: repo={proj.repo} queue={proj.queue_dir}")
+    return 0
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    """Uma linha por projeto: fila/done/stuck + gasto total do ledger."""
+    from harness.projects import load_projects, queue_counts
+
+    projs = load_projects()
+    if not projs:
+        print("nenhum projeto registrado (harness init <repo> --name <nome>)")
+        return 0
+
+    for name in sorted(projs):
+        fila, done, stuck = queue_counts(projs[name])
+        rows = (
+            store.history(project=name, limit=100_000)
+            if store.db_path().is_file()
+            else []
+        )
+        usd = sum(r.cost_usd or 0.0 for r in rows)
+        print(
+            f"{name}: fila={fila} done={done} stuck={stuck} "
+            f"runs={len(rows)} usd={usd:.2f}"
+        )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="harness", description="agent harness provider-agnostic")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -892,6 +994,25 @@ def build_parser() -> argparse.ArgumentParser:
     # `parser` no namespace: erro de combinação de flag sai como erro de
     # argparse (uso + exit 2), não como exceção no meio do experimento.
     ab.set_defaults(func=cmd_ab, parser=ab)
+
+    init = sub.add_parser(
+        "init", help="registra um repo git real como projeto (config/projects.toml)"
+    )
+    init.add_argument("repo", help="path do repositório git do projeto")
+    init.add_argument("--name", required=True)
+    init.add_argument("--build", default=None,
+                      help="comando de build do projeto; roda antes do verify_cmd "
+                           "da unidade, no worktree")
+    init.add_argument("--verify-default", default=None, dest="verify_default",
+                      help="verify_cmd default para unidade do projeto que não declara um")
+    init.add_argument("--queue-dir", default=None, dest="queue_dir",
+                      help="fila do projeto (default projects/<nome>/queue)")
+    init.set_defaults(func=cmd_init, parser=init)
+
+    status = sub.add_parser(
+        "status", help="por projeto: fila/done/stuck + gasto total do ledger"
+    )
+    status.set_defaults(func=cmd_status, parser=status)
 
     backends = sub.add_parser("backends", help="lista backends registrados + preflight")
     backends.set_defaults(func=cmd_backends)
@@ -937,6 +1058,28 @@ def build_parser() -> argparse.ArgumentParser:
                          help="mostra só as N últimas raízes")
     lineage.set_defaults(func=cmd_lineage)
 
+    ui = sub.add_parser(
+        "ui-verify",
+        help="verify de UI: serve o dist, confere os assets e olha o screenshot",
+    )
+    ui.add_argument("dist", help="diretório buildado a servir (ex.: dist)")
+    ui.add_argument("--url-path", default="/", dest="url_path",
+                    help="página a abrir dentro do dist (default: /)")
+    ui.add_argument("--min-kb", type=float, default=DEFAULT_MIN_KB, dest="min_kb",
+                    help=f"tamanho mínimo do PNG em kb (default {DEFAULT_MIN_KB:.0f}; "
+                         "tela em branco mede ~11kb, página com conteúdo ~28kb)")
+    ui.add_argument("--expect-asset", action="append", choices=list(ASSET_KINDS),
+                    dest="expect_asset", metavar="KIND",
+                    help=f"exige ≥1 asset do tipo CARREGÁVEL (repetível): "
+                         f"{'|'.join(ASSET_KINDS)}")
+    ui.add_argument("--shot-out", default=None, dest="shot_out", metavar="PATH",
+                    help=f"onde gravar o screenshot (default: ./{SHOT_NAME}, que "
+                         "sobrevive com --keep-ws para review humano)")
+    ui.add_argument("--ask", default=None, metavar="PERGUNTA",
+                    help="opt-in que GASTA (~$0.01): manda o screenshot para o "
+                         "claude CLI em haiku e exige JSON {\"ok\",\"motivo\"}")
+    ui.set_defaults(func=cmd_ui_verify, parser=ui)
+
     export = sub.add_parser(
         "export", help="empacota skills + prior de roteamento em um bundle .tgz"
     )
@@ -968,6 +1111,24 @@ def build_parser() -> argparse.ArgumentParser:
         "actions", help="lista as ações do registry + KEEP/DISCARD do ledger"
     )
     actions.set_defaults(func=cmd_actions)
+
+    add_cmd = sub.add_parser(
+        "add", help="autora uma unit a partir de uma tarefa em linguagem natural"
+    )
+    add_cmd.add_argument("task", help="a tarefa, escrita em português")
+    add_cmd.add_argument("--project", required=True,
+                         help="projeto registrado em config/projects.toml")
+    add_cmd.add_argument("--dry", action="store_true",
+                         help="mostra a unit autorada sem gravar nada")
+    add_cmd.add_argument("--model", default=None,
+                         help="modelo da autoria (default: haiku)")
+    add_cmd.add_argument("--max-usd", type=float, default=None, dest="max_usd",
+                         help="teto de custo da chamada de autoria (default: 0.25)")
+    add_cmd.add_argument("--projects", default=None,
+                         help="registro de projetos alternativo")
+    add_cmd.add_argument("--out-dir", default=None, dest="out_dir",
+                         help="destino da unit (default: benchmarks/quarantine)")
+    add_cmd.set_defaults(func=cmd_add)
 
     seal = sub.add_parser(
         "seal", help="promove um exame da quarentena para benchmarks/sealed"

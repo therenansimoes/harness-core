@@ -20,6 +20,11 @@ class UnitSpec:
     prompt: str
     verify_cmd: str
     kind: Kind | None = None
+    # Projeto real (config/projects.toml): o run acontece num git worktree do
+    # repo do projeto (branch efêmera `harness/<run_id>`), e o accept entrega
+    # a branch `harness/<unit_id>` para review humano. `None` = workspace
+    # comum, o caminho default.
+    project: str | None = None
 
 
 @dataclass(frozen=True)

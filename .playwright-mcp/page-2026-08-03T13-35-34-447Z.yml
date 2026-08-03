@@ -1,0 +1,12 @@
+- generic [active] [ref=e1]:
+  - text: import '../styles/global.css';
+  - banner [ref=e2]:
+    - navigation [ref=e3]:
+      - link "Fazenda Família Rogers" [ref=e4] [cursor=pointer]:
+        - /url: /
+  - main [ref=e5]:
+    - heading "Fazenda Família Rogers" [level=1] [ref=e6]
+    - paragraph [ref=e7]: "Fazenda Família Rogers: mirtilo, azeite, madeira, mudas e água potável, além de hospedagem e experiências no campo em Aruã, SP."
+  - contentinfo [ref=e8]:
+    - link "Falar no WhatsApp" [ref=e9] [cursor=pointer]:
+      - /url: https://wa.me/5511984082288
