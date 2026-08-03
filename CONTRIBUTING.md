@@ -1,21 +1,22 @@
 # CONTRIBUTING
 
-Leia `docs/ARCHITECTURE.md` antes do primeiro PR. Regra geral: PR pequeno, com
-aceite executável — "melhorou" sem comando que prove não entra.
+Read `docs/ARCHITECTURE.md` before your first PR. General rule: small PRs, with
+an executable acceptance criterion — "it got better" without a command that
+proves it does not land.
 
-## Rodar os testes
+## Running the tests
 
 ```bash
 uv sync --extra deepagents
-uv run --extra deepagents pytest -q     # 364 passed, 2 deselected
+uv run --extra deepagents pytest -q     # 726 passed, 2 deselected
 ```
 
-Sem o extra (`uv sync && uv run pytest -q`) a suite também fica verde —
-`362 passed, 2 skipped`: os testes que importam `deepagents` pulam quando a lib
-não está instalada. Todo o resto roda com o backend `mock`, que é
-determinístico e não toca rede.
+Without the extra (`uv sync && uv run pytest -q`) the suite is green too: the
+tests that import `deepagents` skip when the library is not installed.
+Everything else runs on the `mock` backend, which is deterministic and touches
+no network.
 
-Teste não escreve no repo. Isolamento é por env var, com `tmp_path`:
+Tests do not write into the repo. Isolation is by env var, with `tmp_path`:
 
 ```python
 @pytest.fixture
@@ -24,75 +25,76 @@ def data_dir(tmp_path, monkeypatch):
     return tmp_path / "data"
 ```
 
-Mesma convenção para `HARNESS_CONFIG_DIR`, `HARNESS_ROOT` e
-`HARNESS_PROJECTS_ROOT`. Teste que depende do `config/` do repo é teste que
-quebra quando o loop calibrar um TOML.
+Same convention for `HARNESS_CONFIG_DIR`, `HARNESS_ROOT` and
+`HARNESS_PROJECTS_ROOT`. A test that depends on the repo's `config/` is a test
+that breaks the moment the loop calibrates a TOML.
 
-## Markers `ollama` e `claude_cli`
+## The `ollama` and `claude_cli` markers
 
-Dois markers marcam o que precisa de máquina de verdade, e os dois estão
-**desligados por padrão** (`addopts = "-m 'not ollama and not claude_cli'"` no
-`pyproject.toml`):
+Two markers flag what needs a real machine, and both are **off by default**
+(`addopts = "-m 'not ollama and not claude_cli'"` in `pyproject.toml`):
 
-- `ollama` — exige servidor Ollama local rodando. Custo $0, mas depende do
-  modelo instalado.
-- `claude_cli` — exige o CLI oficial instalado e autenticado. **Gasta
-  dinheiro.**
+- `ollama` — requires a local Ollama server running. Costs $0, but depends on
+  which model you have installed.
+- `claude_cli` — requires the official CLI installed and authenticated. **Spends
+  money.**
 
 ```bash
-uv run --extra deepagents pytest -m ollama -q      # opt-in explícito
+uv run --extra deepagents pytest -m ollama -q      # explicit opt-in
 ```
 
-Teste que chama modelo de verdade sem um desses markers é bug de teste: a
-suite default tem que rodar em qualquer máquina, offline, de graça. E teto de
-hardware é regra, não sugestão — nesta máquina (18GB), modelo local acima de
-~8B não entra em tier nenhum.
+A test that calls a real model without one of those markers is a broken test:
+the default suite has to run on any machine, offline, for free. And the hardware
+ceiling is a rule, not a suggestion — on this machine (18GB), a local model
+above ~8B does not belong in any tier.
 
-## Plugar um backend
+## Plugging in a backend
 
-Três métodos (`harness/backends/base.py`): `capabilities()`, `preflight()` e
-`execute(ExecRequest) -> ExecResult`. `preflight()` é determinístico e **não
-chama LLM** — é o que faz `harness backends` ser barato de rodar a qualquer
-hora.
+Three methods (`harness/backends/base.py`): `capabilities()`, `preflight()` and
+`execute(ExecRequest) -> ExecResult`. `preflight()` is deterministic and **makes
+no LLM call** — that is what makes `harness backends` cheap to run at any time.
 
-Backend de terceiro não precisa de PR aqui: publique um pacote que se anuncie
-no entry point.
+A third-party backend needs no PR here: publish a package that announces itself
+on the entry point.
 
 ```toml
 [project.entry-points."harness.backends"]
-meu_backend = "meu_pacote.backend:MeuBackend"
+my_backend = "my_package.backend:MyBackend"
 ```
 
-Em teste (ou para plugin não instalado), `registry.register(nome, factory)`.
-Auth segue o mesmo desenho no entry point `harness.auth` (`env()` + `check()`);
-o repo shippa só `NullAuth`, e adapter de OAuth de assinatura em cliente de
-terceiro é área cinzenta de ToS — fica fora daqui.
+In tests (or for a plugin that is not installed), use
+`registry.register(name, factory)`. Auth follows the same design on the
+`harness.auth` entry point (`env()` + `check()`); the repo ships only `NullAuth`,
+and an OAuth adapter for someone else's subscription client is a ToS grey area —
+it stays out of here.
 
-Backend novo no repo só entra com: preflight honesto (declara indisponível em
-vez de estourar), `exit_reason` dentro do vocabulário
-(`done|max_turns|timeout|error|blocked`) e a mesma unidade de fixture passando
-nele.
+A new backend inside this repo only lands with: an honest preflight (declares
+itself unavailable instead of blowing up), an `exit_reason` from the closed
+vocabulary (`done|max_turns|timeout|error|blocked`), and the same fixture unit
+passing on it.
 
-## Genoma: o que não se muda sem conversa
+## Genome: what you do not change without a conversation
 
-`config/genome.toml` declara as zonas. PR de fora que toca uma zona
-`immutable` — `harness/ruler/**`, `harness/genome/**`, `harness/routing/**`,
-`harness/graph/**`, `uv.lock`, `benchmarks/sealed/**` — precisa de discussão
-**antes** do código: essas zonas são o que impede o loop de auto-melhoria de
-aprovar a si mesmo, e mudar uma delas invalida todo o histórico de A/B do
-ledger. Abra uma issue com a hipótese e o que ela quebra.
+`config/genome.toml` declares the zones. An outside PR that touches an
+`immutable` zone — `harness/ruler/**`, `harness/genome/**`, `harness/routing/**`,
+`harness/graph/**`, `uv.lock`, `benchmarks/sealed/**` — needs discussion
+**before** the code: those zones are what stops the self-improvement loop from
+approving itself, and changing one of them invalidates the ledger's entire A/B
+history. Open an issue with the hypothesis and what it breaks.
 
-Zona mutável (`config/*.toml`, `prompts/**`) é onde calibração é bem-vinda —
-inclusive vinda do próprio loop. Mudança de knob sem número que a sustente,
-porém, é achismo com diff: rode `harness ab` e cole o veredito.
+The mutable zone (`config/*.toml`, `prompts/**`) is where calibration is
+welcome — including calibration coming from the loop itself. A knob change with
+no number behind it, though, is a hunch with a diff: run `harness ab` and paste
+the verdict.
 
-## Estilo
+## Style
 
-Siga o arquivo que você está editando. O repo é consistente em:
+Follow the file you are editing. The repo is consistent about:
 
-- docstrings e comentários em pt-BR, explicando **por quê**, não o quê;
-- `dataclass(frozen=True)` para tipo de dado; `Protocol` para contrato;
-- `from __future__ import annotations` no topo;
-- vocabulário fechado (constante nomeada) em vez de string solta para
-  `exit_reason`, motivo de escalação e afins;
-- falhar fechado e ruidoso: config contraditória não vira default silencioso.
+- docstrings and comments in pt-BR, explaining **why**, not what;
+- `dataclass(frozen=True)` for data types; `Protocol` for contracts;
+- `from __future__ import annotations` at the top;
+- a closed vocabulary (a named constant) instead of a loose string for
+  `exit_reason`, escalation reasons and the like;
+- fail closed and loud: a contradictory config does not silently become a
+  default.

@@ -1,134 +1,137 @@
-> SUPERSEDED 2026-08-02: ver STATUS.md (pivô LangGraph)
+# Fast Start — from install to a real repo in one sitting
 
-# Fast Start — Acelerar a implementação do Harness
+**Read `README.md` first** for what the harness is. This page is the shortest
+path from a clone to the harness landing a reviewable branch on a repo you
+actually own.
 
-**Companion de:** `PLAN.md`  
-**Objetivo:** sair do plano e chegar na **primeira linha verde** no `results.tsv` o mais rápido possível.
-
----
-
-## 1. Princípio de velocidade
-
-> O caminho mais rápido é um **loop chato e verde**, não um plano mais inteligente.
-
-Não desenhar mais arquitetura.  
-Não plugar satélites.  
-Não portar o harness antigo.
-
-**Ship the minimum loop.**
+Everything below is the current CLI (`uv run harness <cmd> --help` is the source
+of truth). Nothing here is a plan.
 
 ---
 
-## 2. O que entregar primeiro (maior alavancagem)
+## 0. Install and prove the loop offline
 
-Arquivos mínimos para colar e rodar:
-
-| Arquivo | Função |
-|---------|--------|
-| `agent.py` | bash + system prompt + limite de turns |
-| `run_task.py` | workspace → agent → verify → `results.tsv` |
-| `tasks/task_01/prompt.md` | o que pedir ao agent |
-| `tasks/task_01/verify.py` | exit 0 = pass, ≠0 = fail |
-| `results.tsv` | header + append de cada run |
-| `harness_version.txt` | `v0` |
-
-Isso transforma “plano” em “primeira linha no TSV” em horas, não semanas.
-
----
-
-## 3. Roubar estrutura, não sistemas
-
-Copiar **padrões**, não produtos inteiros:
-
-| Fonte | O que pegar | O que ignorar |
-|-------|-------------|---------------|
-| **AutoAgent** | Split directive / agent / tasks + hill-climb em score | Meta-agent overnight completo |
-| **Harbor-style tasks** | `prompt` + verificador determinístico + score numérico | Suite enorme de benchmark |
-| **AHE (ideia)** | Logar o que mudou + o que falhou + a decisão | Stack inteira de observability |
-
-Uma tarde lendo layouts deles > duas semanas inventando estrutura de pastas.
-
----
-
-## 4. Trilhas em paralelo (para não travar)
-
-| Trilha | Quem | Output |
-|--------|------|--------|
-| **A — Código** | você + skeleton | `agent` + `run_task` + 1 task verde |
-| **B — Tasks** | você | mais 2 tasks com `verify.py` estrito |
-| **C — Baseline** | depois de A+B | 3× runs cada → números do v0 no TSV |
-| **D — Produto** | ignorar agora | CLI, `.harness/`, marketplace |
-
-Não comece C antes de A estar verde.  
-Não pense em D até C existir.
-
----
-
-## 5. Atalhos que ainda mantêm o core limpo
-
-| Atalho | Por quê é ok no dia 1 |
-|--------|------------------------|
-| **Sem Docker** | pasta temp isolada basta; Docker entra no A/B sério |
-| **Um modelo só** | hardcode a API que você já paga; multi-model é satélite |
-| **Só tool bash** | força trabalho por artefato; mais tools via evolução depois |
-| **TSV, não DB** | abre no Excel, git-friendly, zero infra |
-| **Humano propõe o 1º A/B** | automatizar o proposer é etapa 4; score rules já valem na mão |
-
----
-
-## 6. O que NÃO fazer se quiser velocidade
-
-- Integrar OpenClaw / browser-use / Mem0 / vault agora  
-- Construir CLI ou `harness init` antes de 1 task verde  
-- Desenhar a árvore completa de `evolution/` antes do primeiro A/B  
-- Portar o harness antigo (começar limpo é mais rápido que desembaraçar)  
-
-Cada um desses é desvio de vários dias.
-
----
-
-## 7. Como pedir ajuda (sob demanda)
-
-Escolha **um**:
-
-1. **Skeleton completo de código** — caminho mais rápido para “roda”  
-2. **Spec do `harness init`** — o que vai em `.harness/` (multi-projeto)  
-3. **Playbook do primeiro A/B** — o que mudar no `agent.py` e como comparar  
-4. **Pack de templates de task** — 3 padrões de verify (arquivo existe, output de script, testes passam)  
-
----
-
-## 8. Janela recomendada — próximas 48 horas
-
+```bash
+uv sync --extra deepagents
+uv run harness backends          # deterministic preflight, zero LLM calls
+uv run harness run --unit tests/fixtures/echo --backend mock
 ```
-Hora 0–2     Criar harness-core, colocar PLAN.md + este FAST_START.md
-Hora 2–6     Skeleton rodando, task_01 verde no results.tsv
-Hora 6–12    task_02 + task_03
-Hora 12–24   3× cada task → baseline v0
-Próxima sessão  Um A/B manual → v0.1 keep ou discard
+
+The `mock` backend costs nothing and touches no network, so that third command
+is the honest smoke test: if it does not print an `accept` line, stop here and
+fix the install instead of pointing the harness at real code.
+
+For a first run with an actual model, keep it free:
+
+```bash
+ollama pull qwen2.5:3b           # 18GB laptop: keep the local model <= 8B
+uv run harness run --unit tests/fixtures/tiny_fix \
+  --backend deepagents --model ollama:qwen2.5:3b
 ```
 
 ---
 
-## 9. Checklist do “fast path”
+## 1. Register the project
 
-- [ ] Pasta/repo `harness-core` limpo (sem legado no path)  
-- [ ] `PLAN.md` + `FAST_START.md` no root  
-- [ ] `agent.py` mínimo  
-- [ ] `run_task.py`  
-- [ ] `tasks/task_01/` com `prompt.md` + `verify.py`  
-- [ ] `harness_version.txt` = `v0`  
-- [ ] `results.tsv` com header  
-- [ ] Uma run com `success=1`  
-- [ ] Três tasks × três runs = baseline  
-- [ ] Primeiro A/B documentado no TSV  
+```bash
+uv run harness init /path/to/repo --name myapp \
+  --build "npm run build" \
+  --verify-default "npm test"
+```
+
+This writes an entry in `config/projects.toml`. `--build` runs in the worktree
+before the unit's own `verify_cmd`; `--verify-default` is used by units that do
+not declare one. The queue lives in `projects/<name>/queue` unless you pass
+`--queue-dir`.
+
+`init` only registers — it does not clone, and it does not touch the repo.
 
 ---
 
-## 10. Norte
+## 2. Author the work
 
-Score no centro.  
-Core primeiro.  
-Uma task verde vale mais que dez páginas de arquitetura.
+```bash
+uv run harness add --project myapp "add a health endpoint at /healthz" \
+  --out-dir projects/myapp/queue
+```
 
-Quando a primeira linha do `results.tsv` existir, o harness deixou de ser ideia e passou a ser sistema.
+`add` reads the repo's real context (README, `package.json`, tree) and writes a
+`unit.toml` plus `prompt.md`, with a `verify_cmd` it has to justify. Two flags
+worth knowing:
+
+- **`--dry`** prints the authored unit and writes nothing. Use it the first few
+  times: a weak `verify_cmd` is the one failure mode the gate cannot rescue.
+- **`--ui`** appends `harness ui-verify dist --expect-asset css` to the authored
+  `verify_cmd` — for frontend work, where "tests pass" and "the page renders"
+  are different claims.
+
+Without `--out-dir` the unit lands in `benchmarks/quarantine/<slug>/`, which is
+the staging area, **not** the project queue. Point `--out-dir` at the project's
+queue when you want the unit to actually run.
+
+Authoring calls a model (default `haiku`, capped by `--max-usd`, default 0.25).
+
+---
+
+## 3. Drain the queue
+
+```bash
+uv run harness queue --project myapp \
+  --backend deepagents --model ollama:qwen2.5:3b
+```
+
+Units run one at a time, in filename order, each in its own git worktree on an
+ephemeral branch. The queue is **progressive**: filename order is dependency
+order, so a unit that does not accept *stops* the loop rather than letting the
+next one build on missing work.
+
+Per unit:
+
+| Outcome | What happens |
+|---------|--------------|
+| accept | delivery merged into the repo's default branch, branch `harness/<unit_id>` left for human review, unit moved to `queue/done/` |
+| anything else | unit moved to `queue/stuck/`, loop stops |
+| integration fails | treated exactly like stuck — the merge is part of the accept |
+
+Useful flags: `--deadline-s` caps the whole loop (default 3600), `--attempts`
+overrides the per-unit ceiling from `config/graph.toml`, and `--no-move` is a
+dry run — it executes for real but leaves the queue untouched.
+
+---
+
+## 4. Check where you stand
+
+```bash
+uv run harness status
+```
+
+Counts pending / `done/` / `stuck/` per project plus total spend.
+
+`scripts/queue_run.py` is a thin env-var wrapper over the same driver
+(`harness/queue.py`) if you would rather drive it from cron.
+
+---
+
+## 5. When a unit gets stuck
+
+The unit is in `queue/stuck/` and the ledger has the trace. In order:
+
+1. Read the printed `decision.reason` — `verify_failed:exit=N` means the
+   verifier ran and said no, which is usually the honest answer.
+2. Re-read the authored `verify_cmd`. A verifier that cannot pass is a bad
+   verifier, not a bad agent.
+3. Move the unit back out of `stuck/` and re-run the queue after fixing either
+   the prompt or the verifier.
+
+Do **not** loosen the verifier to make the unit pass. That is the one change
+that makes every later number meaningless.
+
+---
+
+## Where to go next
+
+- `README.md` — what the harness is and what is actually proven.
+- `STATUS.md` — live vs experimental surfaces, known gaps.
+- `docs/ARCHITECTURE.md` — design detail.
+- `CONTRIBUTING.md` — tests, backends, the genome rules.
+- `docs/history/` — the original planning documents, kept for provenance.

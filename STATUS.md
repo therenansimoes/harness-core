@@ -1,76 +1,161 @@
-# STATUS — fonte de verdade do harness-core
+# STATUS — source of truth for harness-core
 
-**Atualizado:** 2026-08-02 (rebuild in-place executado). Norte técnico: `docs/SPEC-rebuild.md`. API real das libs: `docs/RESEARCH-deepagents-api.md`. Este arquivo substitui a versão anterior (pivô LangGraph+LangChain com executor Claude CLI) — o rebuild foi além: núcleo provider-agnostic, executor padrão deepagents, licença MIT, open source.
+**Updated:** 2026-08-03. Technical north: `docs/SPEC-rebuild.md` (core rebuild)
+and `docs/SPEC-MULTIPROJECT.md` (real projects). Real library APIs:
+`docs/RESEARCH-deepagents-api.md`. Architecture detail: `docs/ARCHITECTURE.md`.
 
-## O que o repo é agora
+This file says what is load-bearing, what is a first cut, and what is known to
+be broken or unfinished. It is not a changelog and not a roadmap.
 
-Pacote `harness/` (núcleo, zero menção a vendor) sobre LangGraph; legado congelado em `legacy/` (referência read-only, fora do pytest e do genoma). Fonte de verdade de runs: `data/runs.sqlite` (TSV vira export). Projetos privados vivem em `projects/` mas ficam fora do git (gitignored) — o repo público carrega só fixtures e benchmarks sintéticos.
+## What the repo is
 
-## Escada de PRs (docs/SPEC-rebuild.md §6)
+The `harness/` package (vendor-agnostic core) on LangGraph runs units of work
+through a graph (`plan → route → provision → execute → verify → measure → gate →
+record`), measures KPIs against a frozen baseline, and evolves itself through 9
+registered actions inside the genome's mutable zones, judged by a ruler it
+cannot touch. Source of truth for runs: `data/runs.sqlite` (TSV is an export).
+The legacy tree in `legacy/` is frozen read-only reference, excluded from pytest
+and from the genome. Private projects live under `projects/` but are gitignored —
+the public repo carries only fixtures and synthetic benchmarks.
 
-| PR | O quê | Estado |
-|---|---|---|
-| PR-0 | Esqueleto `harness/`: types, backend mock, registry por entry point, ledger SQLite, cli | **FEITO** `2684cb9` |
-| PR-1 | Backend deepagents (LangChain isolado em 1 arquivo) + Ollama E2E grátis | **FEITO** `ad2a279` |
-| PR-2 | run_graph LangGraph + SqliteSaver + nós idempotentes (resume pós-kill-9 é teste) | **FEITO** merge `fa2c65c` |
-| PR-3 | workspace/provision via git worktree (p50 medido: 0.092s vs 50-200s do legado) | **FEITO** merge `a98bea1` |
-| PR-4 | ruler/ completo: wilson, kpi (specs do ANTES anti-Goodhart), verify, note, gate | **FEITO** merge `38b2caf` |
-| PR-5 | genome/ mutable-immutable + tamper + config/genome.toml | **FEITO** merge `71c2fb7` |
-| PR-6 | routing/: kinds ortogonais + prior Wilson keyed (kind,tier,backend) — bug de chave do legado corrigido | **FEITO** merge `cb3f86c` |
-| PR-7 | Backend claude_code (CLI oficial) + slot harness.auth plugável | **FEITO** `a8e6717` |
-| PR-8 | A/B de backend rodado pelo próprio harness (`harness ab --dim backend`) | **FEITO** `bc0714e` |
-| PR-9 | autopilot_graph + improve/ (target, escalate via interrupt, intervention_rate) | **FEITO** `1760378` + PR-9b `af1787c` (canal causal provado: KEEP/DISCARD reais) |
-| PR-10 | improve/replay (atribuição c/ IC e confounders) + harness doctor + README/ARCHITECTURE/CONTRIBUTING | **FEITO** merges `ca19215`+`5fe035a` |
+## Verified numbers
 
-**ESCADA COMPLETA (2026-08-02).** 402 testes; `harness doctor` 10 checks 0 falhas. Próximo: publicação (repo novo, commit único — plano na memory).
+Measured on this machine, on the current tree:
 
-## Sprint auto-evolução (2026-08-03)
+- `uv run --extra deepagents pytest -q` → **726 passed, 2 deselected** (21s).
+- `uv run harness doctor` → **17 checks, 0 failures, 0 warnings**.
+- `uv run harness bench provision --n 10` → p50 ~0.07–0.09s (git worktree,
+  versus 50–200s for the legacy copy-based provisioner).
+- Real kill-9 resume test passes (`tests/test_resume.py`).
+- The improvement loop has run end to end against a local LM Studio/MLX model at
+  **$0**.
 
-- **run_graph de-stubbed:** `provision` congela baseline no ledger (specs+valores de KPI do ANTES + fingerprint de tamper do genoma do workspace, padrões congelados — a run não redefine a própria régua); `measure` coleta KPIs do DEPOIS com as specs congeladas; `gate` chama o `ruler/gate` real (tamper→revert, verify vermelho→retry, KPI regrediu→revert, senão accept), retry vira `escalate_human` no teto de attempts; `record` carrega os motivos de revert como `exit_reason`. Política auto-evoluível em `config/graph.toml` (`max_attempts`, `verify_timeout_s`, toggles `[nodes]`), fail-open por campo; toggles off reproduzem o stub antigo. `run_unit(max_attempts=None)` lê da policy. Testes: `tests/test_graph_policy.py`.
-- **skills/**: pacote `harness.skills` (load/select/render, formato `---`/TOML/`---`); injetado no system_prompt do backend deepagents por `kind`. Seeds: `skills/python-fixes.md`, `skills/config-calibration.md`. `skills/**` agora é mutável no genoma. Testes: `tests/test_skills.py`.
-- **MCP:** `harness/backends/mcp_tools.py` lê `config/mcp.toml` (stdio + streamable_http, só `enabled=true`) via langchain-mcp-adapters (import lazy, dep opcional); qualquer falha → `[]`, nunca quebra. Testes: 6 em verde.
-- **research:** ação de auto-evolução (`harness/improve/research.py`): `propose_research` acha o kind com mais falhas repetidas no ledger (determinístico; sem gradiente → None), `apply_research` passa pelo genome check fail-closed ANTES do backend e escreve `skills/<slug>.md` atomicamente. Registro via Action registry em `improve/target.py`. Testes: `tests/test_research.py`.
+No benchmark score is claimed. Nothing here has been run against SWE-bench or
+any public suite, and no such number should be added to the docs without the
+command and output pasted next to it.
 
-Suite completa pós-sprint: 428 passed, 2 deselected.
+## Live (load-bearing, covered by tests, used by the loop)
 
-## Escada evolutiva (sprint 2) — 2026-08-03
+- **run_graph** with real ruler nodes: `provision` freezes KPI specs, BEFORE
+  values and the genome tamper fingerprint; `measure` collects AFTER with those
+  frozen specs; `gate` calls `ruler/gate.py` (tamper → revert, red verify →
+  retry, KPI regression → revert, else accept); retry becomes `escalate_human`
+  at the attempt ceiling. Policy in `config/graph.toml`, fail-open per field.
+- **Declared topology and workflows**: `config/topology.toml` plus
+  `config/workflows/{hotfix,deep}.toml`, validated fail-closed against the
+  `NODE_IMPLS` whitelist; any failure falls back to the built-in topology with
+  one stderr line.
+- **ruler**: wilson, kpi, verify (exit code is the verdict; log written to
+  `$HARNESS_DATA_DIR/logs/<run_id>/`, outside the workspace), note, gate.
+  Knobs in `config/ruler.toml`, each falling back to a frozen default.
+- **genome + tamper**: 33 immutable patterns, fail-closed check before any
+  write, fingerprint compared at the gate.
+- **routing**: orthogonal kinds plus a Wilson prior keyed on
+  `(kind, tier, backend)`; tier escalation per attempt.
+- **governor**: run/cycle deadlines, `cost_cap_usd`, `turn_taper`, explore
+  budget and action bench with expiry. Pure functions, injected clock,
+  fail-open per field; mutating it requires the meta-exam.
+- **autopilot + 9 actions** (`research`, `codegen`, `synthesize`, `redteam`,
+  `topology`, `workflow`, `evolve`, `skill_prune`, `prompt`), all writing
+  atomically and only after the genome check.
+- **bandit policy** over KEEP rate keyed on `(kind, action)`, deterministic,
+  consuming the governor's explore budget and bench list.
+- **sealed exam**: `improve/exam.py` discovers `benchmarks/sealed/*/unit.toml`
+  and runs each through `run_unit`; fail-closed (no units, or any exception, is
+  False). Executor configured in `config/ruler.toml` `[exam]`, default `mock`.
+- **meta_check**: changing the judge (`config/ruler.toml`) or the boss
+  (`config/governor.toml`) returns `allowed`/`quarantined`/`blocked` and needs a
+  green sealed exam plus an explicit human ack.
+- **skills**: load/select/render per kind, injected into the deepagents system
+  prompt; `skill_usage` table plus Wilson-lower-bound lift and pruning to
+  `skills/attic/`.
+- **lineage**: `data/lineage.jsonl` plus `harness lineage`, tolerant to a
+  malformed line, orphan becomes root, enriched with verdicts from `mutations`.
+- **real projects**: `harness init` / `add` / `queue` / `status` against actual
+  git repos, one worktree and one branch per unit.
+- **triggers**: JSON inbox with `done/`/`bad/` quarantine, ledger and inbox
+  pollers, and a fail-closed HTTP webhook (403 without a token, per-IP rate
+  limit, body ceiling).
+- **report**: `harness report` joins runs, mutations, skill usage and lineage
+  into markdown; every section is fail-open and degrades to "(no data)".
+- **doctor**: 17 checks including the evolution surfaces (skills, topology,
+  actions, ruler, mcp, lineage, executor).
 
-- **topology:** topologia do run_graph vira dado — `harness/graph/topology.py` (whitelist `NODE_IMPLS` c/ nó novo `reflect` pass-through, `load_spec`/`compile_spec` fail-closed via `TopologyError`); `build_run_graph` tenta `config/topology.toml`, qualquer falha → 1 linha no stderr + topologia embutida inalterada. Toml shipado reproduz a topologia atual. 26 passed.
-- **evolve:** `harness/evolve` — population PBT (`mutate_config`/`crossover`/`run_population`, seleção por Wilson lower bound, elitismo 25%) + archive MAP-Elites em sqlite próprio (`data/archive.sqlite`, nichos `(kind, cost_bucket)`). Não registrado no Action registry ainda. 7 passed.
-- **codegen:** zona de código mutável `plugins/` (seed `kpi_lines.py`) + `harness/improve/codegen.py`: `propose_code_mutation` (genome check fail-closed, `ast.parse`, escrita atômica, linhagem em `data/lineage.jsonl`) e `judge_code_mutation` (exame injetado; DISCARD restaura/apaga). `plugins/**` agora mutável no genoma. 39 passed.
-- **meta-ruler:** knobs do juiz em `config/ruler.toml` (`[gate].kpi_regression_tolerance`, default congelado 0.0 em qualquer falha de leitura); `meta.py` c/ `meta_check` (allowed/quarantined/blocked — mudar o juiz exige exame selado + ack humano). 64 passed.
-- **synthesize:** `synthesize_from_failures` gera exames de quarentena (`benchmarks/quarantine/`) a partir de runs falhas/revertidas do ledger; `harness seal <name> --yes` move quarantine → sealed (selar é ato humano). `benchmarks/quarantine/**` agora mutável no genoma; `sealed/**` segue imutável. 16 passed.
+## Experimental (works, thin evidence, expect the shape to change)
 
-## Ciclo fechado (sprint 3) — 2026-08-03
+- **Pareto gate** (`ruler/pareto.py`): shipped `enabled = false`. Turning it on
+  makes a Wilson KEEP that regressed cost or wall time INCONCLUSIVE. Not yet
+  exercised by a long run, so the tolerances (10%/10%) are guesses.
+- **coevolve / frontier** (POET): the frontier screening runs candidates with
+  the mock backend by default, so "the harness fails this" currently means "the
+  mock path fails this". Useful as a curriculum signal, not as a difficulty
+  measurement.
+- **redteam**: counter-examples land in quarantine as candidate exams. Whether
+  the model actually finds real instruction bugs (rather than restating the
+  skill) has not been measured across enough cycles to tell.
+- **evolve (PBT + MAP-Elites)**: fitness is the real gate verdict, and the
+  archive works, but the population sizes that have actually been run are tiny
+  (pop 4, 1 generation). No claim about convergence.
+- **episodic memory**: recall is wired into the deepagents system prompt and
+  writes happen on failure in `run_graph`. Fail-open everywhere, but see the
+  divergence gap below.
+- **ui-verify**: asset and screenshot-size checks are deterministic and cheap;
+  `--ask` (a model looking at the screenshot) is opt-in, costs ~$0.01 per call,
+  and has no accuracy measurement behind it.
+- **MCP tools**: `config/mcp.toml` is read and any failure degrades to `[]`.
+  Only tested against small local servers.
+- **export / import**: the bundle format (skills plus routing prior) has no
+  version field yet. Treat it as same-version-only transfer.
 
-- **wiring:** `harness/improve/actions.py` — 3 adapters no padrão research/codegen: `synthesize` (propose deduplica falhas do history; apply delega a `synthesize_from_failures`), `topology` (propose insere nó `reflect` da whitelist numa aresta linear, determinístico; apply = genome_check → `compile_spec` → escrita atômica, spec inválida recusa sem tocar disco), `evolve` (propose = `population.mutate_config` sobre `config/models.toml` com rng seedado de sha256(thread_id, cycle); apply = genome_check → dump TOML c/ roundtrip-check → escrita atômica). `target.actions()` registra os 3 + tentativas guardadas (ImportError/AttributeError) de `skills.attribution` e `improve.prompt_evolve`. Autopilot `_apply` roda `meta.meta_check(human_ack=False)` antes de qualquer escrita; exame selado injetável via `configurable[CFG_SEALED_EXAM]` (default fail-closed `lambda: False`); quarantined/blocked → stop/escalate c/ `evidence.meta`. 77 passed + 54 vizinhas.
-- **e2e:** `tests/test_e2e_evolution.py` — 7 testes, 4 fios: ciclo research (ledger→skill→injeção por kind, sem vazar pra outro kind), ciclo codegen (genoma REAL, KEEP/DISCARD, lineage encadeada), guardrails (GenomeViolation em `harness/ruler/**` sem efeito colateral; falha → unit de quarentena carregável), topologia declarada (`reflect` aparece entre plan e route). Suite inteira: 499 passed, 2 deselected. Nota documentada: DISCARD também entra em lineage.jsonl (append antes do veredito).
-- **attribution:** `harness/skills/attribution.py` — tabela `skill_usage` no `data/runs.sqlite` (store.py intocado), `record_usage` idempotente, `lift()` com Wilson lower bound nos dois braços, `prune_candidates` (min_trials nos dois braços), action `skill_prune` (apply move pra `skills/attic/`, nunca deleta). Backend deepagents grava uso pós-`select_skills` e prependa `prompts/executor.md` ao system_prompt quando existe. Limitação: join usa session_id quando run_id falta — id divergente dilui o lift, nunca infla. 31 passed.
-- **prompt-evolve:** ação `prompt` (PromptBreeder-lite) em `improve/prompt_evolve.py` — 4 operadores determinísticos, propose fail-closed (não escreve), apply atômico com before_text guardado, revert byte a byte. `prompts/executor.md` = prompt-base evoluível do executor. Corte anotado: sem lineage pra prompts (não pedido). 11 passed.
-- **lineage:** `harness/improve/lineage.py` + subcomando `harness lineage --file --db --limit` — load tolerante a linha torta, árvore com órfão virando raiz, enrich com verdict da tabela mutations (não cria DB ausente), render ASCII. 40 passed (lineage + cli run/ab/gate).
+## Known gaps
 
-Aceites rodados de verdade pelos builders; suite completa pós-sprint: 499 passed, 2 deselected.
+- **Episodic write/recall DB divergence in A/B.** `run_graph` records failures
+  into the run's ledger DB, while the deepagents backend recalls from the
+  default `$HARNESS_DATA_DIR` DB. When an A/B fans out into a temporary
+  `data_dir`, the write and the read hit different databases, so recall silently
+  returns nothing for that arm. It never returns *wrong* memories — it returns
+  none — but any measurement of "does memory help" inside an A/B is currently
+  measuring the empty case.
+- **`harness run --max-turns` does not apply in project mode.** A unit with
+  `project =` is routed through the graph, which takes its turn ceiling from
+  `config/graph.toml` plus the governor. The CLI prints a warning on stderr
+  rather than silently half-obeying; `--repo` is ignored there for the same
+  reason (the workspace is the registered repo's worktree).
+- **`task_s01` / `task_s02` are waiting on human review.** They sit in
+  `benchmarks/sealed/` without a `unit.toml`, so the exam does not discover
+  them. Promoting them into the exam is a deliberate human act, and until
+  someone reviews them the sealed exam consists of `sealed_s01`/`sealed_s02`
+  only — two deterministic mock units, which is a smoke test, not a hard exam.
+- **The default sealed exam runs on `mock`.** `[exam] backend = "mock"` proves
+  the graph runs end to end for $0; it does not prove a model can do the task.
+  Codegen mutations are therefore judged by a weaker exam than the one the
+  design assumes. Pointing `[exam]` at a real backend requires the meta-exam.
+- **DISCARD also appears in `lineage.jsonl`.** The lineage append happens before
+  the verdict, so the tree contains rejected mutations. Reading it as "what was
+  kept" is wrong; join with the `mutations` table for verdicts (`harness lineage
+  --db` does this).
+- **Skill attribution joins on `session_id` when `run_id` is missing.** A
+  divergent id dilutes the measured lift; it never inflates it.
+- **No mutation→action mapping in the `harness actions` tally.**
+  `MutationRow` carries only `rule_id`, and the action name travels in the
+  `note`, so the KEEP/DISCARD scoreboard is reconstructed from text.
+- **No lineage for prompt mutations.** `improve/prompt_evolve.py` keeps
+  `before_text` for a byte-exact revert but writes no lineage entry.
+- **`harness init` rewrites `config/projects.toml` from scratch** and drops the
+  header comments (`projects._write`). Re-running init means restoring that
+  header by hand.
+- **`config/triggers.toml` is not shipped.** The webhook is therefore off by
+  default, which is intended, but it also means the HTTP path has no
+  out-of-the-box smoke test in the repo.
+- **Legacy history is not usable as a prior.** `legacy/results.tsv` has no
+  backend/kind columns; feeding it into the new Wilson prior would poison it.
 
-## Sprint final (2026-08-03)
+## Rules that do not change
 
-- **exam:** exame selado real — `harness/improve/exam.py`: `run_sealed_exam(backend='mock', model='', sealed_dir=None, data_dir=None) -> bool` e `exam_report(...) -> list[{id, passed}]`. Descoberta via `benchmarks/sealed/*/unit.toml`; cada unidade roda por `run_unit` com thread_id único; passed = gate `accept`. Fail-closed: sem unidades descobríveis → False + 1 linha stderr; exceção (unidade ou descoberta) → False. Seeds `sealed_s01`/`sealed_s02` criadas (determinísticas no mock); `task_s01`/`s02` intactos, fora do exame (sem `unit.toml` — entrar exige ato humano). `tests/test_exam.py`: 7 verdes; regressão de 103 testes vizinhos verde.
-- **policy:** `harness/improve/policy.py` — bandit Wilson+UCB sobre KEEP-rate por ação, determinístico (rng seedado por `thread_id:cycle`), ação sem amostra nunca órfã. Plugado no autopilot: `_pick_target` escolhe via policy quando o chamador não fixa (param `action`/`CFG_ACTION`); `_record` grava `action=<nome>` no note da mutação (schema intocado) fechando o feedback — só em veredito concluído; rota forçada fica fora do bandit. Default do `CFG_SEALED_EXAM` agora é o exame real (`_default_sealed_exam` lazy, amarrado à raiz do ciclo; ImportError → False). 44+99 testes verdes. Pendente anotado: roteamento de backend real do exame default (fica `mock`).
-- **surface:** doctor +7 checks de evolução (skills, topology, actions, ruler, mcp, lineage, executor) → 17 checks, 0 falhas/avisos no repo. CLI: `harness skills [--lift]` (nome/kinds/descrição; lift com com=/sem=/lift=) e `harness actions` (nomes + placar global KEEP/DISCARD). Corte anotado: sem mapeamento mutação→ação no placar (MutationRow só carrega rule_id). `tests/test_doctor.py` +8; 36 verdes.
-
-Suite completa pós-sprint: 558 passed, 2 deselected.
-
-Fechamento: o harness agora escolhe sozinho qual das 7 evoluções tentar (bandit por KEEP-rate), julga com exame selado real fail-closed, e expõe tudo em doctor/skills/actions/lineage.
-
-Fiação feita (não é PR novo): o nó `route` do run_graph consome `routing/router.select()` no modo `auto` (`run_unit(route="auto")`, `harness run --route auto`), com escalação de tier por attempt; o modo `manual` — default, backend fixado pelo chamador — continua como era.
-
-## Verificação global (última: 2026-08-02, 8/8 PASS)
-
-`uv sync --extra deepagents && uv run --extra deepagents pytest -q` → 255 passed. Resume kill-9 real passa. `harness bench provision --n 10` p50=0.092s. `harness ab --a 5/6 --b 6/6` → INCONCLUSIVE com intervalos. E2E `harness run --unit tests/fixtures/tiny_fix --backend deepagents --model ollama:qwen2.5:3b` → accept, custo $0. Genome bloqueia patch em `harness/ruler/**`.
-
-## Regras que não mudam
-
-- Régua nunca no genoma mutável; loop calibra só `config/*.toml`.
-- LangSmith VETADO (tracing off no bootstrap; `LANGGRAPH_STRICT_MSGPACK=true`).
-- Nota humana: agente NUNCA escreve; ≥3 notas pra valer como KPI.
-- Adotar > reinventar: capacidade nova só com dor medida no ledger.
-- Histórico velho (`legacy/results.tsv`) não entra no prior novo — envenenaria (sem colunas backend/kind).
+- The ruler never sits in the mutable genome; the loop calibrates `config/*.toml`
+  only.
+- LangSmith is **vetoed**: tracing off at bootstrap, `LANGGRAPH_STRICT_MSGPACK=true`.
+- The human note is human. An agent never writes one, and it takes >= 3 notes
+  to count as a KPI.
+- Adopt over reinvent: a new capability needs a pain measured in the ledger.
+- Sealing an exam (quarantine → sealed) is a human act.

@@ -1,3 +1,6 @@
+> Historical planning document (Portuguese). Kept for provenance; see README.md
+> for current state.
+
 > SUPERSEDED 2026-08-02: ver STATUS.md (pivô LangGraph)
 
 # Self-Improving Harness — PLAN.md

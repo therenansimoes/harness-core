@@ -1,145 +1,67 @@
 # harness-core
 
-Harness de agente **provider-agnostic** que se auto-melhora com prova. O núcleo
-(`harness/`) não conhece vendor: quem executa é um **backend** plugável, e o
-executor default é [deepagents](https://github.com/langchain-ai/deepagents)
-sobre [LangGraph](https://github.com/langchain-ai/langgraph). Roda de graça com
-Ollama local; a mesma unidade roda em qualquer backend registrado.
+A **provider-agnostic** agent harness that improves itself with proof. The core
+(`harness/`) knows no vendor: execution happens in a pluggable **backend**, and
+the default executor is
+[deepagents](https://github.com/langchain-ai/deepagents) on
+[LangGraph](https://github.com/langchain-ai/langgraph). It runs for free against
+a local Ollama or LM Studio model; the same unit of work runs on any registered
+backend.
 
-O que o harness acrescenta a um loop de agente comum é a **régua**: verify
-determinístico, KPI medido antes/depois, um gate que concentra a decisão,
-veredito de Wilson no A/B e um genoma que declara o que o próprio loop **não**
-pode mudar. Sem isso, "o agente melhorou" é opinião.
+What the harness adds on top of an ordinary agent loop is the **ruler**:
+deterministic verify, KPIs measured before and after, one gate that concentrates
+the decision, a Wilson verdict on A/B, and a genome that declares what the loop
+itself may **not** change. Without that, "the agent got better" is an opinion.
 
-Licença MIT (`LICENSE`). Python ≥ 3.11.
+MIT licensed (`LICENSE`). Python >= 3.11.
 
-## Arquitetura
-
-```
-harness/
-  cli.py        run · ab · backends · improve · bench · replay · lineage · seal · doctor · skills · actions
-  types.py      UnitSpec ExecRequest ExecResult Selection Verdict RunRow MutationRow
-  backends/     base(Protocol) registry(entry point) mock deepagents claude_code auth/
-  graph/        run_graph (topologia de 1 run)  autopilot_graph (1 ciclo de melhoria)
-  ruler/        wilson kpi verify note gate      ← quem mede e quem decide
-  genome/       genome tamper                    ← o que pode mudar
-  routing/      kinds (o QUE é)  router (QUANTO custa)
-  workspace/    provision (git worktree + symlink de cache)
-  improve/      target policy mutate escalate research codegen meta synthesize exam ← o que vale a pena mudar
-  evolve/       population (PBT) + archive (MAP-Elites)
-  skills/       load/select/render de skills, injetadas no prompt por kind
-  ledger/       store (SQLite; TSV é export)     ← fonte de verdade das runs
-skills/*.md     skills destiladas (frontmatter TOML + markdown), mutáveis pelo loop
-plugins/        única zona de CÓDIGO mutável pelo loop, julgada por exame selado
-config/*.toml   models kinds tools catalog genome graph mcp topology ruler ← a zona calibrável pelo loop
-```
-
-`config/mcp.toml` declara servidores MCP opcionais (stdio/streamable_http, via
-`langchain-mcp-adapters`); ferramentas viram `tools=` do backend deepagents,
-qualquer falha degrada para lista vazia. `improve/research.py` é a ação de
-auto-evolução que destila falhas repetidas do ledger em `skills/<slug>.md`,
-sempre passando pelo genome check fail-closed antes de escrever.
-
-**run_graph** (`harness/graph/run_graph.py`) é a topologia de uma run:
-`plan → route → provision → execute → verify → measure → gate →
-[accept | retry → route | escalate | revert] → record → END`. Checkpoint em
-`SqliteSaver` com `thread_id = run_id` e nós idempotentes: matar o processo no
-meio do `execute` e reinvocar a mesma thread completa a run sem executar duas
-vezes (`tests/test_resume.py` faz isso com `kill -9` de verdade). Os NÓS são
-imutáveis no genoma, mas a fiação agora é dado: `config/topology.toml` declara
-nodes/edges validados fail-closed contra a whitelist de
-`harness/graph/topology.py` (inclui o nó `reflect` pass-through), e qualquer
-falha cai na topologia embutida com 1 linha no stderr. `measure` e `gate` rodam a
-régua de verdade: `provision` congela baseline (specs+valores de KPI do ANTES e
-fingerprint de tamper do genoma, padrões congelados — a run não redefine a
-própria régua), `measure` coleta o DEPOIS e `gate` chama o combinador de
-`ruler/gate.py`. A política mora em `config/graph.toml` (mutável:
-`max_attempts`, `verify_timeout_s`, toggles de nó), lida em runtime com
-defaults fail-open. Detalhes em `docs/ARCHITECTURE.md`.
-
-**ruler** (`harness/ruler/`) é a régua, e é uma peça só de propósito.
-`verify.py` roda o `verify_cmd` da unidade (sucesso = exit 0, nunca o que o
-agente diz); `kpi.py` coleta os KPIs do projeto com as specs lidas **antes** da
-mudança; `wilson.py` dá o intervalo e o veredito KEEP/DISCARD/INCONCLUSIVE;
-`note.py` guarda a nota humana 1–5, o único KPI que o harness não sabe medir
-sozinho; `gate.py` combina tudo num lugar só: tamper → `revert`, verify
-vermelho → `retry`, KPI regrediu → `revert`, senão `accept`. Tanto
-`cli.run_once` quanto o nó `gate` do run_graph passam por esse combinador.
-Os knobs do juiz moram em `config/ruler.toml` (hoje só
-`[gate].kpi_regression_tolerance`; qualquer leitura torta cai no default
-congelado 0.0) — e mudar esse arquivo passa por `improve/meta.py::meta_check`,
-que exige exame selado verde + ack humano (`allowed`/`quarantined`/`blocked`).
-
-**genome** (`harness/genome/` + `config/genome.toml`) separa o mutável do
-imutável. Imutável: `harness/ruler/**`, `harness/genome/**`, `harness/routing/**`,
-`harness/graph/**`, `uv.lock`, `benchmarks/sealed/**`. Mutável: `config/*.toml`,
-`prompts/**`, `skills/**`, `plugins/**` e `benchmarks/quarantine/**`.
-`tamper.py` sabe tirar fingerprint antes e comparar depois, e
-violação que chegue ao gate vira `revert` — o run_graph tira o fingerprint no
-`provision` e compara no `gate`; o `genome_check` do autopilot continua
-fail-closed ANTES de escrever.
-
-**router** (`harness/routing/`) separa duas perguntas que o harness velho
-misturava: `kinds.py` classifica **o que** a unidade é (`code`, `content`,
-`config`, `refactor`, `infra`) de forma determinística, e `router.py` escolhe
-**quanto** ela pode custar (tier `t0`/`t1`/`t2` de `config/models.toml`). O
-prior de sucesso é keyed em `(kind, tier, backend)` — histórico ruim de
-`(code, t0)` não condena `(content, t0)` — e Wilson abaixo do `prior_floor`
-sobe um tier, assim como falha repetida escala por attempt.
-
-**autopilot** (`harness/graph/autopilot_graph.py` + `harness/improve/`) é o
-loop de melhoria: `pick_target (policy escolhe a ação quando o chamador não
-fixa) → propose → genome_check → apply → fanout_ab →
-score → [KEEP: commit_cfg | DISCARD/INCONCLUSIVE: revert_cfg] → attribute →
-record`. Qualquer nó pode desviar para `escalate`, que é `interrupt()` do
-LangGraph: o grafo para e espera um humano em vez de improvisar.
-
-## Quickstart (Ollama, custo $0)
+## Quickstart (local model, $0)
 
 ```bash
 uv sync --extra deepagents
-ollama pull qwen2.5:3b      # laptop de 18GB: modelo local ≤ 8B (30B trava a máquina)
+ollama pull qwen2.5:3b      # 18GB laptop: keep the local model <= 8B
 ```
 
-Backends registrados e preflight (determinístico, zero chamada de LLM):
+Registered backends and preflight (deterministic, zero LLM calls):
 
 ```console
 $ uv run harness backends
 claude_code      ok             2.1.220 (Claude Code)
-deepagents       ok             deepagents importável
-mock             ok             mock sempre disponível
+deepagents       ok             deepagents importable
+mock             ok             mock always available
 ```
 
-A terceira coluna depende da máquina: sem o extra `deepagents` instalado a
-linha vira `indisponível`, e sem o CLI oficial a do `claude_code` também.
+The third column depends on the machine: without the `deepagents` extra the line
+becomes `unavailable`, and the same happens to `claude_code` without the
+official CLI installed.
 
-Uma unidade é um diretório com `unit.toml` (`id`, `prompt`, `verify_cmd`,
-`kind` opcional). Rodando a fixture `tiny_fix` com o modelo local:
+A unit of work is a directory with a `unit.toml` (`id`, `prompt`, `verify_cmd`,
+optional `kind`). Running the `tiny_fix` fixture against the local model:
 
 ```bash
 uv run harness run --unit tests/fixtures/tiny_fix \
   --backend deepagents --model ollama:qwen2.5:3b
 ```
 
-Modelo `ollama:*` custa $0 na tabela `[pricing]` de `config/models.toml`, então
-a linha do ledger sai com `cost_usd = 0.0`. A saída dessa run depende do modelo
-que você tem instalado e por isso não está colada aqui; o formato é o mesmo do
-exemplo com `mock` abaixo.
+An `ollama:*` model costs $0 in the `[pricing]` table of `config/models.toml`,
+so the ledger row lands with `cost_usd = 0.0`. That run's output depends on the
+model you happen to have installed, which is why it is not pasted here; the
+shape is the same as the `mock` example below.
 
-Deixando o router escolher:
+Letting the router choose:
 
 ```bash
 uv run harness run --unit tests/fixtures/tiny_fix --route auto
 ```
 
-`--route auto` imprime uma linha a mais antes da run
-(`route auto <unit> kind=… tier=… <backend> <model> [motivos]`) e é exclusivo
-com `--backend`/`--model` — quem escolhe é o router. **Atenção ao custo:** na
-config que vem no repo, `[router.kind] code = "t1"`, e o tier `t1` é
-`claude_code` (pago). Para um setup 100% local, aponte `code` para `t0` em
-`config/models.toml` ou fixe `--backend deepagents` na mão.
+`--route auto` prints one extra line before the run
+(`route auto <unit> kind=… tier=… <backend> <model> [reasons]`) and is mutually
+exclusive with `--backend`/`--model` — the router decides. **Cost warning:** in
+the shipped config `[router.kind] code = "t1"`, and tier `t1` is `claude_code`
+(paid). For a fully local setup, point `code` at `t0` in `config/models.toml` or
+pin `--backend deepagents` by hand.
 
-Tudo que não precisa de modelo roda com o backend `mock`, que é determinístico:
+Everything that needs no model runs on the deterministic `mock` backend:
 
 ```console
 $ uv run harness run --unit tests/fixtures/echo --backend mock
@@ -149,14 +71,16 @@ $ uv run harness run --unit tests/fixtures/tiny_fix --backend mock
 c103bdb4c96a tiny_fix mock retry verify_failed:exit=1 0.03s ledger#2
 ```
 
-(o `mock` só escreve o prompt num arquivo: `echo` passa, `tiny_fix` reprova no
-verify — é assim que o gate se prova sem gastar API).
+(`mock` only writes the prompt to a file: `echo` passes, `tiny_fix` fails
+verify — that is how the gate proves itself without spending on APIs.)
 
-Exit code do `harness run` é 0 quando o gate deu `accept`, 1 no resto. Os dados
-ficam em `$HARNESS_DATA_DIR` (default `data/`, gitignored):
-`runs.sqlite` (ledger), `checkpoints.sqlite`, `ws/` (worktrees das runs).
+`harness run` exits 0 when the gate says `accept`, 1 otherwise. Data lives under
+`$HARNESS_DATA_DIR` (default `data/`, gitignored): `runs.sqlite` (ledger),
+`checkpoints.sqlite`, `ws/` (per-run worktrees), `logs/<run_id>/` (verify logs,
+kept outside the workspace so a retry cannot read them as source), `inbox/`
+(event triggers), `lineage.jsonl`, `frontier.jsonl`, `archive.sqlite`.
 
-Outros comandos:
+Other commands:
 
 ```console
 $ uv run harness ab --a 5/6 --b 6/6
@@ -164,56 +88,208 @@ INCONCLUSIVE a=5/6 [0.44,0.97] b=6/6 [0.61,1.00]
 
 $ uv run harness bench provision --n 10
 provision n=10 p50=0.069s p95=0.072s
+
+$ uv run harness doctor
+… doctor checks=17 falhas=0 avisos=0
 ```
+
+## Architecture
+
+```
+harness/
+  cli.py        21 subcommands (table below)
+  types.py      UnitSpec ExecRequest ExecResult Selection Verdict RunRow MutationRow
+  backends/     base(Protocol) registry(entry point) mock deepagents claude_code auth/
+  graph/        run_graph (one run)  autopilot_graph (one improvement cycle)  topology
+  ruler/        wilson kpi verify note pareto gate    <- who measures and who decides
+  genome/       genome tamper                          <- what may change
+  routing/      kinds (WHAT it is)  router (HOW MUCH it may cost)
+  governor/     deadline, cost cap, turn taper, explore budget, action bench
+  workspace/    provision (git worktree + cache symlink), sealing
+  improve/      target policy mutate escalate research codegen meta synthesize
+                exam coevolve redteam workflow_action replay lineage
+  evolve/       population (PBT) + fitness (gate-scored) + archive (MAP-Elites)
+  skills/       load/select/render + attribution (per-skill lift)
+  memory/       episodic (FTS5 case-based recall of past failures)
+  triggers/     inbox (JSON files) + webhook (HTTP, fail-closed) + watch (polling)
+  projects.py   real git repos as targets; queue.py drives their queues
+  report.py     self-report for humans (runs, mutations, skills, lineage)
+  ledger/       store (SQLite; TSV is an export)      <- source of truth for runs
+skills/*.md     distilled skills (TOML frontmatter + markdown), loop-mutable
+prompts/        executor.md, the evolvable base prompt of the executor
+plugins/        the only loop-mutable CODE zone, judged by the sealed exam
+config/*.toml   models kinds tools catalog genome graph mcp topology ruler
+                governor projects + workflows/  <- the loop-calibrable zone
+benchmarks/     held_in (evaluation units) quarantine (candidates) sealed (the exam)
+```
+
+**run_graph** (`harness/graph/run_graph.py`) is the topology of a single run:
+`plan → route → provision → execute → verify → measure → gate →
+[accept | retry → route | escalate | revert] → record → END`. Checkpointing uses
+`SqliteSaver` with `thread_id = run_id` and idempotent nodes: killing the
+process mid-`execute` and re-invoking the same thread finishes the run without
+executing twice (`tests/test_resume.py` does that with a real `kill -9`). The
+nodes are immutable in the genome, but the wiring is data: `config/topology.toml`
+declares nodes/edges validated fail-closed against the whitelist in
+`harness/graph/topology.py` (including the pass-through `reflect` node), and any
+failure falls back to the built-in topology with one line on stderr. Named
+variants live in `config/workflows/*.toml` (shipped: `hotfix`, `deep`) and are
+loop-mutable through the `workflow` action.
+
+`provision` freezes the baseline (KPI specs and BEFORE values plus the genome
+tamper fingerprint, frozen defaults — a run does not redefine its own ruler),
+`measure` collects the AFTER with those frozen specs, and `gate` calls the
+combiner in `ruler/gate.py`. Run policy lives in `config/graph.toml`
+(`max_attempts`, `verify_timeout_s`, per-node toggles), read at runtime with
+fail-open defaults. Details in `docs/ARCHITECTURE.md`.
+
+**ruler** (`harness/ruler/`) is the ruler, and it is deliberately one piece.
+`verify.py` runs the unit's `verify_cmd` (success is exit 0, never what the
+agent claims) and writes the log to `$HARNESS_DATA_DIR/logs/<run_id>/`;
+`kpi.py` collects project KPIs using specs read **before** the change;
+`wilson.py` gives the interval and the KEEP/DISCARD/INCONCLUSIVE verdict;
+`pareto.py` is an opt-in second filter that turns a Wilson KEEP into
+INCONCLUSIVE when cost or wall time regressed beyond tolerance; `note.py` holds
+the 1–5 human note, the one KPI the harness cannot measure by itself; `gate.py`
+combines everything in a single place: tamper → `revert`, red verify → `retry`,
+KPI regression → `revert`, otherwise `accept`. Both `cli.run_once` and the
+run_graph `gate` node go through that combiner.
+
+The judge's knobs live in `config/ruler.toml`: `[gate].kpi_regression_tolerance`,
+`[pareto]` (disabled by default, matching historical behaviour), and `[exam]`
+(which backend/model executes the sealed exam; `mock` by default). Any malformed
+read falls back to the frozen default, and changing that file goes through
+`improve/meta.py::meta_check`, which requires a green sealed exam plus a human
+ack (`allowed`/`quarantined`/`blocked`).
+
+**genome** (`harness/genome/` + `config/genome.toml`) separates mutable from
+immutable. Immutable: `harness/ruler/**`, `harness/genome/**`,
+`harness/routing/**`, `harness/graph/**`, `uv.lock`, `benchmarks/sealed/**`.
+Mutable: `config/*.toml`, `config/workflows/**`, `prompts/**`, `skills/**`,
+`plugins/**`, `benchmarks/quarantine/**`. `tamper.py` fingerprints before and
+compares after, and a violation reaching the gate becomes `revert`; the
+autopilot's `genome_check` stays fail-closed BEFORE anything is written.
+
+**router** (`harness/routing/`) splits two questions the old harness conflated:
+`kinds.py` classifies **what** the unit is (`code`, `content`, `config`,
+`refactor`, `infra`) deterministically, and `router.py` chooses **how much** it
+may cost (tier `t0`/`t1`/`t2` from `config/models.toml`). The success prior is
+keyed on `(kind, tier, backend)` — a bad history for `(code, t0)` does not
+condemn `(content, t0)` — and a Wilson lower bound below `prior_floor` bumps a
+tier, as does repeated failure per attempt.
+
+**governor** (`harness/governor/`) is the boss: `config/governor.toml` sets the
+run and cycle wall-clock deadlines, the per-run `cost_cap_usd`, the
+`turn_taper` that shortens `max_turns` on each attempt, and the focus knobs
+(`explore_frac_start`/`end` melt exploration as the deadline approaches;
+`bench_after`/`bench_cycles` bench an action that keeps proposing without
+landing a KEEP, and return it after the expiry). All pure functions with `now`
+injected; every field is fail-open to a frozen default. Mutating
+`config/governor.toml` goes through the same meta-exam as the judge — the loop
+does not loosen its own deadline.
+
+**autopilot** (`harness/graph/autopilot_graph.py` + `harness/improve/`) is the
+improvement loop: `pick_target (the policy picks the action when the caller does
+not pin one) → propose → genome_check → apply → fanout_ab → score →
+[KEEP: commit_cfg | DISCARD/INCONCLUSIVE: revert_cfg] → attribute → record`. Any
+node can divert to `escalate`, which is LangGraph's `interrupt()`: the graph
+stops and waits for a human instead of improvising.
+
+## Subcommands
+
+| command | what it does |
+|---|---|
+| `run` | run one unit with a backend (`--route auto` lets the router pick; `--project` runs in a worktree of the registered repo) |
+| `ab` | Wilson verdict between two arms |
+| `init` | register a real git repo as a project (writes `config/projects.toml`) |
+| `status` | per project: queue/done/stuck plus total ledger spend |
+| `queue` | drain a project's queue through the graph, one unit at a time (accept → `queue/done/`, stuck → `queue/stuck/`) |
+| `backends` | list registered backends plus preflight |
+| `improve` | improvement cycle: mutate config and test it in A/B |
+| `replay` | attribute a historical delta to a mutation |
+| `lineage` | genealogy tree of code mutations with verdicts |
+| `report` | self-report of the loop (runs, mutations, skills, lineage) |
+| `ui-verify` | UI verify: serve the dist, check loadable assets, look at the screenshot |
+| `export` | pack skills plus routing prior into a `.tgz` bundle |
+| `import` | bring skills plus prior in from another project's bundle |
+| `doctor` | local diagnosis: backends, genome, config, data, tracing (17 checks) |
+| `skills` | list loaded skills (name, kinds, description; `--lift` adds attribution) |
+| `actions` | list registry actions plus their KEEP/DISCARD tally from the ledger |
+| `add` | author a unit from a natural-language task (`--ui` appends a `ui-verify` step) |
+| `seal` | promote a quarantine exam into `benchmarks/sealed` (human act, `--yes`) |
+| `frontier` | list quarantine exams the current harness still fails |
+| `evolve` | PBT over configs: score each individual at the gate, archive the elites |
+| `bench` | measure the cost of a harness operation |
 
 ## Backends
 
-Um backend implementa três métodos (`harness/backends/base.py`):
-`capabilities()`, `preflight()` — determinístico, **zero chamada de LLM** — e
-`execute(ExecRequest) -> ExecResult`. O núcleo não conhece nada além disso.
+A backend implements three methods (`harness/backends/base.py`):
+`capabilities()`, `preflight()` — deterministic, **zero LLM calls** — and
+`execute(ExecRequest) -> ExecResult`. The core knows nothing beyond that.
 
-| backend | o que é | notas |
+| backend | what it is | notes |
 |---|---|---|
-| `mock` | determinístico, escreve o prompt num arquivo | é o backend dos testes; não toca rede |
-| `deepagents` | default; modelo por `init_chat_model` (`ollama:…`, ou qualquer provider do LangChain) | único arquivo do repo que importa LangChain, e o import é lazy |
-| `claude_code` | subprocess do CLI oficial; `resumable=True` via `--resume` | exige o CLI instalado e autenticado; gasta dinheiro |
+| `mock` | deterministic, writes the prompt to a file | the backend of the test suite; touches no network |
+| `deepagents` | default; model via `init_chat_model` (`ollama:…`, or any LangChain provider) | the only file in the repo that imports LangChain, and the import is lazy |
+| `claude_code` | subprocess of the official CLI; `resumable=True` via `--resume` | requires the CLI installed and authenticated; costs money |
 
-Backend de terceiro não precisa tocar no núcleo: publique um pacote que se
-anuncie no entry point `harness.backends`.
+A third-party backend does not need to touch the core: publish a package that
+advertises itself on the `harness.backends` entry point.
 
 ```toml
-# pyproject.toml do SEU pacote
+# pyproject.toml of YOUR package
 [project.entry-points."harness.backends"]
-meu_backend = "meu_pacote.backend:MeuBackend"
+my_backend = "my_package.backend:MyBackend"
 ```
 
-`harness.backends.registry` funde os entry points instalados com os embutidos
-(e com `registry.register(nome, factory)`, que é o caminho dos testes). Depois
-do `pip install`, `harness backends` já lista o seu.
+`harness.backends.registry` merges installed entry points with the built-ins
+(and with `registry.register(name, factory)`, which is what tests use). After
+`pip install`, `harness backends` already lists yours.
 
-Auth segue o mesmo padrão, no entry point `harness.auth`
-(`AuthAdapter`: `env()` + `check()`). O repo shippa só o `NullAuth`.
+Auth follows the same pattern on the `harness.auth` entry point (`AuthAdapter`:
+`env()` + `check()`). The repo ships only `NullAuth`.
 
-> Adapter de OAuth de assinatura em cliente de terceiro é **área cinzenta de
-> ToS e está fora deste repo** — existe só o slot `harness.auth` para quem
-> quiser publicar o próprio, por conta e risco próprios.
+> An OAuth adapter for a third party's subscription client is a **ToS grey area
+> and is out of scope for this repo** — only the `harness.auth` slot exists, for
+> whoever wants to publish their own, at their own risk.
 
-## Auto-evolução
+`config/mcp.toml` declares optional MCP servers (stdio/streamable_http, via
+`langchain-mcp-adapters`); their tools become the deepagents backend's `tools=`,
+and any failure degrades to an empty list.
 
-O ciclo completo, num parágrafo: a **policy** (`improve/policy.py`, bandit
-Wilson+UCB sobre o KEEP-rate histórico de cada ação, determinística com rng
-seedado por `thread_id:cycle`) escolhe qual das 7 ações do registry tentar →
-a ação faz `propose` → o apply passa por **genome check** fail-closed e, se a
-mudança toca o juiz, por `meta_check` (que exige **exame selado** verde +
-ack humano) → a mudança é julgada por **A/B alternado** (Wilson) ou pelo exame
-selado → `KEEP` commita, `DISCARD`/`INCONCLUSIVE` revertem → o veredito volta
-para a **linhagem** (`data/lineage.jsonl`), para a **atribuição** por skill e
-para o próprio bandit (o nome da ação viaja no `note` da mutação). O loop não
-inventa mudança: ele escolhe de um catálogo declarado
-(`config/catalog.toml`). Cada `[[rule]]` é uma hipótese falsificável sobre um
-knob — arquivo alvo, chave, `from`, `to`, e o `fails_on` que amarra a regra a
-`exit_reason` reais do ledger. `improve/target.py` ordena por ganho esperado
-(`freq(falha) × custo_médio × prior`) e o `improve/mutate.py` aplica.
+## Self-evolution
+
+The full cycle in one paragraph: the **policy** (`improve/policy.py`, a
+Wilson+UCB bandit over each action's historical KEEP rate, keyed on
+`(kind, action)`, deterministic with an rng seeded by `thread_id:cycle`, and
+consuming the governor's explore budget and bench) picks which of the registry's
+9 actions to try → the action runs `propose` → `apply` goes through a
+fail-closed **genome check** and, when the change touches the judge, through
+`meta_check` (which demands a green **sealed exam** plus a human ack) → the
+change is judged by an alternating **A/B** (Wilson) or by the sealed exam →
+`KEEP` commits, `DISCARD`/`INCONCLUSIVE` revert → the verdict flows back into
+the **lineage** (`data/lineage.jsonl`), into per-skill **attribution**, and into
+the bandit itself (the action name travels in the mutation's `note`).
+
+The registered actions (`uv run harness actions`):
+
+| action | what it mutates | judged by |
+|---|---|---|
+| `research` | distils repeated ledger failures into `skills/<slug>.md` | A/B |
+| `codegen` | Python in `plugins/**` | sealed exam |
+| `synthesize` | turns failed runs into quarantine exams | A/B |
+| `redteam` | attacks its own skills/prompt, files counter-examples in quarantine | A/B |
+| `topology` | node/edge wiring in `config/topology.toml` | A/B |
+| `workflow` | named workflows in `config/workflows/*.toml` | A/B |
+| `evolve` | knobs in `config/models.toml` via population mutation | A/B |
+| `skill_prune` | moves low-lift skills to `skills/attic/` (never deletes) | A/B |
+| `prompt` | `prompts/executor.md` (PromptBreeder-lite, 4 deterministic operators) | A/B |
+
+Config mutations are not invented from scratch: they come from a declared
+catalog (`config/catalog.toml`). Each `[[rule]]` is a falsifiable hypothesis
+about one knob — target file, key, `from`, `to`, and the `fails_on` that binds
+the rule to real ledger `exit_reason`s. `improve/target.py` orders by expected
+gain (`freq(failure) × mean cost × prior`) and `improve/mutate.py` applies.
 
 ```console
 $ uv run harness improve --cycles 1 --backend mock --unit tests/fixtures/echo
@@ -221,115 +297,72 @@ ciclo0 max_attempts_3_to_4 router.max_attempts 3->4 INCONCLUSIVE a=6/6 b=6/6 del
 improve ciclos=1 mutações=1 intervenções=0 intervention_rate=0.00 (n=15)
 ```
 
-A mutação é medida em A/B com os braços **alternados** (A,B,A,B — ambiente que
-degrada no meio pune os dois igual) e o veredito é o de Wilson: `KEEP` commita
-a config, `DISCARD`/`INCONCLUSIVE` revertem na hora. Sucesso do braço é a
-decisão do gate, não o "terminei" do executor.
+Beyond the per-mutation loop there are three longer arcs:
 
-Sem gradiente, o loop **para e chama gente** — em vez de mutar qualquer coisa
-para parecer produtivo (mesmo comando, outro ledger: sem padrão de falha que
-sustente uma regra, não há mutação que valha o experimento):
+- **Exam and curriculum.** `improve/exam.py` runs `benchmarks/sealed/*/unit.toml`
+  through `run_unit` and returns pass/fail per unit, fail-closed (no
+  discoverable units, or any exception, means False). `improve/coevolve.py`
+  (POET-style) screens `benchmarks/quarantine/` and reports the *frontier* —
+  the candidates today's harness still fails — into `data/frontier.jsonl`;
+  `harness frontier` prints it. Sealing a candidate stays a human act
+  (`harness seal <name> --yes`).
+- **Population evolution.** `harness evolve` runs PBT over config individuals
+  where fitness is the gate's own verdict (`RunRow.ok`, the same thing the A/B
+  counts), selects by Wilson lower bound with 25% elitism, and archives elites
+  into MAP-Elites niches `(kind, cost_bucket)` in `data/archive.sqlite`.
+- **Memory and transfer.** `harness/memory/episodic.py` keeps an FTS5 index of
+  past failure traces in the ledger DB; the deepagents backend recalls the top
+  matches for the unit's kind and prepends them to the system prompt (fully
+  fail-open: no FTS5 build means a silent no-op). `harness export` / `harness
+  import` move skills plus the routing prior between projects as a `.tgz`.
 
-```console
-$ uv run harness improve --cycles 1 --backend mock --unit tests/fixtures/echo
-escalate no_gradient thread=improve-80f6a036afbe evidence={'history': 14, 'catalog': 3, 'applicable': 3}
-improve ciclos=0 mutações=0 intervenções=0 intervention_rate=0.00 (n=14)
-```
+## Real projects
 
-São quatro motivos de escalação (`harness/improve/escalate.py`):
-`no_gradient`, `genome_violation`, `deadline`, `error`. A parada é
-`interrupt()` do LangGraph, então ela sobrevive ao fim do processo: o
-`thread=` da linha é o que se responde depois.
+The harness is not limited to fixtures. `harness init <repo> --name <name>`
+registers a real git repo in `config/projects.toml` (optional `build_cmd`,
+`verify_default`, `queue_dir`); `harness add "<task>" --project <name>` authors a
+`unit.toml` from a natural-language task using the repo's real context
+(README/package.json/tree), with `--ui` appending
+`harness ui-verify dist --expect-asset css` to the authored `verify_cmd`; and
+`harness queue --project <name>` drains the queue through the graph, one unit at
+a time, each in its own git worktree on an ephemeral branch. The queue is
+progressive: a unit that does not accept **stops** the loop, because the next one
+depends on it. Accepted work is delivered as branch `harness/<unit_id>` for human
+review and the unit moves to `queue/done/`; a stuck unit moves to `queue/stuck/`.
+`harness status` counts those buckets plus total spend per project. `--no-move`
+is a dry run (it executes and touches nothing in the queue), and
+`scripts/queue_run.py` is now a thin env-var wrapper over the same driver
+(`harness/queue.py`).
 
-```bash
-uv run harness improve --unit tests/fixtures/echo --backend mock \
-  --resume improve-80f6a036afbe --answer '{"action":"continue"}'
-```
+For frontend work, `harness ui-verify dist` serves the built directory, requires
+at least one *loadable* asset of each declared kind, and takes a screenshot with
+a minimum byte size (a blank page measures ~11kb, a page with content ~28kb);
+`--ask` is an opt-in that spends ~$0.01 to have a model look at the shot and
+return `{"ok","motivo"}`.
 
-O default do `--answer` é `{"action":"abort"}`: retomar um loop sem dizer o que
-fazer nunca pode significar "continua sozinho". Run retomada por humano entra
-no ledger com `intervention=1`, que é o que alimenta o `intervention_rate` —
-a métrica de autonomia mora fora do que ela mede.
+## Triggers
 
-Além dos knobs de config, o loop agora muta **código** em `plugins/` — a única
-zona de código mutável — via `improve/codegen.py`: genome check fail-closed e
-`ast.parse` antes de escrever, linhagem em `data/lineage.jsonl`, e o veredito
-vem de exame injetado (DISCARD restaura byte a byte). `harness/evolve/` dá a
-camada populacional: PBT com seleção por Wilson lower bound
-(`run_population`) e um archive MAP-Elites em sqlite (`data/archive.sqlite`)
-que guarda o melhor config por nicho `(kind, cost_bucket)`.
+The harness can wake up on an event instead of a command. `data/inbox/*.json`
+is the universal door — anything that can write a file (git hook, CI, human,
+MCP) drops a JSON there and `triggers/inbox.py` dispatches it to injected
+handlers; processed events go to `done/`, malformed ones to `bad/`, and the
+processor never crashes on a bad event. `triggers/watch.py` polls the inbox or
+the ledger (firing when recent failures cross a threshold).
 
-O registry de ações (`improve/target.py`) hoje expõe `research`, `codegen`,
-`synthesize`, `topology`, `evolve`, `prompt` e `skill_prune` — cada uma um par
-propose/apply (`improve/actions.py` adapta synthesize/topology/evolve;
-`improve/prompt_evolve.py` muta `prompts/executor.md`, o prompt-base evoluível
-do executor; `skills/attribution.py` mede lift por skill via tabela
-`skill_usage` no ledger e apenas *aposenta* skills para `skills/attic/`, nunca
-deleta). Quando o chamador não fixa a ação (`--action`/config), quem escolhe é
-a policy — bandit por KEEP-rate; ação sem amostra nunca fica órfã. O apply do
-autopilot passa por `improve/meta.py::meta_check` antes de qualquer escrita:
-mudança que toca o juiz exige exame selado verde. O exame é **real**:
-`improve/exam.py::run_sealed_exam` descobre `benchmarks/sealed/*/unit.toml` e
-roda cada unidade por `run_unit`; passa quando todo gate dá `accept`.
-Fail-closed de ponta a ponta — sealed sem unidades descobríveis, ou qualquer
-exceção, é `False`. O default do autopilot já é esse exame (injetável via
-config do grafo para teste); quarantined/blocked param o loop e escalam.
+`triggers/webhook.py` is the HTTP door, and unlike the rest of the config it
+fails **closed**: with no token configured it refuses everything with 403. It
+reads `[webhook]` from `config/triggers.toml` (not shipped — absent means off):
+`token`, `rate_limit`, `rate_window_s`, `max_body_bytes`. `HARNESS_WEBHOOK_TOKEN`
+overrides the token so a deployment need not write the secret to a file.
 
-`harness improve` sem `--unit` usa `benchmarks/held_in/*/unit.toml`; enquanto
-esse diretório não tiver unidades no formato novo, passe `--unit` (repetível).
+## What is proven and what is not
 
-`harness replay --list` mostra as mutações julgadas; `harness replay
---mutation <id>` imprime o delta atribuído com intervalo de Wilson por janela
-e nomeia os *confounders* (outras mutações KEEP no meio — atribuição honesta
-diz o que não consegue separar). `harness lineage` desenha a genealogia das
-mutações de código (`data/lineage.jsonl` + verdict do sqlite) em árvore ASCII —
-`--limit N` corta pelas N últimas raízes. `harness skills` lista as skills
-carregáveis (`--lift` anexa a atribuição do ledger: com=/sem=/lift= por skill);
-`harness actions` lista as ações do registry + placar KEEP/DISCARD do ledger.
-`harness doctor` roda o diagnóstico completo (17 checks): preflight de todos os
-backends, genoma/tamper, tracing desligado, configs parseáveis, e os checks de
-evolução — skills, topologia, registry de ações, `ruler.toml`/`mcp.toml`,
-linhagem e prompt do executor.
+`726 passed, 2 deselected` on `uv run --extra deepagents pytest -q`;
+`uv run harness doctor` reports 17 checks, 0 failures, 0 warnings; the loop has
+been run end to end against a local LM Studio/MLX model at $0. No benchmark
+numbers are claimed here, because none have been measured on a public suite.
 
-## Régua e genoma
-
-A régua e o genoma existem pelo mesmo motivo: **um loop que pode reescrever o
-próprio critério não mede nada**. Uma mutação com acesso a `ruler/` aprovaria a
-si mesma baixando a barra; com acesso a `routing/` se daria o tier caro e
-falsearia o próprio A/B; com acesso a `benchmarks/sealed/**` reescreveria a
-prova. Por isso essas zonas são `immutable` em `config/genome.toml`, o
-`uv.lock` também é (trocar versão de dep por baixo invalida qualquer
-comparação), e o que sobra para o loop calibrar é `config/*.toml` +
-`prompts/**` + `skills/**` + `plugins/**` + `benchmarks/quarantine/**`.
-
-A quarentena fecha o ciclo dos exames: `improve/synthesize.py` destila runs
-falhas/revertidas do ledger em exames propostos em `benchmarks/quarantine/`
-(zona mutável), e `harness seal <name> --yes` é o ato **humano** que promove um
-exame para `benchmarks/sealed/` — o loop propõe prova, mas nunca sela a
-própria.
-
-Três detalhes que fazem parte da mesma defesa:
-
-- as specs de KPI são lidas **antes** da mudança — a mudança avaliada não
-  redefine a direção da régua reescrevendo o `kpis.toml`;
-- o `catalog.toml` é mutável (para o humano calibrar) mas o loop não pode
-  apontar uma regra para ele: isso é `genome:self_edit`;
-- a nota humana é append-only em `projects/<projeto>/notes.tsv` e nenhuma
-  função de escrita dela é exposta a backend ou agente. Abaixo de 3 notas na
-  janela, ela vale `None` ("não medido") — uma opinião solta não reverte uma
-  versão. Hoje ela é API (`harness.ruler.note.add`), ainda sem subcomando na
-  CLI.
-
-## Estado
-
-`uv run --extra deepagents pytest -q` → **558 passed, 2 deselected**. Os 2
-deselecionados são os testes que exigem máquina de verdade: marker `ollama`
-(servidor local) e `claude_cli` (gasta dinheiro). Ver `CONTRIBUTING.md`.
-
-O histórico numérico do harness antigo **não** foi migrado: aquelas linhas não
-têm `backend`/`kind` e envenenariam o prior. Ele fica em `legacy/` como
-referência read-only, fora do pytest e fora do genoma.
-
-Docs: `docs/ARCHITECTURE.md` (contratos e estado), `STATUS.md` (o que está
-feito e verificado), `docs/SPEC-rebuild.md` (a spec do rebuild, já executada),
-`CONTRIBUTING.md`.
+Current state, live vs experimental surfaces, and known gaps: `STATUS.md`.
+Shortest path from clone to a reviewable branch on your own repo:
+`docs/FAST_START.md`. Conventions for agents and contributors: `AGENTS.md` and
+`CONTRIBUTING.md`. Design detail: `docs/ARCHITECTURE.md`.

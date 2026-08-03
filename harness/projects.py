@@ -3,8 +3,12 @@
 `harness init <repo> --name <nome>` grava a entrada em `config/projects.toml`.
 Uma unidade com `project = "<nome>"` roda num git worktree do repo real
 (branch efêmera `harness/<run_id>` a partir do HEAD); no accept a branch vira
-`harness/<unit_id>` com o commit da entrega e fica para review humano — a
-working tree principal do repo nunca é tocada, e merge é sempre do humano.
+`harness/<unit_id>` com o commit da entrega e fica para review humano.
+
+Na fila progressiva o accept é seguido de `integrate`, que faz merge `--no-ff`
+dessa branch no branch default do repo-alvo: sem isso a unidade seguinte
+provisiona o worktree do HEAD e não vê nada do que a anterior entregou. Conflito
+nunca é resolvido aqui — o merge é abortado e quem chama para.
 
 O worktree é opt-in: sem `project` na unidade nada aqui é chamado e o
 provisionamento default (cópia em `$HARNESS_DATA_DIR/ws/<run_id>`) segue igual.
@@ -163,6 +167,92 @@ def deliver(
     if _git(ws, "branch", "-M", branch).returncode != 0:
         branch = run_branch(run_id)
     return (branch, commit)
+
+
+class IntegrateError(RuntimeError):
+    """Integração falhou. Erro distinguível de propósito: quem chama (a fila)
+    para aqui e nunca tenta resolver — conflito é assunto de humano.
+
+    `conflict=True` quando o merge abriu conflito (e já foi abortado); False para
+    pré-condição não satisfeita (working tree suja, repo inválido, branch presa).
+    """
+
+    def __init__(self, msg: str, *, conflict: bool = False) -> None:
+        super().__init__(msg)
+        self.conflict = conflict
+
+
+def default_branch(repo: Path) -> str:
+    """Branch de integração do repo-alvo: `origin/HEAD` quando existe, senão a
+    branch atual, senão `master`. Repo local sem remote é o caso comum nos
+    testes e em repo de bancada — por isso o fallback, não o erro."""
+    proc = _git(repo, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+    name = proc.stdout.strip() if proc.returncode == 0 else ""
+    if name:
+        return name.split("/", 1)[1] if name.startswith("origin/") else name
+    proc = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+    name = proc.stdout.strip() if proc.returncode == 0 else ""
+    return name if name and name != "HEAD" else "master"
+
+
+def integrate(project: Project | str, unit_id: str, path: Path | None = None) -> str:
+    """Faz `harness/<unit_id>` entrar no branch default do repo-alvo.
+
+    Sem isto a fila progressiva é semanticamente quebrada: cada unidade provisiona
+    o worktree a partir do HEAD do repo, então a unidade N não vê nada do que as
+    anteriores entregaram nas suas branches. O merge é `--no-ff` (a entrega fica
+    visível como unidade na história) e a branch de entrega **não** é apagada:
+    review humano continua possível depois da composição.
+
+    Exige working tree limpa nos arquivos versionados; arquivo não versionado é
+    ignorado (build artifact é comum no repo-alvo e não bloqueia merge — se
+    bloquear, o git recusa com mensagem própria e cai no mesmo erro daqui).
+
+    Devolve a linha de log do que aconteceu. Levanta `IntegrateError` em qualquer
+    falha, com `conflict=True` quando houve conflito — nesse caso o merge já foi
+    abortado e o repo volta ao estado anterior.
+    """
+    proj = project if isinstance(project, Project) else get_project(project, path)
+    repo = proj.repo
+    proc = _git(repo, "rev-parse", "--is-inside-work-tree")
+    if proc.returncode != 0 or proc.stdout.strip() != "true":
+        raise IntegrateError(f"integrate: {repo} não é repositório git")
+
+    branch = delivery_branch(unit_id)
+    if _git(repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}").returncode:
+        # Accept sem branch de entrega: unidade que não rodou em worktree do
+        # projeto (ou run que não mudou arquivo nenhum). Nada a compor, e travar
+        # a fila por isso seria pior do que seguir.
+        return f"integrate: {branch} não existe — nada a integrar"
+
+    dirty = _git(repo, "status", "--porcelain", "--untracked-files=no").stdout.strip()
+    if dirty:
+        raise IntegrateError(
+            f"integrate: working tree de {repo} suja — commite ou limpe antes:\n"
+            + dirty
+        )
+
+    target = default_branch(repo)
+    proc = _git(repo, "checkout", target)
+    if proc.returncode != 0:
+        raise IntegrateError(
+            f"integrate: checkout de {target} em {repo} falhou — {proc.stderr.strip()}"
+        )
+
+    proc = _git(
+        repo, "-c", "user.name=harness", "-c", "user.email=harness@harness.local",
+        "merge", "--no-ff", "-m", f"harness: integrate {unit_id}", branch,
+    )
+    if proc.returncode != 0:
+        detalhe = (proc.stdout + proc.stderr).strip()
+        _git(repo, "merge", "--abort")
+        raise IntegrateError(
+            f"integrate: merge de {branch} em {target} falhou e foi abortado — "
+            f"resolva na mão e reponha a unidade na fila:\n{detalhe}",
+            conflict=True,
+        )
+    head = _git(repo, "rev-parse", "--short", "HEAD").stdout.strip()
+    return f"integrate: {branch} -> {target} ({head})"
 
 
 def discard_run_branch(repo: Path, run_id: str) -> None:

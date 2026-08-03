@@ -8,7 +8,13 @@ import pytest
 from harness import cli
 from harness.graph.run_graph import run_unit
 from harness.ledger import store
-from harness.projects import get_project, init_project, load_projects
+from harness.projects import (
+    IntegrateError,
+    get_project,
+    init_project,
+    integrate,
+    load_projects,
+)
 from harness.routing import CONFIG_DIR_ENV
 
 
@@ -142,6 +148,24 @@ def test_accept_entrega_branch_e_repo_fica_limpo(tmp_path, config_dir, data_dir)
     assert not ws.exists() or not any(ws.iterdir())
     rows = store.history()
     assert rows[0].project == "toy" and rows[0].ok
+
+
+def test_integrate_exige_working_tree_limpa_e_branch_existente(tmp_path, config_dir):
+    repo = _toy_repo(tmp_path)
+    proj = init_project(repo, "toy", queue_dir=tmp_path / "fila")
+    _git(repo, "branch", "harness/u1")
+
+    # Arquivo não versionado não bloqueia; mudança em arquivo versionado bloqueia.
+    (repo / "sobra.log").write_text("lixo\n", encoding="utf-8")
+    assert "harness/u1" in integrate(proj, "u1")
+    (repo / "app.txt").write_text("mexido\n", encoding="utf-8")
+    with pytest.raises(IntegrateError) as err:
+        integrate(proj, "u1")
+    assert "suja" in str(err.value) and not err.value.conflict
+
+    # Unidade sem branch de entrega é no-op, não erro: nada a compor.
+    _git(repo, "checkout", "-q", "--", "app.txt")
+    assert "nada a integrar" in integrate("toy", "u9")
 
 
 def test_escalate_remove_worktree_e_branch(tmp_path, config_dir, data_dir):

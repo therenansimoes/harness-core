@@ -1,3 +1,6 @@
+> Historical planning document (Portuguese). Kept for provenance; see README.md
+> for current state.
+
 > SUPERSEDED 2026-08-02: ver STATUS.md (pivô LangGraph)
 
 # Plano da noite — 2026-08-02 (autorização: Renan, até ele dizer "pare" de manhã)

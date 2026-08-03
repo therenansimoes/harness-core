@@ -1,6 +1,6 @@
 """CLI do harness. `harness run` / `ab` / `backends` / `improve` / `replay` /
 `lineage` / `export` / `import` / `doctor` / `skills` / `actions` / `seal` /
-`frontier` / `evolve` / `ui-verify` / `bench`."""
+`frontier` / `evolve` / `ui-verify` / `bench` / `queue`."""
 
 from __future__ import annotations
 
@@ -1040,6 +1040,25 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_queue(args: argparse.Namespace) -> int:
+    """`harness queue --project <nome>` consome a fila do projeto pelo grafo."""
+    from harness import queue as queue_mod
+
+    try:
+        return queue_mod.run_queue(
+            args.project,
+            backend=args.backend,
+            model=args.model,
+            deadline_s=args.deadline_s,
+            attempts=args.attempts,
+            move=args.move,
+            integrate_accepted=args.integrate,
+        )
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     """Auto-relatório do loop em markdown. Fail-open: sempre exit 0."""
     from harness import report as report_mod
@@ -1117,6 +1136,30 @@ def build_parser() -> argparse.ArgumentParser:
         "status", help="por projeto: fila/done/stuck + gasto total do ledger"
     )
     status.set_defaults(func=cmd_status, parser=status)
+
+    from harness import queue as queue_mod   # defaults do driver, num só lugar
+
+    queue = sub.add_parser(
+        "queue", help="consome a fila do projeto pelo grafo, uma unidade por vez"
+    )
+    queue.add_argument("--project", default=queue_mod.DEFAULT_PROJECT,
+                       help="nome do projeto registrado (harness init)")
+    queue.add_argument("--backend", default=queue_mod.DEFAULT_BACKEND)
+    queue.add_argument("--model", default=queue_mod.DEFAULT_MODEL,
+                       help="vazio ('') usa o default do backend")
+    queue.add_argument("--deadline-s", type=float, dest="deadline_s",
+                       default=queue_mod.DEFAULT_DEADLINE_S,
+                       help="teto de tempo do loop inteiro")
+    queue.add_argument("--attempts", type=int, default=None,
+                       help="tentativas por unidade (default: teto de config/graph.toml)")
+    queue.add_argument("--move", action=argparse.BooleanOptionalAction, default=True,
+                       help="--no-move é ensaio: roda e não mexe na fila")
+    queue.add_argument("--integrate", action=argparse.BooleanOptionalAction,
+                       default=True,
+                       help="merge da entrega aceita no branch default (default: "
+                            "ligado). --no-integrate quebra a fila progressiva: a "
+                            "unidade seguinte sai do HEAD e não vê a anterior")
+    queue.set_defaults(func=cmd_queue, parser=queue)
 
     backends = sub.add_parser("backends", help="lista backends registrados + preflight")
     backends.set_defaults(func=cmd_backends)
