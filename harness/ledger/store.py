@@ -65,7 +65,8 @@ CREATE TABLE IF NOT EXISTS mutations (
     arm_b       TEXT    NOT NULL,
     applied_at  TEXT    NOT NULL,
     reverted    INTEGER NOT NULL,
-    note        TEXT
+    note        TEXT,
+    action      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_mutations_rule ON mutations(rule_id);
 """
@@ -78,7 +79,7 @@ _COLUMNS = (
 
 _MUT_COLUMNS = (
     "mutation_id", "rule_id", "verdict", "arm_a", "arm_b", "applied_at",
-    "reverted", "note",
+    "reverted", "note", "action",
 )
 
 
@@ -97,7 +98,52 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    _migrate(conn)
+    # Índice fora do SCHEMA: `action` nasce no _migrate, então em banco antigo o
+    # CREATE INDEX no schema rodaria antes da coluna existir.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_mutations_action ON mutations(action)")
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Colunas que nasceram depois da tabela. Idempotente: roda a cada open.
+
+    `CREATE TABLE IF NOT EXISTS` não altera tabela existente, então banco antigo
+    fica sem as colunas novas — o `ALTER TABLE` guardado por `PRAGMA table_info`
+    é o que faz banco velho e novo convergirem sem migração manual.
+    """
+    if _has_column(conn, "mutations", "action"):
+        return
+    conn.execute("ALTER TABLE mutations ADD COLUMN action TEXT")
+    _backfill_action(conn)
+    conn.commit()
+
+
+def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(r["name"] == column for r in rows)
+
+
+def _backfill_action(conn: sqlite3.Connection) -> None:
+    """Recupera a ação das linhas antigas, onde ela viajava dentro do `note`.
+
+    Mesmo parse que o placar usava antes da coluna existir (`policy.action_of`),
+    para o histórico não quebrar em duas eras. Note sem token → fica NULL.
+    """
+    from harness.improve import policy
+
+    rows = conn.execute(
+        "SELECT mutation_id, note FROM mutations WHERE note IS NOT NULL"
+    ).fetchall()
+    updates = [
+        (name, r["mutation_id"])
+        for r in rows
+        if (name := policy.action_of({"note": r["note"]})) is not None
+    ]
+    if updates:
+        conn.executemany(
+            "UPDATE mutations SET action = ? WHERE mutation_id = ?", updates
+        )
 
 
 def now_iso() -> str:
@@ -273,6 +319,7 @@ def _mutation(r: sqlite3.Row) -> MutationRow:
         applied_at=r["applied_at"],
         reverted=bool(r["reverted"]),
         note=r["note"],
+        action=r["action"],
     )
 
 

@@ -14,6 +14,7 @@ from harness.types import UnitSpec, Verdict
 
 LOG_REL = Path(".harness") / "verify.log"
 DEFAULT_TIMEOUT_S = 300.0
+TAIL_LINES = 15      # diagnóstico: o fim do log é onde o erro costuma estar
 TIMEOUT_EXIT = 124   # convenção do `timeout(1)`
 NOEXEC_EXIT = 127    # convenção do shell para "não deu para executar"
 
@@ -43,6 +44,20 @@ def run_verify(unit: UnitSpec, ws: Path, timeout_s: float = DEFAULT_TIMEOUT_S) -
     sec = time.monotonic() - t0
     log_path.write_text(log, encoding="utf-8")
     return Verdict(passed=exit_code == 0, exit_code=exit_code, log_path=log_path, sec=sec)
+
+
+def log_tail(log_path: Path, lines: int = TAIL_LINES) -> str:
+    """Últimas `lines` linhas úteis do log do verify, para quem só vê o exit code.
+
+    Log ausente/ilegível devolve string vazia: diagnóstico é bônus, nunca motivo
+    de o run morrer depois de já ter um veredito.
+    """
+    try:
+        raw = Path(log_path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    kept = [ln.rstrip() for ln in raw.splitlines() if ln.strip()]
+    return "\n".join(kept[-lines:])
 
 
 def _text(raw: object) -> str:

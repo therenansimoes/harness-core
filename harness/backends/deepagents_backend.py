@@ -190,6 +190,10 @@ def _build_agent(req: ExecRequest):
         system_prompt = f"{system_prompt}\n\n{skills_block}"
     _record_skill_usage(req, skills)
 
+    recall_block = _episodic_block(getattr(req, "kind", None), req.prompt)
+    if recall_block:
+        system_prompt = f"{system_prompt}\n\n{recall_block}"
+
     base_prompt = _executor_prompt()
     if base_prompt:
         system_prompt = f"{base_prompt}\n\n{system_prompt}"
@@ -220,6 +224,19 @@ def _record_skill_usage(req: ExecRequest, skills: list[Any]) -> None:
         attribution.record_usage(usage_id, [s.name for s in skills])
     except Exception:
         pass
+
+
+def _episodic_block(kind: str | None, prompt: str) -> str:
+    """Memória episódica: falhas passadas do mesmo kind, ou "" se não há nada.
+
+    Guardado por try/except e por import lazy — o módulo pode não existir num
+    genoma antigo, e sqlite sem FTS5 devolve lista vazia."""
+    try:
+        from harness.memory import episodic
+
+        return episodic.render_prompt(episodic.recall(kind, prompt))
+    except Exception:
+        return ""
 
 
 def _executor_prompt() -> str:

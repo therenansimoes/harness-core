@@ -50,7 +50,7 @@ def run_row(unit_id: str, ok: bool = False, reason: str = "verify_failed") -> Ru
 
 def test_acoes_registradas():
     found = actions()
-    for name in ("research", "codegen", "synthesize", "topology", "evolve"):
+    for name in ("research", "codegen", "synthesize", "topology", "evolve", "redteam"):
         assert name in found, name
         assert found[name].name == name
 

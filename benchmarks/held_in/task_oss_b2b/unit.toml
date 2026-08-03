@@ -1,0 +1,12 @@
+id = "task_oss_b2b"
+kind = "code"
+# Bug real de upstream (schwifty, checksum alemão método 11): só backend real
+# resolve — o mock não escreve patch nenhum no pacote. Sob exame mock esta
+# unidade fica fora do relatório.
+requires_real_backend = true
+prompt = "Leia prompt.md no diretório de trabalho e cumpra o que está lá à risca. O repositório a corrigir está em fixtures/ — copie o conteúdo para a raiz do diretório de trabalho (`cp -R fixtures/. .`) antes de investigar, e faça a correção nessa cópia da raiz."
+# `cp -Rn` (no-clobber) antes do verify: verify.py roda pytest com cwd/PYTHONPATH
+# na raiz do workspace, então o pacote schwifty precisa estar ali. Se o agente já
+# copiou e corrigiu na raiz, o -n preserva o fix; se ele trabalhou só em
+# fixtures/, a cópia traz o código corrigido de lá.
+verify_cmd = "cp -Rn fixtures/. . ; python3 verify.py"

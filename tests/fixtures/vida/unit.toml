@@ -1,0 +1,4 @@
+id = "vida"
+kind = "code"
+prompt = "Crie um arquivo chamado ola.txt contendo exatamente a palavra: ola"
+verify_cmd = "grep -q ola ola.txt"

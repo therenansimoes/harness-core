@@ -79,6 +79,10 @@ CFG_SEALED_EXAM = "harness_sealed_exam"
 CFG_ACTION = "harness_action"
 # Chave do LangGraph, não nossa: é o `thread_id` do `configurable`.
 CFG_THREAD = "thread_id"
+# Relógio injetável (callable -> epoch). Default `time.time`: o teto de ciclo do
+# governor se testa sem dormir uma hora, e o resto do grafo não muda de
+# comportamento por causa disso.
+CFG_CLOCK = "harness_clock"
 
 # Nome do nó que escreve no config, e do marcador que ele deixa no ledger.
 APPLY_NODE = "apply"
@@ -111,6 +115,16 @@ class AutopilotState(TypedDict):
     interventions: int
     aborted: bool
     budget: Budget
+    # Relógio do ciclo corrente (wall clock), estampado pelo `pick_target` e
+    # limpo pelo `record`: é contra ele que o `cycle_s` do governor mede. Vive no
+    # checkpoint porque o resume acontece noutro processo, e ciclo cujo relógio
+    # zera a cada processo não tem teto nenhum. None = ciclo sem marca (thread
+    # de antes deste campo) e o teto do ciclo não corta.
+    cycle_started_ts: float | None
+    # Banco do governor: ação -> ciclo em que ela entrou. Vive no checkpoint
+    # porque o prazo de soltura (`bench_cycles`) se conta em ciclos DESTA thread;
+    # derivar do ledger daria "há quantas mutações", não "há quantos ciclos".
+    bench_since: dict[str, int]
     results: Annotated[list[dict], operator.add]
     events: Annotated[list[Event], operator.add]
 
@@ -190,12 +204,48 @@ def _stop(state: AutopilotState, reason: str, evidence: dict) -> dict:
     }
 
 
-def _expired(state: AutopilotState, node: str) -> dict | None:
-    """Checagem de deadline da entrada do nó. None = pode seguir."""
+def _now(config=None) -> float:
+    """Epoch do relógio injetado (`CFG_CLOCK`), ou o wall clock. Torto -> wall."""
+    clock = _cfg(config, CFG_CLOCK, None)
+    if callable(clock):
+        try:
+            return float(clock())
+        except (TypeError, ValueError):
+            return time.time()
+    return time.time()
+
+
+def _expired(state: AutopilotState, node: str, config=None) -> dict | None:
+    """Checagem de prazo da entrada do nó. None = pode seguir.
+
+    Dois prazos, um único ponto: o do RUN (`--deadline-s`, que vira
+    `budget.deadline_ts`) e o do CICLO (`cycle_s` do governor, medido contra o
+    `cycle_started_ts` estampado no `pick_target`). Os dois saem pelo mesmo
+    `escalate`; o motivo do ciclo viaja na evidência porque o vocabulário de
+    `esc.REASONS` é fechado e prazo estourado é `deadline` dos dois jeitos.
+    """
     budget = state["budget"]
-    if not budget.expired(time.time()):
-        return None
-    return _stop(state, esc.DEADLINE, {"node": node, "deadline_ts": budget.deadline_ts})
+    now = _now(config)
+    if budget.expired(now):
+        return _stop(
+            state, esc.DEADLINE, {"node": node, "deadline_ts": budget.deadline_ts}
+        )
+    from harness.governor import governor as gov_mod
+
+    started = state.get("cycle_started_ts")
+    gov = gov_mod.load_gov()
+    if gov_mod.check_cycle(started, now, gov) == gov_mod.CUTOFF:
+        return _stop(
+            state,
+            esc.DEADLINE,
+            {
+                "node": node,
+                "governor": "governor:ciclo_estourado",
+                "cycle_s": gov.cycle_s,
+                "cycle_started_ts": started,
+            },
+        )
+    return None
 
 
 @contextlib.contextmanager
@@ -233,8 +283,15 @@ def _arms(state: AutopilotState) -> tuple[Arm, Arm]:
 
 def _pick_target(state: AutopilotState, config=None) -> dict:
     """Escolhe a mutação do ciclo, ou escala. Nada é escrito aqui."""
-    if (stop := _expired(state, "pick_target")) is not None:
+    if (stop := _expired(state, "pick_target", config)) is not None:
         return stop
+
+    # Relógio do ciclo, estampado uma vez só: este é o primeiro nó do ciclo, e
+    # escalação que volta para cá (humano forçando regra) NÃO reinicia a marca —
+    # ciclo que já queimou o `cycle_s` não ganha outro por causa da parada.
+    started_ts = state.get("cycle_started_ts")
+    if started_ts is None:
+        started_ts = _now(config)
 
     root = _root(config)
     rules, cfg = load_catalog(root=root)
@@ -270,6 +327,9 @@ def _pick_target(state: AutopilotState, config=None) -> dict:
     # policy (bandit sobre o KEEP-rate por ação no ledger). Rota forçada pelo
     # humano fica fora do bandit: ele já decidiu a regra, a policy não vota.
     action = _cfg(config, CFG_ACTION, None)
+    # Banco intacto quando o bandit não vota neste ciclo (ação fixada, rota do
+    # humano): ninguém cumpre pena de ciclo que não julgou ninguém.
+    bench_since = dict(state.get("bench_since") or {})
     if not action and not forced:
         from harness.improve import policy
         from harness.improve import target as improve_target
@@ -277,17 +337,21 @@ def _pick_target(state: AutopilotState, config=None) -> dict:
         rng = random.Random(f"{_cfg(config, CFG_THREAD, '')}:{state['cycle']}")
         names = sorted(improve_target.actions())
         # Governor no bandit: (a) banco — ação que só propõe e nunca cola KEEP
-        # sai da roleta (nunca esvazia: foco não é paralisia); (b) exploração
-        # fecha conforme os ciclos correm (explore_budget). Fail-open.
+        # sai da roleta (nunca esvazia: foco não é paralisia) e volta depois de
+        # `bench_cycles` ciclos, com o ciclo de entrada guardado em
+        # `bench_since`; (b) exploração fecha conforme os ciclos correm
+        # (explore_budget). Fail-open.
         explore = 1.0
         try:
             from harness.governor import governor as gov_mod
 
             gov = gov_mod.load_gov()
             stats = policy.action_stats(store.mutations(path=db))
-            benched = gov_mod.bench(
+            benched, bench_since = gov_mod.bench_with_expiry(
                 {n: {"proposals": s["n"], "keeps": s["keep"]} for n, s in stats.items()},
                 gov,
+                state["cycle"],
+                state.get("bench_since"),
             )
             names = [n for n in names if n not in benched] or names
             explore = gov_mod.explore_budget(state["cycle"] / max(1, state["cycles"]), gov)
@@ -305,6 +369,8 @@ def _pick_target(state: AutopilotState, config=None) -> dict:
         "target": target_d,
         "forced_rule_id": None,
         "escalation": None,
+        "cycle_started_ts": started_ts,
+        "bench_since": bench_since,
         "events": [
             _event(
                 "pick_target",
@@ -312,6 +378,7 @@ def _pick_target(state: AutopilotState, config=None) -> dict:
                 gain=target.gain,
                 pattern=target.pattern,
                 action=action,
+                benched=sorted(bench_since),
             )
         ],
     }
@@ -336,7 +403,7 @@ def _applicable(rules: Sequence[Rule], root: Path, db: Path) -> list[Rule]:
 
 def _propose(state: AutopilotState, config=None) -> dict:
     """Materializa a proposta: arquivo, chave, de/para. Ainda sem escrever."""
-    if (stop := _expired(state, "propose")) is not None:
+    if (stop := _expired(state, "propose", config)) is not None:
         return stop
     try:
         rule = _rule_of(state, config)
@@ -361,7 +428,7 @@ def _propose(state: AutopilotState, config=None) -> dict:
 def _genome_check(state: AutopilotState, config=None) -> dict:
     """Fail-closed antes de escrever. Rejeição vira linha no ledger: violação
     que só existe no log some no próximo `rm -rf`."""
-    if (stop := _expired(state, "genome_check")) is not None:
+    if (stop := _expired(state, "genome_check", config)) is not None:
         return stop
     try:
         rule = _rule_of(state, config)
@@ -424,7 +491,7 @@ def _default_sealed_exam(config=None):
 
 def _apply(state: AutopilotState, config=None) -> dict:
     """Escreve a mutação. Depois deste nó o repo está sujo até commit/revert."""
-    if (stop := _expired(state, "apply")) is not None:
+    if (stop := _expired(state, "apply", config)) is not None:
         return stop
     try:
         rule = _rule_of(state, config)
@@ -500,7 +567,7 @@ def _fanout_ab(state: AutopilotState, config=None) -> dict:
     de entrada de nó não olharia o relógio de novo antes de `2 x n x unidades`
     runs. Cada run tem timeout próprio, então granularidade entre-runs basta.
     """
-    if (stop := _expired(state, "fanout_ab")) is not None:
+    if (stop := _expired(state, "fanout_ab", config)) is not None:
         return stop
 
     from harness.ab import ArmSpec, run_ab
@@ -658,16 +725,19 @@ def _record(state: AutopilotState, config=None) -> dict:
     # quando o humano já respondeu: `escalation` é o que ainda espera resposta,
     # e o `escalate` a limpa ao ser respondido.
     note = (state.get("escalation") or {}).get("reason") or state.get("abort_reason")
-    # Fecha o feedback do bandit: o nome da ação escolhida no `pick_target`
-    # viaja no campo livre `note` (schema do ledger intocado) e é o que a
-    # policy relê no próximo ciclo para pontuar o KEEP-rate por ação. Só em
-    # veredito concluído — ABORTED não é evidência sobre a ação, e o note do
-    # aborto (motivo da parada) fica intacto para o humano.
+    # Fecha o feedback do bandit: o nome da ação escolhida no `pick_target` vai
+    # para a coluna `action` do ledger e é o que a policy relê no próximo ciclo
+    # para pontuar o KEEP-rate por ação. Continua também no `note`: quem já tem
+    # o histórico antigo lê as duas eras pelo mesmo parse. Só em veredito
+    # concluído — ABORTED não é evidência sobre a ação, e o note do aborto
+    # (motivo da parada) fica intacto para o humano.
     from harness.improve import policy
 
     action = target.get("action")
+    recorded_action = None
     if verdict in ("KEEP", "DISCARD", "INCONCLUSIVE"):
         note = policy.note_with_action(action, note)
+        recorded_action = action
 
     store.record_mutation(
         MutationRow(
@@ -679,6 +749,7 @@ def _record(state: AutopilotState, config=None) -> dict:
             applied_at=mutation.applied_at,
             reverted=reverted,
             note=note,
+            action=recorded_action,
         ),
         path=_db(config),
     )
@@ -689,6 +760,8 @@ def _record(state: AutopilotState, config=None) -> dict:
         "arms": None,
         "verdict": None,
         "abort_reason": None,
+        # Ciclo fechado, relógio zerado: o próximo `pick_target` estampa o dele.
+        "cycle_started_ts": None,
         "results": [{
             "cycle": state["cycle"],
             "rule_id": mutation.rule_id,
@@ -858,6 +931,8 @@ def initial_state(
         interventions=0,
         aborted=False,
         budget=budget,
+        cycle_started_ts=None,
+        bench_since={},
         results=[],
         events=[],
     )

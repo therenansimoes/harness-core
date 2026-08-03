@@ -43,7 +43,13 @@ from harness.genome import tamper
 from harness.genome.genome import DEFAULT_PATH as GENOME_PATH
 from harness.genome.genome import Genome
 from harness.genome.genome import load as load_genome
-from harness.governor.governor import CUTOFF, check_deadline, load_gov, taper_turns
+from harness.governor.governor import (
+    CUTOFF,
+    check_cost,
+    check_deadline,
+    load_gov,
+    taper_turns,
+)
 from harness.graph.checkpoint import open_checkpointer
 from harness.graph.state import Budget, Decision, Event, RunState
 from harness.ledger import store
@@ -57,7 +63,9 @@ from harness.routing import (
 )
 from harness.ruler.gate import gate as ruler_gate
 from harness.ruler.kpi import KpiSpec, collect, load_kpis
+from harness.ruler.verify import log_tail
 from harness.types import ExecRequest, ExecResult, RunRow, Selection, UnitSpec, Verdict
+from harness.workspace.sealing import VERIFIER_NAMES, is_verifier, verifier_visible
 
 # Chaves nossas dentro de `config["configurable"]`. O que não é estado do run
 # (para onde escrever, quem executa) viaja por aqui, não pelo checkpoint.
@@ -151,6 +159,26 @@ def _gov_deadline(run_id: str, db: Path, gov=None) -> str:
     except (KeyError, TypeError, ValueError):
         return "continue"
     return check_deadline(started, time.time(), gov)
+
+
+def _gov_cost(run_id: str, db: Path, attempt: int, gov=None) -> str:
+    """'continue'/'cutoff' contra o gasto ACUMULADO das tentativas deste run.
+
+    A soma sai do ledger (payload de cada `execute`), não do estado: o resume
+    noutro processo tem que herdar a conta da tentativa que já foi paga — teto
+    de gasto que zera a cada processo não é teto. Custo ausente ou torto conta
+    zero, e a checagem só corta com `cost_cap_usd > 0`: fail-open igual ao prazo.
+    """
+    if gov is None:
+        gov = load_gov()
+    spent = 0.0
+    for a in range(max(0, attempt) + 1):
+        ev = store.get_node(run_id, "execute", db, attempt=a) or {}
+        try:
+            spent += float(ev.get("cost_usd") or 0.0)
+        except (TypeError, ValueError):
+            continue
+    return check_cost(spent, gov)
 
 
 def _cfg(config, key: str, default: Any = None) -> Any:
@@ -257,10 +285,13 @@ def _baseline(ws: Path, policy: GraphPolicy) -> dict:
 
 
 def _copy_unit_files(src: Path, dst: Path) -> None:
-    """Materializa o dir da unidade no workspace. Sobrescreve: é idempotente."""
-    ignore = shutil.ignore_patterns(*IGNORE_NAMES)
+    """Materializa o dir da unidade no workspace. Sobrescreve: é idempotente.
+
+    O verificador não vem: `_verify` o materializa depois do execute.
+    """
+    ignore = shutil.ignore_patterns(*IGNORE_NAMES, *VERIFIER_NAMES)
     for item in sorted(src.iterdir()):
-        if item.name in IGNORE_NAMES:
+        if item.name in IGNORE_NAMES or is_verifier(item.name):
             continue
         if item.is_dir():
             shutil.copytree(item, dst / item.name, dirs_exist_ok=True, ignore=ignore)
@@ -429,17 +460,20 @@ def _verify(state: RunState, config=None) -> dict:
     ws = Path(state["workspace"])
     log_path = ws / VERIFY_LOG
     t0 = time.monotonic()
-    try:
-        proc = subprocess.run(
-            state["unit"].verify_cmd,
-            shell=True,
-            cwd=ws,
-            capture_output=True,
-            timeout=load_policy().verify_timeout_s,
-        )
-        exit_code, out = proc.returncode, proc.stdout + proc.stderr
-    except subprocess.TimeoutExpired:
-        exit_code, out = 124, b"verify: timeout\n"
+    # Prova selada: o verificador só existe no workspace dentro deste `with` —
+    # o agente já rodou e a tentativa seguinte também não vai vê-lo.
+    with verifier_visible(state["unit"].path, ws):
+        try:
+            proc = subprocess.run(
+                state["unit"].verify_cmd,
+                shell=True,
+                cwd=ws,
+                capture_output=True,
+                timeout=load_policy().verify_timeout_s,
+            )
+            exit_code, out = proc.returncode, proc.stdout + proc.stderr
+        except subprocess.TimeoutExpired:
+            exit_code, out = 124, b"verify: timeout\n"
     log_path.write_bytes(out)
 
     verdict = Verdict(
@@ -448,12 +482,22 @@ def _verify(state: RunState, config=None) -> dict:
         log_path=log_path,
         sec=time.monotonic() - t0,
     )
-    store.record_node(run_id, "verify", _verdict_payload(verdict), db, attempt=attempt)
+    # Sem isto o ledger guarda só `exit=N`: o motivo real fica no workspace, que
+    # o retry sobrescreve e o tmpdir descarta.
+    tail = "" if verdict.passed else log_tail(log_path)
+    payload = _verdict_payload(verdict)
+    if tail:
+        payload["tail"] = tail
+    store.record_node(run_id, "verify", payload, db, attempt=attempt)
     return {
         "verdict": verdict,
         "events": [
             _event(
-                "verify", passed=verdict.passed, exit_code=exit_code, attempt=attempt
+                "verify",
+                passed=verdict.passed,
+                exit_code=exit_code,
+                attempt=attempt,
+                **({"tail": tail} if tail else {}),
             )
         ],
     }
@@ -545,6 +589,12 @@ def _gate(state: RunState, config=None) -> dict:
     if action == "retry" and _gov_deadline(state["run_id"], _db(config)) == CUTOFF:
         action = "escalate_human"
         reason = f"{reason}; governor:prazo_estourado"
+    # Mesmo caminho para o teto de gasto: a tentativa seguinte custaria pelo
+    # menos o que a anterior custou, e o dinheiro já acabou. Sem cost_cap_usd
+    # (ou = 0) nada disso acontece.
+    if action == "retry" and _gov_cost(state["run_id"], _db(config), attempt) == CUTOFF:
+        action = "escalate_human"
+        reason = f"{reason}; governor:custo_estourado"
     decision = Decision(action, reason)  # tipo do estado, não o do ruler
 
     return {

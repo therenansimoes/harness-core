@@ -1,5 +1,6 @@
-"""CLI do harness. `harness run` / `ab` / `improve` / `replay` / `lineage` /
-`doctor` / `backends` / `seal` / `bench`."""
+"""CLI do harness. `harness run` / `ab` / `backends` / `improve` / `replay` /
+`lineage` / `export` / `import` / `doctor` / `skills` / `actions` / `seal` /
+`frontier` / `evolve` / `bench`."""
 
 from __future__ import annotations
 
@@ -26,10 +27,11 @@ from harness.ledger import store
 from harness.routing import ROUTE_AUTO, ROUTE_MANUAL, ROUTE_MODES, router
 from harness.ruler.gate import Decision, gate
 from harness.ruler.kpi import collect, load_kpis
-from harness.ruler.verify import run_verify
+from harness.ruler.verify import log_tail, run_verify
 from harness.ruler.wilson import MIN_N, Arm, decide_ab, wilson_interval
 from harness.types import ExecRequest, ExecResult, RunRow, Selection, UnitSpec
 from harness.workspace.provision import dispose, provision
+from harness.workspace.sealing import is_verifier, verifier_visible
 
 UNIT_FILE = "unit.toml"
 SCRATCH_DIR = ".harness"   # log do verify; não conta como sujeira do repo-alvo
@@ -69,11 +71,14 @@ def load_unit(path: Path) -> UnitSpec:
 
 
 def seed_workspace(unit: UnitSpec, ws: Path) -> list[str]:
-    """Copia os arquivos da unidade pro workspace (menos o próprio `unit.toml`)."""
+    """Copia os arquivos da unidade pro workspace (menos o próprio `unit.toml`
+    e o verificador, que só aparece no instante do verify)."""
     copied: list[str] = []
     for src in sorted(unit.path.rglob("*")):
         rel = src.relative_to(unit.path)
         if rel.parts[0] == UNIT_FILE or "__pycache__" in rel.parts:
+            continue
+        if is_verifier(rel):
             continue
         dst = ws / rel
         if src.is_dir():
@@ -163,6 +168,9 @@ class RunOutcome:
 
     row: RunRow
     decision: Decision
+    # Fim do log do verify quando ele reprovou: o workspace onde o log mora já
+    # foi descartado quando quem chamou lê isto.
+    verify_tail: str = ""
 
 
 def run_once(
@@ -213,8 +221,14 @@ def run_once(
         # (mesmo max_turns/timeout — pode ter consertado antes de estourar).
         # "blocked"/"error" nem chegaram a executar; aí não há o que verificar.
         ran = result.exit_reason in ("done", "max_turns", "timeout")
+        verify_tail = ""
         if ran:
-            verdict = run_verify(unit, ws)
+            # O verificador entra agora, com o agente já fora: durante o
+            # execute ele não existe no workspace (prova selada).
+            with verifier_visible(unit.path, ws):
+                verdict = run_verify(unit, ws)
+            if not verdict.passed:
+                verify_tail = log_tail(verdict.log_path)
             # `specs=` do ANTES: a mudança avaliada não pode redefinir a régua
             # reescrevendo o kpis.toml (buraco de Goodhart do review do PR-4).
             decision = gate(verdict, kpi_before, collect(ws, specs=specs), [], specs)
@@ -240,7 +254,7 @@ def run_once(
         intervention=False,
         created_at=store.now_iso(),
     )
-    return RunOutcome(row=row, decision=decision)
+    return RunOutcome(row=row, decision=decision, verify_tail=verify_tail)
 
 
 def _resolve_route(args: argparse.Namespace, unit: UnitSpec) -> Selection:
@@ -297,10 +311,27 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     row, decision = outcome.row, outcome.decision
     row_id = store.record_run(row)
+    if outcome.verify_tail:
+        # `run` avulso não passa pelo grafo, então o node_event do verify é o
+        # único lugar onde o porquê da falha sobrevive ao workspace.
+        store.record_node(
+            row.run_id,
+            "verify",
+            {
+                "passed": False,
+                "exit_reason": row.exit_reason,
+                "tail": outcome.verify_tail,
+            },
+        )
     print(
         f"{row.run_id} {unit.id} {row.backend} {decision.action} {decision.reason} "
         f"{row.sec_total:.2f}s ledger#{row_id}"
     )
+    if not row.ok and outcome.verify_tail:
+        print(
+            f"verify falhou — últimas linhas do log:\n{outcome.verify_tail}",
+            file=sys.stderr,
+        )
     return 0 if row.ok else 1
 
 
@@ -579,6 +610,32 @@ def cmd_lineage(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_export(args: argparse.Namespace) -> int:
+    """Empacota skills + prior de roteamento para o próximo projeto."""
+    from harness.transfer import export_bundle
+
+    out = export_bundle(args.out)
+    print(f"bundle {out}")
+    return 0
+
+
+def cmd_import_bundle(args: argparse.Namespace) -> int:
+    """Traz o bundle de outro projeto. Colisão nunca sobrescreve — só reporta."""
+    from harness.transfer import import_bundle
+
+    summary = import_bundle(args.bundle)
+    for name in summary["imported"]:
+        print(f"importada {name}")
+    for name, reason in summary["skipped"]:
+        print(f"pulada    {name} ({reason})")
+    print(
+        f"importadas={len(summary['imported'])} "
+        f"puladas={len(summary['skipped'])} "
+        f"ações no prior={summary['prior_actions']}"
+    )
+    return 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Diagnóstico local. Exit 1 só com FALHA: aviso é o mundo, não o harness."""
     from harness import doctor
@@ -625,10 +682,26 @@ def cmd_actions(args: argparse.Namespace) -> int:
     """Lista as ações do registry e, havendo mutações, o placar KEEP/DISCARD."""
     from harness.improve.target import actions
 
+    from harness.improve.policy import action_of
+
     acts = actions()
-    for name in sorted(acts):
-        print(name)
     muts = store.mutations(limit=None)
+    # Placar por ação: a coluna `action` do ledger, com fallback pro token do
+    # note nas linhas antigas (`action_of`). Ação sem linha aparece zerada — é
+    # a que o bandit ainda vai explorar.
+    tally: dict[str, list[int]] = {name: [0, 0] for name in acts}
+    for m in muts:
+        name = action_of(m)
+        if name is None:
+            continue
+        t = tally.setdefault(name, [0, 0])
+        if m.verdict == "KEEP":
+            t[0] += 1
+        elif m.verdict == "DISCARD":
+            t[1] += 1
+    for name in sorted(tally):
+        keep, discard = tally[name]
+        print(f"{name} KEEP={keep} DISCARD={discard}")
     if muts:
         keep = sum(1 for m in muts if m.verdict == "KEEP")
         discard = sum(1 for m in muts if m.verdict == "DISCARD")
@@ -682,9 +755,99 @@ def cmd_seal(args: argparse.Namespace) -> int:
     if dst.exists():
         print(f"seal: '{args.name}' já existe em {synthesize.SEALED_DIR}", file=sys.stderr)
         return 1
+    # Currículo na fronteira: exame que a versão atual já passa não ensina nada.
+    if not args.force:
+        from harness.improve import coevolve
+
+        passed = coevolve.screen_benchmark(src)
+        if passed is True:
+            print(
+                f"seal: '{args.name}' fora da fronteira — o harness atual já passa "
+                "nesse exame, selar não ensina nada. Use --force para selar mesmo "
+                "assim; nada foi movido.",
+                file=sys.stderr,
+            )
+            return 1
+        if passed is None:
+            print(
+                f"seal: screening de '{args.name}' inconclusivo (erro ao rodar) — "
+                "seguindo com o selo por decisão humana (--yes).",
+                file=sys.stderr,
+            )
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(src), str(dst))
     print(f"selado: {dst}")
+    return 0
+
+
+def cmd_frontier(args: argparse.Namespace) -> int:
+    """Lista a fronteira: os candidatos da quarentena em que o harness atual
+    falha. Fronteira vazia é resposta, não erro — sai 0 sempre."""
+    from harness.improve import coevolve
+
+    names = coevolve.screen_quarantine(backend=args.backend, model=args.model)
+    for name in names:
+        print(name)
+    print(f"frontier={len(names)}")
+    return 0
+
+
+def cmd_evolve(args: argparse.Namespace) -> int:
+    """`--steps` gerações de PBT com fitness real: cada indivíduo é um braço de
+    execução, a nota é o Wilson lower bound do gate e o melhor de cada nicho vai
+    para o archive (MAP-Elites).
+
+    Sai 0 com qualquer nota, inclusive 0/n: "essa config não passa" é resposta
+    da evolução, não erro da CLI — mesma regra do `harness ab`.
+
+    Default `--backend mock`: a evolução é o laço que roda mais vezes
+    (steps x pop x n runs), e ligá-la por engano num backend pago é o jeito mais
+    rápido de queimar dinheiro sem ninguém olhando.
+    """
+    from harness.evolve.archive import Archive
+    from harness.evolve.fitness import Fitness, evolve
+
+    try:
+        units = [load_unit(p) for p in _improve_units(args)]
+    except (FileNotFoundError, ValueError) as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
+    fitness = Fitness(
+        units=units,
+        n=args.n,
+        data_dir=store.data_dir(),
+        project=args.project,
+    )
+    archive = Archive(Path(args.archive) if args.archive else None)
+    try:
+        report = evolve(
+            fitness,
+            {"backend": args.backend, "model": args.model, "max_turns": args.max_turns},
+            archive,
+            steps=args.steps,
+            pop_size=args.pop,
+            seed=args.seed,
+        )
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    finally:
+        archive.close()
+
+    best = report.best
+    for ind in report.population:
+        print(
+            f"ind max_turns={ind.config.get('max_turns')} "
+            f"{ind.successes}/{ind.trials} wilson_low={ind.wilson_low:.2f}"
+        )
+    print(
+        # `genomas` e não "avaliações": genoma repetido na população compartilha
+        # a chave do stats, e chamar isso de avaliação inflaria a conta.
+        f"evolve steps={report.steps} pop={args.pop} genomas={len(fitness.stats)} "
+        f"best={best.successes}/{best.trials} wilson_low={best.wilson_low:.2f} "
+        f"elites={len(report.elites)} archive={archive.path}"
+    )
     return 0
 
 
@@ -774,6 +937,20 @@ def build_parser() -> argparse.ArgumentParser:
                          help="mostra só as N últimas raízes")
     lineage.set_defaults(func=cmd_lineage)
 
+    export = sub.add_parser(
+        "export", help="empacota skills + prior de roteamento em um bundle .tgz"
+    )
+    export.add_argument("--out", required=True, metavar="PATH",
+                        help="destino do bundle (tar.gz)")
+    export.set_defaults(func=cmd_export)
+
+    # `import` é keyword: o parser aceita o nome, o dest do handler não pode ser.
+    import_bundle = sub.add_parser(
+        "import", help="traz skills + prior de um bundle de outro projeto"
+    )
+    import_bundle.add_argument("bundle", help="caminho do bundle .tgz")
+    import_bundle.set_defaults(func=cmd_import_bundle)
+
     doctor = sub.add_parser(
         "doctor", help="diagnóstico local: backends, genoma, config, dados, tracing"
     )
@@ -796,9 +973,41 @@ def build_parser() -> argparse.ArgumentParser:
         "seal", help="promove um exame da quarentena para benchmarks/sealed"
     )
     seal.add_argument("name", help="nome do dir em benchmarks/quarantine")
+    seal.add_argument("--force", action="store_true",
+                      help="sela mesmo que o harness atual já passe no exame "
+                           "(fora da fronteira de dificuldade)")
     seal.add_argument("--yes", action="store_true",
                       help="confirmação humana; sem isto o comando recusa")
     seal.set_defaults(func=cmd_seal)
+
+    frontier = sub.add_parser(
+        "frontier", help="lista os exames da quarentena em que o harness atual falha"
+    )
+    frontier.add_argument("--backend", default="mock", help="backend do screening (default mock)")
+    frontier.add_argument("--model", default="", help="modelo do backend (default vazio)")
+    frontier.set_defaults(func=cmd_frontier)
+
+    evolve = sub.add_parser(
+        "evolve", help="PBT de configs: mede cada indivíduo no gate e arquiva os elites"
+    )
+    evolve.add_argument("--steps", type=int, default=1, help="gerações (default 1)")
+    evolve.add_argument("--pop", type=int, default=4, help="tamanho da população (default 4)")
+    evolve.add_argument("--n", type=int, default=1,
+                        help="runs por indivíduo POR unidade (default 1)")
+    evolve.add_argument("--unit", action="append", default=[],
+                        help="unidade de avaliação (repetível); default: benchmarks/held_in/*")
+    evolve.add_argument("--backend", default="mock",
+                        help="executor de TODA a população; default mock ($0, "
+                             "determinístico) — a evolução é o laço que roda mais vezes")
+    evolve.add_argument("--model", default=None)
+    evolve.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS, dest="max_turns",
+                        help=f"knob mutável do genoma (default {DEFAULT_MAX_TURNS})")
+    evolve.add_argument("--seed", type=int, default=0,
+                        help="semente do PBT: mesma semente, mesma população (default 0)")
+    evolve.add_argument("--archive", default=None, metavar="PATH",
+                        help="sqlite do MAP-Elites (default data/archive.sqlite)")
+    evolve.add_argument("--project", default=None)
+    evolve.set_defaults(func=cmd_evolve, parser=evolve)
 
     bench = sub.add_parser("bench", help="mede o custo de uma operação do harness")
     bench.add_argument("what", choices=["provision"])

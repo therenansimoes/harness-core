@@ -1,0 +1,7 @@
+id = "task_s02"
+kind = "code"
+# Só backend real resolve: o mock apenas escreve mock_output.txt, nunca um
+# wc_lite.py correto. Sob exame mock esta unidade fica fora do relatório.
+requires_real_backend = true
+prompt = "Leia prompt.md no diretório de trabalho e cumpra o que está lá à risca, incluindo mensagens de erro e códigos de saída exatos."
+verify_cmd = "python3 verify.py"

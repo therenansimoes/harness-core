@@ -1,0 +1,9 @@
+id = "task_s01"
+kind = "code"
+# Só backend real resolve: o mock apenas escreve mock_output.txt, nunca um
+# transform.py correto. Sob exame mock esta unidade fica fora do relatório.
+requires_real_backend = true
+prompt = "Leia prompt.md no diretório de trabalho e cumpra o que está lá à risca. A fixture de entrada está em fixtures/pedidos.json — copie-a para pedidos.json no diretório de trabalho antes de rodar seu script."
+# `cp` antes do verify: a fixture vive em fixtures/ e o verify.py (e o
+# transform.py do agente) leem pedidos.json do diretório corrente.
+verify_cmd = "cp -f fixtures/pedidos.json pedidos.json && python3 verify.py"

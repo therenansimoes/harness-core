@@ -99,7 +99,10 @@ class MutationRow:
     régua (KEEP/DISCARD/INCONCLUSIVE), `REJECTED`, quando o genoma barrou a
     regra antes de qualquer run, ou `ABORTED`, quando o experimento começou e
     não terminou. `note` carrega a violação ou o motivo da escalação: rejeição
-    sem causa registrada não é auditável.
+    sem causa registrada não é auditável. `action` é a ação de evolução que
+    propôs a mutação, em coluna própria: placar por ação não pode depender de
+    parsear texto livre. None nas linhas gravadas antes da coluna existir e nas
+    mutações que não vieram de uma ação.
     """
 
     mutation_id: str
@@ -110,6 +113,7 @@ class MutationRow:
     applied_at: str
     reverted: bool
     note: str | None = None
+    action: str | None = None
 
 
 @dataclass(frozen=True)

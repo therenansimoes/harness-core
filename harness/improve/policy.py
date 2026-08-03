@@ -6,8 +6,9 @@ score = Wilson lower bound do KEEP-rate por ação + bônus de exploração
 órfã: o loop experimenta antes de julgar. Empate → `rng` do chamador
 (seedado → determinístico).
 
-O nome da ação viaja no campo livre `note` de `MutationRow` (o schema do
-ledger é intocado): `note_with_action` grava, `action_of` lê de volta.
+O nome da ação vive na coluna `action` de `MutationRow`. Antes dela viajava no
+campo livre `note` (`note_with_action` ainda grava lá, e a migração do ledger
+faz backfill): `action_of` lê a coluna e cai no note quando ela é NULL.
 """
 
 from __future__ import annotations
@@ -39,7 +40,13 @@ def note_with_action(action: str | None, note: str | None) -> str | None:
 
 
 def action_of(row: Any) -> str | None:
-    """Nome da ação gravado no registro de mutação, ou None se não há token."""
+    """Nome da ação do registro de mutação, ou None se não dá para saber.
+
+    Coluna `action` primeiro; sem ela (linha antiga, dict de teste), cai no
+    token do `note` — as duas eras do ledger respondem a mesma pergunta.
+    """
+    if (field := _get(row, "action")):
+        return field
     note = _get(row, "note") or ""
     for part in note.split(";"):
         if part.startswith(ACTION_TAG):

@@ -8,6 +8,7 @@ import pytest
 from harness import cli
 from harness.ledger import store
 from harness.routing import CONFIG_DIR_ENV
+from harness.ruler.verify import log_tail
 
 REPO = Path(__file__).resolve().parent.parent
 FIXTURE = str(Path(__file__).parent / "fixtures" / "echo")
@@ -84,6 +85,37 @@ def test_run_records_failure_when_verify_fails(data_dir, tmp_path):
     )
     assert cli.main(["run", "--unit", str(unit), "--backend", "mock"]) == 1
     assert store.history()[0].exit_reason == "verify_failed"
+
+
+def test_verify_failure_shows_and_records_log_tail(data_dir, tmp_path, capsys):
+    """`verify_failed:exit=N` sozinho não diz nada: o fim do log tem que sair no
+    stderr e ficar no ledger, porque o workspace morre com o run."""
+    unit = tmp_path / "loud"
+    unit.mkdir()
+    (unit / "unit.toml").write_text(
+        'id = "loud"\nprompt = "x"\n'
+        'verify_cmd = "echo BOOM_stdout; echo BOOM_stderr >&2; exit 3"\n',
+        encoding="utf-8",
+    )
+    assert cli.main(["run", "--unit", str(unit), "--backend", "mock"]) == 1
+
+    err = capsys.readouterr().err
+    assert "BOOM_stdout" in err
+    assert "BOOM_stderr" in err
+
+    saved = store.get_node(store.history()[0].run_id, "verify")
+    assert saved is not None
+    assert "BOOM_stdout" in saved["tail"]
+    assert saved["exit_reason"] == "verify_failed"
+
+
+def test_log_tail_keeps_only_the_last_lines(tmp_path):
+    log = tmp_path / "verify.log"
+    log.write_text("".join(f"linha{i}\n" for i in range(40)), encoding="utf-8")
+    tail = log_tail(log).splitlines()
+    assert len(tail) == 15
+    assert tail[0] == "linha25"
+    assert tail[-1] == "linha39"
 
 
 def test_unknown_backend_raises(data_dir):

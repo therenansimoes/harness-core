@@ -12,3 +12,16 @@
 # (default atual): qualquer piora é regressão. KPI que vira NaN ou some no
 # "after" NUNCA é tolerado, independente do valor aqui.
 kpi_regression_tolerance = 0.0
+
+[exam]
+# Quem EXECUTA o exame selado (harness/improve/exam.py). Fica aqui de propósito:
+# este arquivo passa pelo meta-exame, então o loop não troca o executor da
+# própria prova sem exame selado + ack humano.
+#
+# "mock" (default) = smoke de $0: só prova que o grafo roda ponta a ponta, e
+# unidades com `requires_real_backend = true` no unit.toml ficam de fora.
+# Para exame de verdade, aponte para um backend real, ex.:
+#   backend = "deepagents"
+#   model = "ollama:qwen2.5:3b"   # local, $0 por run (config/models.toml)
+backend = "mock"
+model = ""

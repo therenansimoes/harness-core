@@ -86,8 +86,10 @@ def _quarantine(tmp_path, monkeypatch, name: str = "u1") -> tuple[Path, Path]:
     q = tmp_path / "quarantine"
     s = tmp_path / "sealed"
     (q / name).mkdir(parents=True)
+    # verify_cmd que falha: o candidato está na fronteira (harness atual não
+    # passa), então `seal` não o recusa por "fora da fronteira".
     (q / name / "unit.toml").write_text(
-        'id = "u1"\nprompt = "p"\nverify_cmd = "true"\n', encoding="utf-8"
+        'id = "u1"\nprompt = "p"\nverify_cmd = "false"\n', encoding="utf-8"
     )
     monkeypatch.setattr(synthesize, "QUARANTINE_DIR", q)
     monkeypatch.setattr(synthesize, "SEALED_DIR", s)

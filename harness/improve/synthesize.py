@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 import tomllib
+import unicodedata
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -23,7 +24,9 @@ REVERTED = "reverted"
 
 
 def _slug(unit_id: str) -> str:
-    return re.sub(r"[^a-z0-9_-]+", "-", unit_id.lower()).strip("-") or "unit"
+    # Translitera antes de sanitizar: sem isto "ambíguo" viraria "amb-guo".
+    ascii_id = unicodedata.normalize("NFKD", unit_id).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9_-]+", "-", ascii_id.lower()).strip("-") or "unit"
 
 
 def _s(value: str) -> str:
