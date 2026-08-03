@@ -1,0 +1,11 @@
+# Política do run_graph — o que o loop pode calibrar sem tocar a topologia.
+# A topologia (harness/graph/**) é imutável no genoma; este arquivo é a parte
+# mutável do comportamento. Ausente ou torto => defaults de run_graph.GraphPolicy.
+
+max_attempts = 2        # teto de tentativas por run (retry vira escalate ao bater)
+verify_timeout_s = 120.0
+
+[nodes]
+# false => o nó degrada para o stub antigo (sem KPI / sem prova de tamper).
+measure = true
+tamper = true

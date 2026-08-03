@@ -24,6 +24,15 @@ Pacote `harness/` (núcleo, zero menção a vendor) sobre LangGraph; legado cong
 
 **ESCADA COMPLETA (2026-08-02).** 402 testes; `harness doctor` 10 checks 0 falhas. Próximo: publicação (repo novo, commit único — plano na memory).
 
+## Sprint auto-evolução (2026-08-03)
+
+- **run_graph de-stubbed:** `provision` congela baseline no ledger (specs+valores de KPI do ANTES + fingerprint de tamper do genoma do workspace, padrões congelados — a run não redefine a própria régua); `measure` coleta KPIs do DEPOIS com as specs congeladas; `gate` chama o `ruler/gate` real (tamper→revert, verify vermelho→retry, KPI regrediu→revert, senão accept), retry vira `escalate_human` no teto de attempts; `record` carrega os motivos de revert como `exit_reason`. Política auto-evoluível em `config/graph.toml` (`max_attempts`, `verify_timeout_s`, toggles `[nodes]`), fail-open por campo; toggles off reproduzem o stub antigo. `run_unit(max_attempts=None)` lê da policy. Testes: `tests/test_graph_policy.py`.
+- **skills/**: pacote `harness.skills` (load/select/render, formato `---`/TOML/`---`); injetado no system_prompt do backend deepagents por `kind`. Seeds: `skills/python-fixes.md`, `skills/config-calibration.md`. `skills/**` agora é mutável no genoma. Testes: `tests/test_skills.py`.
+- **MCP:** `harness/backends/mcp_tools.py` lê `config/mcp.toml` (stdio + streamable_http, só `enabled=true`) via langchain-mcp-adapters (import lazy, dep opcional); qualquer falha → `[]`, nunca quebra. Testes: 6 em verde.
+- **research:** ação de auto-evolução (`harness/improve/research.py`): `propose_research` acha o kind com mais falhas repetidas no ledger (determinístico; sem gradiente → None), `apply_research` passa pelo genome check fail-closed ANTES do backend e escreve `skills/<slug>.md` atomicamente. Registro via Action registry em `improve/target.py`. Testes: `tests/test_research.py`.
+
+Suite completa pós-sprint: 428 passed, 2 deselected.
+
 Fiação feita (não é PR novo): o nó `route` do run_graph consome `routing/router.select()` no modo `auto` (`run_unit(route="auto")`, `harness run --route auto`), com escalação de tier por attempt; o modo `manual` — default, backend fixado pelo chamador — continua como era.
 
 ## Verificação global (última: 2026-08-02, 8/8 PASS)

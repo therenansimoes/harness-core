@@ -25,10 +25,18 @@ harness/
   genome/       genome tamper                    ← o que pode mudar
   routing/      kinds (o QUE é)  router (QUANTO custa)
   workspace/    provision (git worktree + symlink de cache)
-  improve/      target mutate escalate           ← o que vale a pena mudar
+  improve/      target mutate escalate research  ← o que vale a pena mudar
+  skills/       load/select/render de skills, injetadas no prompt por kind
   ledger/       store (SQLite; TSV é export)     ← fonte de verdade das runs
-config/*.toml   models kinds tools catalog genome   ← a zona calibrável pelo loop
+skills/*.md     skills destiladas (frontmatter TOML + markdown), mutáveis pelo loop
+config/*.toml   models kinds tools catalog genome graph mcp ← a zona calibrável pelo loop
 ```
+
+`config/mcp.toml` declara servidores MCP opcionais (stdio/streamable_http, via
+`langchain-mcp-adapters`); ferramentas viram `tools=` do backend deepagents,
+qualquer falha degrada para lista vazia. `improve/research.py` é a ação de
+auto-evolução que destila falhas repetidas do ledger em `skills/<slug>.md`,
+sempre passando pelo genome check fail-closed antes de escrever.
 
 **run_graph** (`harness/graph/run_graph.py`) é a topologia de uma run:
 `plan → route → provision → execute → verify → measure → gate →
@@ -36,10 +44,13 @@ config/*.toml   models kinds tools catalog genome   ← a zona calibrável pelo 
 `SqliteSaver` com `thread_id = run_id` e nós idempotentes: matar o processo no
 meio do `execute` e reinvocar a mesma thread completa a run sem executar duas
 vezes (`tests/test_resume.py` faz isso com `kill -9` de verdade). A topologia é
-imutável no genoma — o loop calibra TOML, não nós. Ressalva: nesse grafo,
-`measure` e `gate` ainda são stubs — decidem pelo veredito do verify, sem KPI
-antes/depois e sem tamper. Quem roda a régua com KPI é `harness run`
-(`cli.run_once`); detalhes em `docs/ARCHITECTURE.md`.
+imutável no genoma — o loop calibra TOML, não nós. `measure` e `gate` rodam a
+régua de verdade: `provision` congela baseline (specs+valores de KPI do ANTES e
+fingerprint de tamper do genoma, padrões congelados — a run não redefine a
+própria régua), `measure` coleta o DEPOIS e `gate` chama o combinador de
+`ruler/gate.py`. A política mora em `config/graph.toml` (mutável:
+`max_attempts`, `verify_timeout_s`, toggles de nó), lida em runtime com
+defaults fail-open. Detalhes em `docs/ARCHITECTURE.md`.
 
 **ruler** (`harness/ruler/`) é a régua, e é uma peça só de propósito.
 `verify.py` roda o `verify_cmd` da unidade (sucesso = exit 0, nunca o que o
@@ -47,17 +58,16 @@ agente diz); `kpi.py` coleta os KPIs do projeto com as specs lidas **antes** da
 mudança; `wilson.py` dá o intervalo e o veredito KEEP/DISCARD/INCONCLUSIVE;
 `note.py` guarda a nota humana 1–5, o único KPI que o harness não sabe medir
 sozinho; `gate.py` combina tudo num lugar só: tamper → `revert`, verify
-vermelho → `retry`, KPI regrediu → `revert`, senão `accept`. Quem chama esse
-gate é `cli.run_once` — o nó `gate` do run_graph é o stub citado acima e não
-passa por aqui.
+vermelho → `retry`, KPI regrediu → `revert`, senão `accept`. Tanto
+`cli.run_once` quanto o nó `gate` do run_graph passam por esse combinador.
 
 **genome** (`harness/genome/` + `config/genome.toml`) separa o mutável do
 imutável. Imutável: `harness/ruler/**`, `harness/genome/**`, `harness/routing/**`,
-`harness/graph/**`, `uv.lock`, `benchmarks/sealed/**`. Mutável: `config/*.toml`
-e `prompts/**`. `tamper.py` sabe tirar fingerprint antes e comparar depois, e
-violação que chegue ao gate vira `revert` — mas o que barra escrita em zona
-imutável hoje é o `genome_check` do autopilot, fail-closed ANTES de escrever;
-nenhum dos dois caminhos de run liga a checagem de fingerprint ainda.
+`harness/graph/**`, `uv.lock`, `benchmarks/sealed/**`. Mutável: `config/*.toml`,
+`prompts/**` e `skills/**`. `tamper.py` sabe tirar fingerprint antes e comparar depois, e
+violação que chegue ao gate vira `revert` — o run_graph tira o fingerprint no
+`provision` e compara no `gate`; o `genome_check` do autopilot continua
+fail-closed ANTES de escrever.
 
 **router** (`harness/routing/`) separa duas perguntas que o harness velho
 misturava: `kinds.py` classifica **o que** a unidade é (`code`, `content`,
@@ -239,7 +249,8 @@ si mesma baixando a barra; com acesso a `routing/` se daria o tier caro e
 falsearia o próprio A/B; com acesso a `benchmarks/sealed/**` reescreveria a
 prova. Por isso essas zonas são `immutable` em `config/genome.toml`, o
 `uv.lock` também é (trocar versão de dep por baixo invalida qualquer
-comparação), e o que sobra para o loop calibrar é `config/*.toml` + `prompts/**`.
+comparação), e o que sobra para o loop calibrar é `config/*.toml` +
+`prompts/**` + `skills/**`.
 
 Três detalhes que fazem parte da mesma defesa:
 

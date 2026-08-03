@@ -276,3 +276,50 @@ def with_ledger_priors(catalog: Iterable[Rule], mutations: Iterable) -> list[Rul
             )
         )
     return out
+
+
+# --- ações de auto-evolução -----------------------------------------------------
+# A mutação de config é a ação nativa (pick_target + mutate); outras ações
+# (ex.: research) entram por aqui, no espírito de backends/registry: builtin
+# por import tardio + registro manual para teste/plugin. O autopilot seleciona
+# pela chave em `actions()`.
+
+
+@dataclass(frozen=True)
+class Action:
+    """Uma ação que o loop sabe propor e aplicar. Assinaturas livres de
+    propósito: cada ação tem a própria proposta, o contrato comum é o par."""
+
+    name: str
+    propose: Any
+    apply: Any
+
+
+_manual_actions: dict[str, Action] = {}
+
+
+def register_action(action: Action) -> None:
+    _manual_actions[action.name] = action
+
+
+def unregister_action(name: str) -> None:
+    _manual_actions.pop(name, None)
+
+
+def actions() -> dict[str, Action]:
+    # Import tardio como nos backends builtin: quem nunca consulta ações não
+    # paga o import de research (que puxa o registry de backends).
+    from harness.improve import research
+
+    out: dict[str, Action] = {research.ACTION: research.action()}
+    out.update(_manual_actions)
+    return out
+
+
+def get_action(name: str) -> Action:
+    found = actions()
+    if name not in found:
+        raise KeyError(
+            f"ação desconhecida: {name!r} (disponíveis: {', '.join(sorted(found))})"
+        )
+    return found[name]

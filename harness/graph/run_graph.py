@@ -5,10 +5,14 @@
               accept ──┐   retry → route   escalate ──┐   revert ──┐
                        └──────────── record ──────────┴────────────┘ → END
 
-Nós `measure` e `gate` ainda são stubs determinísticos — a régua real é PR-4. O
-que este PR entrega de verdade é a idempotência: toda escrita externa passa por
-`(run_id, node, attempt)` no ledger, então matar o processo no meio de `execute`
-e reinvocar o mesmo `thread_id` retoma sem reexecutar nada que já aconteceu.
+`measure` coleta KPI (ruler/kpi) com specs lidas ANTES do execute; `gate` aplica
+a régua real (ruler/gate) com prova de tamper (genome/tamper) tirada no
+provision. `config/graph.toml` calibra o comportamento (teto de tentativas,
+timeout do verify, toggles por nó) — a topologia é código imutável no genoma, a
+política é config mutável. A espinha do arquivo segue a idempotência: toda
+escrita externa passa por `(run_id, node, attempt)` no ledger, então matar o
+processo no meio de `execute` e reinvocar o mesmo `thread_id` retoma sem
+reexecutar nada que já aconteceu.
 
 O `attempt` faz parte da chave só dos nós por-tentativa (`execute`, `verify`):
 sem ele o braço `retry` seria decorativo — a segunda passagem acharia o registro
@@ -28,15 +32,30 @@ from __future__ import annotations
 import shutil
 import subprocess
 import time
+import tomllib
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from harness.backends import registry
+from harness.genome import tamper
+from harness.genome.genome import DEFAULT_PATH as GENOME_PATH
+from harness.genome.genome import Genome
+from harness.genome.genome import load as load_genome
 from harness.graph.checkpoint import open_checkpointer
 from harness.graph.state import Budget, Decision, Event, RunState
 from harness.ledger import store
-from harness.routing import MANUAL_TIER, ROUTE_AUTO, ROUTE_MANUAL, ROUTE_MODES, router
+from harness.routing import (
+    MANUAL_TIER,
+    ROUTE_AUTO,
+    ROUTE_MANUAL,
+    ROUTE_MODES,
+    config_dir,
+    router,
+)
+from harness.ruler.gate import gate as ruler_gate
+from harness.ruler.kpi import KpiSpec, collect, load_kpis
 from harness.types import ExecRequest, ExecResult, RunRow, Selection, UnitSpec, Verdict
 
 # Chaves nossas dentro de `config["configurable"]`. O que não é estado do run
@@ -54,6 +73,66 @@ TRACE_FILE = "trace.jsonl"
 
 # Não vão para o workspace: a spec da unidade e lixo de ferramenta.
 IGNORE_NAMES = ("unit.toml", "__pycache__", ".git", ".venv", "node_modules")
+
+GRAPH_TOML = "graph.toml"
+DEFAULT_MAX_ATTEMPTS = 2
+
+
+# --- política calibrável ------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class GraphPolicy:
+    """O que o loop pode calibrar sem tocar a topologia. Vive em
+    `config/graph.toml` (genoma-mutável); os defaults daqui valem quando o
+    arquivo não existe ou está torto."""
+
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS
+    verify_timeout_s: float = VERIFY_TIMEOUT_S
+    measure: bool = True
+    tamper: bool = True
+
+
+def _policy_int(raw: Any, default: int) -> int:
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return v if v >= 1 else default
+
+
+def _policy_float(raw: Any, default: float) -> float:
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return v if v > 0 else default
+
+
+def _policy_bool(raw: Any, default: bool) -> bool:
+    return raw if isinstance(raw, bool) else default
+
+
+def load_policy(path: Path | None = None) -> GraphPolicy:
+    """`config/graph.toml` -> GraphPolicy. Falha aberta campo a campo: arquivo
+    ausente/ilegível ou campo torto cai no default — config ruim degrada para o
+    comportamento de fábrica, nunca derruba o run."""
+    p = Path(path) if path is not None else config_dir() / GRAPH_TOML
+    base = GraphPolicy()
+    try:
+        data = tomllib.loads(p.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return base
+    nodes = data.get("nodes")
+    nodes = nodes if isinstance(nodes, dict) else {}
+    return GraphPolicy(
+        max_attempts=_policy_int(data.get("max_attempts"), base.max_attempts),
+        verify_timeout_s=_policy_float(
+            data.get("verify_timeout_s"), base.verify_timeout_s
+        ),
+        measure=_policy_bool(nodes.get("measure"), base.measure),
+        tamper=_policy_bool(nodes.get("tamper"), base.tamper),
+    )
 
 
 # --- helpers de config/serialização ------------------------------------------
@@ -115,6 +194,51 @@ def _verdict_from_payload(d: dict) -> Verdict:
         log_path=Path(d["log_path"]),
         sec=float(d["sec"]),
     )
+
+
+def _specs_payload(specs: Mapping[str, KpiSpec]) -> dict:
+    return {
+        n: {"cmd": s.cmd, "direction": s.direction, "timeout_s": s.timeout_s}
+        for n, s in specs.items()
+    }
+
+
+def _specs_from_payload(d: dict | None) -> dict[str, KpiSpec]:
+    return {
+        n: KpiSpec(
+            name=n,
+            cmd=v["cmd"],
+            direction=v.get("direction", "higher"),
+            timeout_s=v.get("timeout_s"),
+        )
+        for n, v in (d or {}).items()
+    }
+
+
+def _baseline(ws: Path, policy: GraphPolicy) -> dict:
+    """O ANTES da mudança, medido pré-execute e congelado no payload do
+    provision: specs+valores de KPI e o fingerprint do imutável. É o que impede
+    a mudança avaliada de redefinir a própria régua (Goodhart do kpis.toml) ou
+    de mexer no imutável sem ninguém notar."""
+    out: dict = {"kpi_specs": {}, "kpi_before": {}, "tamper_fp": None, "genome": None}
+    if policy.measure:
+        specs = load_kpis(ws)  # sem kpis.toml => {} — KPI é opcional
+        out["kpi_specs"] = _specs_payload(specs)
+        out["kpi_before"] = collect(ws, specs=specs) if specs else {}
+    if policy.tamper:
+        gpath = ws / GENOME_PATH
+        if gpath.is_file():
+            try:
+                g = load_genome(gpath)
+            except ValueError:
+                g = None  # genoma torto no alvo: sem régua de tamper, não crash
+            if g is not None:
+                out["genome"] = {
+                    "immutable": list(g.immutable),
+                    "mutable": list(g.mutable),
+                }
+                out["tamper_fp"] = tamper.fingerprint(g, ws)
+    return out
 
 
 def _copy_unit_files(src: Path, dst: Path) -> None:
@@ -216,7 +340,10 @@ def _provision(state: RunState, config=None) -> dict:
     t0 = time.monotonic()
     _copy_unit_files(state["unit"].path, ws)
     sec = time.monotonic() - t0
-    store.record_node(run_id, "provision", {"workspace": str(ws), "sec": sec}, db)
+    # Baseline junto do workspace: um SIGKILL entre copiar e medir não pode
+    # deixar um provision "pela metade" — payload único, escrita única.
+    payload = {"workspace": str(ws), "sec": sec, **_baseline(ws, load_policy())}
+    store.record_node(run_id, "provision", payload, db)
     return {
         "workspace": str(ws),
         "events": [_event("provision", workspace=str(ws), reused=False)],
@@ -281,7 +408,7 @@ def _verify(state: RunState, config=None) -> dict:
             shell=True,
             cwd=ws,
             capture_output=True,
-            timeout=VERIFY_TIMEOUT_S,
+            timeout=load_policy().verify_timeout_s,
         )
         exit_code, out = proc.returncode, proc.stdout + proc.stderr
     except subprocess.TimeoutExpired:
@@ -306,25 +433,90 @@ def _verify(state: RunState, config=None) -> dict:
 
 
 def _measure(state: RunState, config=None) -> dict:
-    """Stub: coleta de KPI é PR-4. Os campos existem para o gate não mudar depois."""
-    return {"kpi_before": {}, "kpi_after": {}, "events": [_event("measure")]}
+    """KPIs do DEPOIS, medidos com as specs do ANTES (payload do provision).
+
+    Por tentativa, como execute/verify: o retry muda o workspace, então o
+    "depois" da tentativa 1 não é o da tentativa 0. `nodes.measure = false`
+    devolve o stub antigo: campos vazios, gate cego a KPI, nada no ledger.
+    """
+    run_id = state["run_id"]
+    attempt = state.get("attempt", 0)
+    db = _db(config)
+    saved = store.get_node(run_id, "measure", db, attempt=attempt)
+    if saved is not None:
+        return {
+            "kpi_before": saved["before"],
+            "kpi_after": saved["after"],
+            "events": [_event("measure", reused=True, attempt=attempt)],
+        }
+    if not load_policy().measure:
+        return {"kpi_before": {}, "kpi_after": {}, "events": [_event("measure")]}
+
+    prov = store.get_node(run_id, "provision", db) or {}
+    specs = _specs_from_payload(prov.get("kpi_specs"))
+    before = prov.get("kpi_before") or {}
+    after = collect(Path(state["workspace"]), specs=specs) if specs else {}
+    store.record_node(
+        run_id, "measure", {"before": before, "after": after}, db, attempt=attempt
+    )
+    return {
+        "kpi_before": before,
+        "kpi_after": after,
+        "events": [_event("measure", attempt=attempt, kpis=sorted(specs))],
+    }
 
 
 def _gate(state: RunState, config=None) -> dict:
-    """Stub da régua: veredito manda, tamper é vazio até PR-5."""
+    """A régua real (`ruler/gate`): tamper => revert, verify vermelho => retry,
+    KPI regrediu => revert, senão accept.
+
+    O teto de tentativas é do grafo, não do combinador: o retry da régua vira
+    escalate quando o budget acaba. Toggles desligados em `config/graph.toml`
+    reproduzem o stub antigo (sem KPI, sem prova de tamper).
+    """
     verdict = state.get("verdict")
     attempt = state.get("attempt", 0)
     max_attempts = state["budget"].max_attempts
+    policy = load_policy()
 
-    if verdict is not None and verdict.passed:
-        decision = Decision("accept", "verify passou")
-    elif attempt + 1 < max_attempts:
-        decision = Decision("retry", f"verify falhou, tentativa {attempt + 1}")
+    prov: dict = {}
+    if policy.tamper or policy.measure:
+        prov = store.get_node(state["run_id"], "provision", _db(config)) or {}
+
+    violations: list[str] = []
+    if policy.tamper and prov.get("tamper_fp") and prov.get("genome"):
+        # Genoma do payload do provision, não do workspace: a cópia lá dentro
+        # é justamente o que está sob suspeita.
+        gsaved = prov["genome"]
+        g = Genome(
+            immutable=tuple(gsaved["immutable"]),
+            mutable=tuple(gsaved.get("mutable") or ()),
+        )
+        changed = state["exec"].files_changed if state.get("exec") else ()
+        violations = tamper.detect(
+            Path(state["workspace"]), prov["tamper_fp"], changed, genome=g
+        )
+
+    if verdict is None:
+        # Nada verificou: só cabe tentar de novo (mesmo caminho do stub).
+        action, reason = "retry", "sem_verdict"
     else:
-        decision = Decision("escalate_human", "verify falhou e acabaram as tentativas")
+        specs = _specs_from_payload(prov.get("kpi_specs")) if policy.measure else None
+        ruled = ruler_gate(
+            verdict,
+            state.get("kpi_before") or {},
+            state.get("kpi_after") or {},
+            violations,
+            specs,
+        )
+        action, reason = ruled.action, ruled.reason
+    if action == "retry" and attempt + 1 >= max_attempts:
+        action = "escalate_human"
+        reason = f"{reason}; acabaram as {max_attempts} tentativas"
+    decision = Decision(action, reason)  # tipo do estado, não o do ruler
 
     return {
-        "tamper": [],
+        "tamper": violations,
         "decision": decision,
         "events": [_event("gate", action=decision.action, reason=decision.reason)],
     }
@@ -382,6 +574,9 @@ def _record(state: RunState, config=None) -> dict:
 
     if result is not None and not result.ok:
         exit_reason = result.exit_reason
+    elif decision is not None and decision.action == "revert":
+        # paridade com o cli: revert carrega kpi_regression:… / tamper:…
+        exit_reason = decision.reason
     elif verdict is not None and not verdict.passed:
         exit_reason = "verify_failed"
     else:
@@ -488,11 +683,13 @@ def run_unit(
     model: str | None,
     data_dir: Path,
     thread_id: str,
-    max_attempts: int = 2,
+    max_attempts: int | None = None,
     route: str = ROUTE_MANUAL,
 ) -> RunState:
     """Roda uma unidade ponta a ponta. Mesmo `thread_id` + `data_dir` = retomada.
 
+    `max_attempts=None` lê o teto de `config/graph.toml` — é o caminho pelo
+    qual o loop calibra o retry sem tocar em código.
     `route="auto"` entrega backend/model/tier ao router e por isso é excludente
     com `backend`: aceitar os dois e ignorar um em silêncio seria mentir sobre
     quem executou.
@@ -507,6 +704,8 @@ def run_unit(
         raise ValueError("route='auto': quem escolhe backend/model é o router")
     if route == ROUTE_MANUAL and not backend:
         raise ValueError("route='manual' exige backend")
+    if max_attempts is None:
+        max_attempts = load_policy().max_attempts
 
     unit = load_unit(Path(unit_dir))
     data_dir = Path(data_dir)

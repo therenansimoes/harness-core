@@ -1,0 +1,20 @@
+# Servidores MCP disponíveis para o executor (deepagents).
+# Este arquivo é MUTÁVEL pelo genoma (config/*.toml): o loop de melhoria pode
+# evoluir quais tools MCP o executor recebe — habilitar/desabilitar servidor,
+# trocar transport, ajustar args.
+# Habilitar qualquer servidor exige `pip install langchain-mcp-adapters`
+# (dependência opcional, não pinada); sem ela, load_mcp_tools devolve [] e loga.
+#
+# Formato por servidor:
+#   [servers.<nome>]
+#   enabled = false                # default: desligado
+#   transport = "stdio"            # ou "streamable_http"
+#   command = "npx"                # stdio: binário
+#   args = ["-y", "pacote"]        # stdio: argumentos
+#   url = "http://..."             # streamable_http: endpoint
+
+[servers.filesystem]
+enabled = false
+transport = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "."]

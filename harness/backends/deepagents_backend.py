@@ -17,7 +17,13 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable, ClassVar
 
+from harness.skills import render_prompt, select_skills
 from harness.types import Capabilities, ExecRequest, ExecResult, ExitReason, Preflight
+
+try:
+    from harness.backends.mcp_tools import load_mcp_tools
+except Exception:  # módulo chega em PR paralelo; sem ele, sem tools extras
+    load_mcp_tools = lambda *a, **k: []  # noqa: E731
 
 OLLAMA_PREFIX = "ollama:"
 OLLAMA_URL = "http://localhost:11434/api/tags"
@@ -168,15 +174,23 @@ def _build_agent(req: ExecRequest):
     # Convenção de workspace é responsabilidade do BACKEND, não da unit: o
     # filesystem virtual tem root no workspace, e a unit fala "seu diretório de
     # trabalho" sem saber disso. Sem esta ponte, modelo pequeno alucina path.
+    system_prompt = (
+        "Seu diretório de trabalho é o root do filesystem: os arquivos da "
+        'tarefa estão em "/" (ex.: /arquivo.py). Use ls para conferir e as '
+        "tools de arquivo (read_file, edit_file, write_file) para mexer neles."
+    )
+    # `kind` ainda não é campo do ExecRequest — getattr segura os dois mundos.
+    skills_block = render_prompt(select_skills(getattr(req, "kind", None)))
+    if skills_block:
+        system_prompt = f"{system_prompt}\n\n{skills_block}"
+
+    extra_tools = list(load_mcp_tools())  # contrato: [] em QUALQUER falha
     agent = create_deep_agent(
         model=req.model,
         backend=fs,
         middleware=middleware,
-        system_prompt=(
-            "Seu diretório de trabalho é o root do filesystem: os arquivos da "
-            'tarefa estão em "/" (ex.: /arquivo.py). Use ls para conferir e as '
-            "tools de arquivo (read_file, edit_file, write_file) para mexer neles."
-        ),
+        system_prompt=system_prompt,
+        **({"tools": extra_tools} if extra_tools else {}),
     )
     return agent, usage_cb
 

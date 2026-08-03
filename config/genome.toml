@@ -29,4 +29,6 @@ immutable = [
 mutable = [
     "config/*.toml",
     "prompts/**",
+    # skills são conhecimento destilado que o loop pode evoluir; a régua continua imutável.
+    "skills/**",
 ]
