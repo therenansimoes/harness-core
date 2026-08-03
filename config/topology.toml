@@ -12,11 +12,26 @@
 #   cai na topologia embutida, com 1 linha no stderr. O código dos nós é
 #   imutável; este arquivo só rearranja a estrutura.
 #
-# Este default reproduz EXATAMENTE a topologia embutida — comportamento
-# idêntico até alguém provar uma variação no A/B.
+# Topologia por kind (harness/graph/by_kind.py), opcional: uma seção
+# [kinds.<kind>] pode declarar OUTRA topologia inteira para unidades daquele
+# kind, com `nodes` e `edges` PRÓPRIOS. Nunca há merge com o default: a seção
+# substitui tudo, e seção parcial (só um dos dois) é recusada. Kind sem seção
+# usa a topologia de topo. Como TOML fecha a tabela corrente, os escalares e
+# arrays de topo (`nodes`, `edges`) precisam vir ANTES de qualquer
+# [kinds.<kind>].
+#
+# Fora do caminho do retry este default reproduz a topologia embutida. A única
+# variação: `reflect` é o CHECKER do retry — entra entre `retry` e `route`, lê o
+# cadáver da tentativa reprovada (exit code do verify, files_changed do exec,
+# verify_cmd da unidade — o TEXTO do log do verificador selado nunca entra, sob
+# pena de vazar gabarito) e deixa um hint literal no estado, que o `execute` da
+# tentativa seguinte cola no prompt. Determinístico, $0, fail-open: sem material
+# o hint é vazio e a tentativa roda com o prompt cru, como antes. Tirar
+# ["retry","reflect"]/["reflect","route"] e voltar ["retry","route"] desliga.
 
 nodes = [
   "plan",
+  "reflect",
   "route",
   "provision",
   "execute",
@@ -38,7 +53,8 @@ edges = [
   ["execute", "verify"],
   ["verify", "measure"],
   ["measure", "gate"],
-  ["retry", "route"],
+  ["retry", "reflect"],
+  ["reflect", "route"],
   ["accept", "record"],
   ["escalate", "record"],
   ["revert", "record"],

@@ -253,11 +253,13 @@ def test_retry_reexecutes_and_can_change_the_outcome(data_dir, tmp_path, flaky):
     assert final["decision"].action == "accept"
     assert final["verdict"].passed is True
 
+    # `reflect` entra na perna do retry pela topologia default (é o checker que
+    # monta o hint da tentativa seguinte) — o resto do caminho é o de sempre.
     nodes = [e["node"] for e in final["events"]]
     assert nodes == [
         "plan", "route", "provision", "execute", "verify", "measure", "gate",
-        "retry", "route", "provision", "execute", "verify", "measure", "gate",
-        "accept", "record",
+        "retry", "reflect", "route", "provision", "execute", "verify", "measure",
+        "gate", "accept", "record",
     ]
     # Nenhum payload cacheado atravessou a fronteira da tentativa.
     assert not any(e.get("reused") for e in final["events"] if e["node"] != "provision")

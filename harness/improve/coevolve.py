@@ -52,16 +52,22 @@ def screen_benchmark(
     # Import tardio: espelha exam.py e mantém o módulo leve de importar.
     from harness.graph.run_graph import run_unit
     from harness.ledger.store import data_dir as default_data_dir
+    from harness.memory import episodic
 
     unit = Path(unit_dir)
     data = Path(data_dir) if data_dir is not None else default_data_dir()
     # thread_id único: screening nunca retoma run velho por engano.
     thread_id = f"frontier-{unit.name}-{uuid.uuid4().hex[:8]}"
-    try:
-        state = run_unit(unit, backend, model or None, data, thread_id)
-    except Exception as exc:
-        print(f"coevolve: '{unit.name}' erro ao rodar, pulado: {exc}", file=sys.stderr)
-        return None
+    # Screening não grava nem lê memória episódica — mesma classe do exame: o
+    # verificador do candidato imprime o gabarito ("esperado=...") e a memória
+    # global vazaria isso pro executor. `screen_quarantine` passa por aqui.
+    with episodic.disabled():
+        try:
+            state = run_unit(unit, backend, model or None, data, thread_id)
+        except Exception as exc:
+            print(f"coevolve: '{unit.name}' erro ao rodar, pulado: {exc}",
+                  file=sys.stderr)
+            return None
     decision = state.get("decision")
     if decision is None:
         print(f"coevolve: '{unit.name}' terminou sem decisão, pulado", file=sys.stderr)

@@ -65,6 +65,7 @@ def checks(root: Path | str | None = None, data: Path | None = None) -> list[Che
         _ledger(data_dir / store.DB_NAME),
         _skills(base),
         _topology(base),
+        _plugin_nodes(base),
         _actions(),
         *_optional_toml(base),
         _lineage(data_dir),
@@ -218,6 +219,35 @@ def _topology(base: Path) -> Check:
         f"{path} compila: nodes={len(spec.get('nodes', []))} "
         f"edges={len(spec.get('edges', []))}",
     )
+
+
+def _plugin_nodes(base: Path) -> Check:
+    """Nó de plugin recusado NUNCA é FALHA, pelo mesmo motivo do _topology: o
+    grafo roda sem ele. O que o doctor faz aqui é mostrar o que foi recusado e
+    por quê — recusa silenciosa é como um ack esquecido parece bug de código."""
+    try:
+        from harness.graph import plugin_nodes
+
+        folder = plugin_nodes.nodes_dir(base)
+        if plugin_nodes.disabled():
+            return Check(
+                "plugin_nodes", OK,
+                f"{plugin_nodes.KILL_SWITCH}="
+                f"{os.environ.get(plugin_nodes.KILL_SWITCH, '')} — nenhum nó de "
+                f"plugin carrega, nem aprovado",
+            )
+        result = plugin_nodes.register_all(root=base)
+    except Exception as exc:
+        return Check("plugin_nodes", WARN, f"{type(exc).__name__}: {exc}")
+    if not result:
+        return Check("plugin_nodes", OK, f"{folder} sem nó (dir ausente ou vazio)")
+    ok = sorted(n for n, r in result.items() if r == "registered")
+    bad = sorted((n, r) for n, r in result.items() if r != "registered")
+    detail = f"{len(ok)} registrado(s)" + (f": {', '.join(ok)}" if ok else "")
+    if bad:
+        recusas = "; ".join(f"{n}: {r}" for n, r in bad)
+        return Check("plugin_nodes", WARN, f"{detail} — recusados: {recusas}")
+    return Check("plugin_nodes", OK, detail)
 
 
 def _actions() -> Check:

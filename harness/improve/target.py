@@ -314,6 +314,9 @@ _OPTIONAL_ACTION_MODULES = (
     "harness.improve.prompt_evolve",
     "harness.improve.workflow_action",
     "harness.improve.redteam",
+    "harness.improve.dream",
+    "harness.improve.node_action",
+    "harness.improve.topology_evolve",
 )
 
 

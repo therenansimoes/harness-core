@@ -50,4 +50,8 @@ class RunState(TypedDict):
     tamper: list[str]
     decision: Decision | None
     budget: Budget
+    # Hint do checker (nó `reflect`) para a PRÓXIMA tentativa: viaja no estado
+    # porque é específico DESTA execução — conhecimento entre runs é episódico.
+    # Quem lê usa `get(..., "")`: estado de checkpoint antigo não tem a chave.
+    reflect_hint: str
     events: Annotated[list[Event], operator.add]

@@ -457,6 +457,21 @@ def _provision(state: RunState, config=None) -> dict:
     }
 
 
+def _prompt(state: RunState) -> str:
+    """Prompt da tentativa: o da unidade, mais o hint do checker se houver.
+
+    Import lazy do reflect para não amarrar run_graph a um módulo que a
+    topologia pode nem usar; sem hint (default) a string é a de sempre.
+    """
+    hint = str(state.get("reflect_hint") or "").strip()
+    if not hint:
+        return state["unit"].prompt
+
+    from harness.graph.reflect import HINT_HEADER
+
+    return f"{state['unit'].prompt}\n\n{HINT_HEADER}\n{hint}"
+
+
 def _execute(state: RunState, config=None) -> dict:
     """Chama o backend — uma vez por tentativa, custe o que custar o crash."""
     run_id = state["run_id"]
@@ -473,7 +488,7 @@ def _execute(state: RunState, config=None) -> dict:
     ws = Path(state["workspace"])
     result = registry.get_backend(sel.backend).execute(
         ExecRequest(
-            prompt=state["unit"].prompt,
+            prompt=_prompt(state),
             workspace=ws,
             model=sel.model or None,
             max_turns=sel.max_turns,
@@ -908,6 +923,7 @@ def initial_state(unit: UnitSpec, run_id: str, max_attempts: int) -> RunState:
         tamper=[],
         decision=None,
         budget=Budget(max_attempts=max_attempts),
+        reflect_hint="",
         events=[],
     )
 
@@ -953,7 +969,9 @@ def run_unit(
     data_dir = Path(data_dir)
 
     with open_checkpointer(data_dir) as checkpointer:
-        graph = build_run_graph(checkpointer)
+        from harness.graph import by_kind  # import tardio: run_unit é o único consumidor
+
+        graph = by_kind.build_for_unit(unit, checkpointer)
         config = {
             "configurable": {
                 "thread_id": thread_id,

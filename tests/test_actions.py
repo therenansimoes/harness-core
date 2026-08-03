@@ -50,7 +50,17 @@ def run_row(unit_id: str, ok: bool = False, reason: str = "verify_failed") -> Ru
 
 def test_acoes_registradas():
     found = actions()
-    for name in ("research", "codegen", "synthesize", "topology", "evolve", "redteam"):
+    for name in (
+        "research",
+        "codegen",
+        "synthesize",
+        "topology",
+        "evolve",
+        "redteam",
+        "dream",
+        "node",
+        "topology_kind",
+    ):
         assert name in found, name
         assert found[name].name == name
 
@@ -88,7 +98,27 @@ def test_synthesize_sem_falha_devolve_none():
 # --- topology -------------------------------------------------------------------
 
 
+def sem_reflect(sandbox: Path) -> Path:
+    """Volta a topologia do sandbox ao estado anterior ao reflect: tira o nó e
+    religa retry->route. A ação só sabe propor a INSERÇÃO do reflect, então
+    partir do default do repo (que já traz reflect) testaria só o no-op."""
+    p = sandbox / "config" / "topology.toml"
+    spec = topology.load_spec(p)
+    edges = [tuple(e) for e in spec["edges"] if "reflect" not in e]
+    p.write_text(
+        adapters.render_topology(
+            {
+                "nodes": [n for n in spec["nodes"] if n != "reflect"],
+                "edges": [list(e) for e in edges + [("retry", "route")]],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return p
+
+
 def test_topology_propose_insere_reflect_e_apply_compila(sandbox):
+    sem_reflect(sandbox)
     proposal = adapters.propose_topology(root=sandbox)
     assert proposal is not None
     path = adapters.apply_topology(proposal, root=sandbox)
@@ -96,6 +126,13 @@ def test_topology_propose_insere_reflect_e_apply_compila(sandbox):
     assert "reflect" in spec["nodes"]
     topology.compile_spec(spec)  # spec aplicada tem que compilar de verdade
     # variação já feita: não há segunda proposta igual
+    assert adapters.propose_topology(root=sandbox) is None
+
+
+def test_topology_propose_no_op_com_reflect_no_default_do_repo(sandbox):
+    # O default do repo já usa reflect como checker do retry: nada a propor.
+    spec = topology.load_spec(sandbox / "config" / "topology.toml")
+    assert "reflect" in spec["nodes"]
     assert adapters.propose_topology(root=sandbox) is None
 
 

@@ -127,12 +127,23 @@ class TopologyProposal:
     reasons: tuple[str, ...] = ()
 
 
-def render_topology(spec: Mapping[str, Any]) -> str:
+def _render_section(spec: Mapping[str, Any]) -> str:
     nodes = "".join(f"  {json.dumps(n)},\n" for n in spec["nodes"])
     edges = "".join(
         f"  [{json.dumps(a)}, {json.dumps(b)}],\n" for a, b in spec["edges"]
     )
     return f"nodes = [\n{nodes}]\n\nedges = [\n{edges}]\n"
+
+
+def render_topology(spec: Mapping[str, Any]) -> str:
+    """Topo primeiro, `[kinds.*]` depois: TOML fecha a tabela corrente, então
+    seção de kind no meio engoliria os arrays de topo. Preservar as seções é
+    obrigatório — render que as descarta apaga topologia de kind no apply."""
+    text = _render_section(spec)
+    for kind in sorted(spec.get("kinds") or {}):
+        key = kind if _BARE_KEY.match(kind) else json.dumps(kind)
+        text += f"\n[kinds.{key}]\n" + _render_section(spec["kinds"][kind])
+    return text
 
 
 def propose_topology(
@@ -165,7 +176,13 @@ def propose_topology(
         return None
     src, dst = edges[idx]
     new_edges = edges[:idx] + [(src, REFLECT), (REFLECT, dst)] + edges[idx + 1 :]
-    new_spec = {"nodes": nodes + [REFLECT], "edges": [list(e) for e in new_edges]}
+    # Spec INTEIRA (inclusive `[kinds.*]`): o que não é copiado aqui o render
+    # não tem como preservar, e o apply reescreve o arquivo todo.
+    new_spec = {
+        **spec,
+        "nodes": nodes + [REFLECT],
+        "edges": [list(e) for e in new_edges],
+    }
     topology._validate(new_spec)  # proposta já nasce válida ou não nasce
     return TopologyProposal(
         target_file=TOPOLOGY_FILE,

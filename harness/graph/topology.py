@@ -13,6 +13,7 @@ import tomllib
 from pathlib import Path
 from typing import Any, Mapping
 
+from harness.graph import reflect as _reflect_mod
 from harness.graph import run_graph as _rg
 from harness.graph.state import RunState
 from harness.routing import config_dir
@@ -33,9 +34,18 @@ class TopologyError(ValueError):
 
 
 def _reflect(state: RunState, config=None) -> dict:
-    """Pass-through barato: só anexa evento. Prova que a estrutura cresce
-    por dado, sem tocar nos nós do run_graph."""
-    return {"events": [_rg._event("reflect")]}
+    """Checker do retry: lê o rastro da tentativa reprovada e deixa um hint no
+    estado para o prompt da tentativa seguinte (`run_graph._prompt`).
+
+    Determinístico e $0. Fora do caminho do retry (ex.: reflect entre plan e
+    route) não há tentativa morta para ler e o hint sai vazio — nó continua
+    sendo pass-through, como quando era só evento.
+    """
+    hint = _reflect_mod.build_hint(_reflect_mod.hydrate(state, _rg._db(config)))
+    return {
+        "reflect_hint": hint,
+        "events": [_rg._event("reflect", hint=bool(hint))],
+    }
 
 
 # Whitelist: só estes nomes podem aparecer na spec.

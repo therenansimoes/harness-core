@@ -83,6 +83,7 @@ def exam_report(
     # Import tardio: espelha run_graph↔cli e mantém o módulo leve de importar.
     from harness.graph.run_graph import run_unit
     from harness.ledger.store import data_dir as default_data_dir
+    from harness.memory import episodic
 
     cfg_backend, cfg_model = exam_backend(config_path)
     backend = backend or cfg_backend
@@ -92,21 +93,25 @@ def exam_report(
     data = Path(data_dir) if data_dir is not None else default_data_dir()
 
     report: list[dict] = []
-    for unit_dir in _discover(sealed):
-        unit_id = unit_dir.name
-        if backend == MOCK_BACKEND and _requires_real_backend(unit_dir):
-            print(f"exam: {unit_id} exige backend real, fora do exame mock",
-                  file=sys.stderr)
-            continue
-        # thread_id único: exame nunca retoma run velho por engano.
-        thread_id = f"exam-{unit_id}-{uuid.uuid4().hex[:8]}"
-        try:
-            state = run_unit(unit_dir, backend, model or None, data, thread_id)
-            decision = state.get("decision")
-            passed = bool(decision is not None and decision.action == "accept")
-        except Exception:
-            passed = False
-        report.append({"id": unit_id, "passed": passed})
+    # Exame não grava nem lê memória episódica — o verificador selado imprime o
+    # gabarito ("esperado=..."), e a memória global vazaria isso pro executor em
+    # prompts futuros do mesmo kind. O juiz não alimenta a memória do avaliado.
+    with episodic.disabled():
+        for unit_dir in _discover(sealed):
+            unit_id = unit_dir.name
+            if backend == MOCK_BACKEND and _requires_real_backend(unit_dir):
+                print(f"exam: {unit_id} exige backend real, fora do exame mock",
+                      file=sys.stderr)
+                continue
+            # thread_id único: exame nunca retoma run velho por engano.
+            thread_id = f"exam-{unit_id}-{uuid.uuid4().hex[:8]}"
+            try:
+                state = run_unit(unit_dir, backend, model or None, data, thread_id)
+                decision = state.get("decision")
+                passed = bool(decision is not None and decision.action == "accept")
+            except Exception:
+                passed = False
+            report.append({"id": unit_id, "passed": passed})
     return report
 
 
