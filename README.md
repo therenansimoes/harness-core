@@ -249,13 +249,26 @@ camada populacional: PBT com seleção por Wilson lower bound
 (`run_population`) e um archive MAP-Elites em sqlite (`data/archive.sqlite`)
 que guarda o melhor config por nicho `(kind, cost_bucket)`.
 
+O registry de ações (`improve/target.py`) hoje expõe `research`, `codegen`,
+`synthesize`, `topology`, `evolve`, `prompt` e `skill_prune` — cada uma um par
+propose/apply (`improve/actions.py` adapta synthesize/topology/evolve;
+`improve/prompt_evolve.py` muta `prompts/executor.md`, o prompt-base evoluível
+do executor; `skills/attribution.py` mede lift por skill via tabela
+`skill_usage` no ledger e apenas *aposenta* skills para `skills/attic/`, nunca
+deleta). O apply do autopilot passa por `improve/meta.py::meta_check` antes de
+qualquer escrita: mudança que toca o juiz exige exame selado (injetável via
+config do grafo, default fail-closed) — quarantined/blocked param o loop e
+escalam.
+
 `harness improve` sem `--unit` usa `benchmarks/held_in/*/unit.toml`; enquanto
 esse diretório não tiver unidades no formato novo, passe `--unit` (repetível).
 
 `harness replay --list` mostra as mutações julgadas; `harness replay
 --mutation <id>` imprime o delta atribuído com intervalo de Wilson por janela
 e nomeia os *confounders* (outras mutações KEEP no meio — atribuição honesta
-diz o que não consegue separar). `harness doctor` roda o diagnóstico completo:
+diz o que não consegue separar). `harness lineage` desenha a genealogia das
+mutações de código (`data/lineage.jsonl` + verdict do sqlite) em árvore ASCII —
+`--limit N` corta pelas N últimas raízes. `harness doctor` roda o diagnóstico completo:
 preflight de todos os backends, genoma/tamper, tracing desligado, configs
 parseáveis.
 
@@ -290,7 +303,7 @@ Três detalhes que fazem parte da mesma defesa:
 
 ## Estado
 
-`uv run --extra deepagents pytest -q` → **364 passed, 2 deselected**. Os 2
+`uv run --extra deepagents pytest -q` → **499 passed, 2 deselected**. Os 2
 deselecionados são os testes que exigem máquina de verdade: marker `ollama`
 (servidor local) e `claude_cli` (gasta dinheiro). Ver `CONTRIBUTING.md`.
 

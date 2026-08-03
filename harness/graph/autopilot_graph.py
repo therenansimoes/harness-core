@@ -49,7 +49,7 @@ from typing import Annotated, Any, Sequence, TypedDict
 from harness.graph.checkpoint import open_checkpointer
 from harness.graph.run_graph import CFG_BACKEND, CFG_DATA_DIR, CFG_MODEL, _cfg, _event
 from harness.graph.state import Budget, Event
-from harness.improve import CONFIG_SUBDIR, mutate
+from harness.improve import CONFIG_SUBDIR, meta, mutate
 from harness.improve import escalate as esc
 from harness.improve.mutate import GenomeViolation, Mutation, MutationError
 from harness.improve.target import (
@@ -68,6 +68,11 @@ from harness.types import MutationRow
 
 CFG_ROOT = "harness_root"
 CFG_N = "harness_n_per_arm"
+# Exame selado do meta-check (config/ruler.toml), injetável via `configurable`.
+# Default fail-closed: sem exame configurado, NADA passa — e `human_ack` no
+# loop é False por construção (ver improve/meta.py), então o melhor caso do
+# autopilot sozinho é quarentena, nunca aplicação.
+CFG_SEALED_EXAM = "harness_sealed_exam"
 # Chave do LangGraph, não nossa: é o `thread_id` do `configurable`.
 CFG_THREAD = "thread_id"
 
@@ -365,6 +370,24 @@ def _apply(state: AutopilotState, config=None) -> dict:
         return stop
     try:
         rule = _rule_of(state, config)
+        # Meta-exame ANTES de qualquer marca ou escrita: mudança na régua
+        # (config/ruler.toml) exige exame selado + ack humano, e o autopilot
+        # NUNCA produz ack (human_ack=False fixo). Alvo comum => "allowed"
+        # sem custo; "quarantined"/"blocked" => escalate, nada é aplicado.
+        run_exam = _cfg(config, CFG_SEALED_EXAM, None) or (lambda: False)
+        meta_verdict = meta.meta_check(
+            Path(rule.target_file), run_sealed_exam=run_exam, human_ack=False
+        )
+        if meta_verdict != meta.ALLOWED:
+            return _stop(
+                state,
+                esc.GENOME_VIOLATION,
+                {
+                    "meta": meta_verdict,
+                    "rule": rule.id,
+                    "target_file": rule.target_file,
+                },
+            )
         # Marcador de "o loop vai mexer no config" ANTES da escrita, e não
         # depois: é a única evidência que sobrevive a um SIGKILL no meio do
         # ciclo, e é dela que o `_pending_rules` do próximo boot depende para

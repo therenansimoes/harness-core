@@ -306,15 +306,35 @@ def unregister_action(name: str) -> None:
     _manual_actions.pop(name, None)
 
 
+# Módulos que PODEM expor `action()` mas são construídos em paralelo: o
+# registro tenta e pula se faltarem — builtin opcional não pode quebrar o
+# registry inteiro por ainda não existir.
+_OPTIONAL_ACTION_MODULES = (
+    "harness.skills.attribution",
+    "harness.improve.prompt_evolve",
+)
+
+
 def actions() -> dict[str, Action]:
     # Import tardio como nos backends builtin: quem nunca consulta ações não
     # paga o import de research (que puxa o registry de backends).
+    import importlib
+
+    from harness.improve import actions as adapters
     from harness.improve import codegen, research
 
     out: dict[str, Action] = {
         research.ACTION: research.action(),
         codegen.ACTION: codegen.action(),
     }
+    for act in adapters.builtin_actions():
+        out[act.name] = act
+    for mod_name in _OPTIONAL_ACTION_MODULES:
+        try:
+            act = importlib.import_module(mod_name).action()
+        except (ImportError, AttributeError):
+            continue  # módulo ainda não existe ou não expõe action(): pula
+        out[act.name] = act
     out.update(_manual_actions)
     return out
 

@@ -1,0 +1,97 @@
+"""Observabilidade da linhagem: a árvore genealógica das mutações de código.
+
+Lê `data/lineage.jsonl` (uma linha JSON por mutação: id, parent_id, target,
+ts — quem escreve é `codegen._append_lineage`), junta com a tabela
+`mutations` do ledger para anexar o veredito KEEP/DISCARD quando ele existe,
+e renderiza a árvore em ASCII. Só leitura: este módulo nunca grava nada.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+from harness.ledger import store
+
+LINEAGE_FILE = Path("data") / "lineage.jsonl"
+REQUIRED = ("id", "target", "ts")
+
+
+def load_lineage(path: Path | str | None = None) -> list[dict]:
+    """Entradas do jsonl, na ordem do arquivo. Ausente → []; linha torta
+    (JSON inválido ou sem os campos obrigatórios) → pula, com um único
+    aviso agregado no stderr."""
+    p = Path(path) if path is not None else LINEAGE_FILE
+    if not p.is_file():
+        return []
+    entries: list[dict] = []
+    bad = 0
+    for raw in p.read_text(encoding="utf-8").splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            bad += 1
+            continue
+        if not isinstance(obj, dict) or any(k not in obj for k in REQUIRED):
+            bad += 1
+            continue
+        obj.setdefault("parent_id", None)
+        entries.append(obj)
+    if bad:
+        print(
+            f"lineage: {bad} linha(s) inválida(s) ignorada(s) em {p}",
+            file=sys.stderr,
+        )
+    return entries
+
+
+def build_tree(entries: list[dict]) -> list[dict]:
+    """Raízes com filhos aninhados em `children`. Parent inexistente no
+    arquivo (ou auto-referência) vira raiz — órfão aparece, não some."""
+    nodes = {e["id"]: {**e, "children": []} for e in entries}
+    roots: list[dict] = []
+    for e in entries:
+        node = nodes[e["id"]]
+        pid = e.get("parent_id")
+        if pid is not None and pid != e["id"] and pid in nodes:
+            nodes[pid]["children"].append(node)
+        else:
+            roots.append(node)
+    return roots
+
+
+def enrich(entries: list[dict], db_path: Path | str | None = None) -> list[dict]:
+    """Anexa `verdict` (KEEP/DISCARD) da tabela `mutations` do ledger; sem
+    match → None. DB ausente não é erro (e não é criado): tudo None."""
+    p = Path(db_path) if db_path is not None else store.db_path()
+    verdicts: dict[str, str] = {}
+    if p.is_file():
+        verdicts = {
+            m.mutation_id: m.verdict for m in store.mutations(limit=None, path=p)
+        }
+    for e in entries:
+        e["verdict"] = verdicts.get(e["id"])
+    return entries
+
+
+def render(tree: list[dict]) -> str:
+    """Árvore ASCII indentada: uma linha por mutação — id curto, alvo,
+    verdict (`?` quando não julgada), ts."""
+    lines: list[str] = []
+
+    def walk(node: dict, depth: int) -> None:
+        prefix = "  " * depth + ("└─ " if depth else "")
+        verdict = node.get("verdict") or "?"
+        lines.append(
+            f"{prefix}{node['id'][:8]} {node['target']} [{verdict}] {node['ts']}"
+        )
+        for child in node["children"]:
+            walk(child, depth + 1)
+
+    for root in tree:
+        walk(root, 0)
+    return "\n".join(lines)

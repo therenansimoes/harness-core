@@ -1,5 +1,5 @@
-"""CLI do harness. `harness run` / `ab` / `improve` / `replay` / `doctor` /
-`backends` / `seal` / `bench`."""
+"""CLI do harness. `harness run` / `ab` / `improve` / `replay` / `lineage` /
+`doctor` / `backends` / `seal` / `bench`."""
 
 from __future__ import annotations
 
@@ -558,6 +558,26 @@ def cmd_replay(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_lineage(args: argparse.Namespace) -> int:
+    """Árvore genealógica das mutações de código, com veredito do ledger.
+
+    `--limit N` corta pelas N ÚLTIMAS raízes (as mais recentes), não pelas
+    primeiras: quem olha linhagem quer o presente da evolução, não a origem.
+    """
+    from harness.improve import lineage
+
+    entries = lineage.load_lineage(args.file)
+    if not entries:
+        print("sem linhagem ainda — nenhuma mutação de código registrada.")
+        return 0
+    lineage.enrich(entries, db_path=args.db)
+    tree = lineage.build_tree(entries)
+    if args.limit is not None:
+        tree = tree[-args.limit:]
+    print(lineage.render(tree))
+    return 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Diagnóstico local. Exit 1 só com FALHA: aviso é o mundo, não o harness."""
     from harness import doctor
@@ -695,6 +715,17 @@ def build_parser() -> argparse.ArgumentParser:
                         help=f"teto de linhas lidas do ledger, nos DOIS modos "
                              f"(default {DEFAULT_LIMIT})")
     replay.set_defaults(func=cmd_replay, parser=replay)
+
+    lineage = sub.add_parser(
+        "lineage", help="árvore genealógica das mutações de código"
+    )
+    lineage.add_argument("--file", default=None, metavar="PATH",
+                         help="jsonl de linhagem (default data/lineage.jsonl)")
+    lineage.add_argument("--db", default=None, metavar="PATH",
+                         help="banco do ledger p/ veredito (default data/runs.sqlite)")
+    lineage.add_argument("--limit", type=int, default=None, metavar="N",
+                         help="mostra só as N últimas raízes")
+    lineage.set_defaults(func=cmd_lineage)
 
     doctor = sub.add_parser(
         "doctor", help="diagnóstico local: backends, genoma, config, dados, tracing"

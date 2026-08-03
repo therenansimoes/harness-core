@@ -39,6 +39,10 @@ LIMIT_MESSAGE_PREFIX = "Model call limits exceeded:"
 
 _INSTALL_HINT = "deepagents não instalado — pip install harness-core[deepagents]"
 
+# Contrato com o prompt-builder: se este arquivo existir, seu conteúdo é
+# prependado às instructions do agente; ausente => comportamento atual.
+EXECUTOR_PROMPT_PATH = Path("prompts/executor.md")
+
 
 class DeepagentsBackend:
     name: ClassVar[str] = "deepagents"
@@ -180,9 +184,15 @@ def _build_agent(req: ExecRequest):
         "tools de arquivo (read_file, edit_file, write_file) para mexer neles."
     )
     # `kind` ainda não é campo do ExecRequest — getattr segura os dois mundos.
-    skills_block = render_prompt(select_skills(getattr(req, "kind", None)))
+    skills = select_skills(getattr(req, "kind", None))
+    skills_block = render_prompt(skills)
     if skills_block:
         system_prompt = f"{system_prompt}\n\n{skills_block}"
+    _record_skill_usage(req, skills)
+
+    base_prompt = _executor_prompt()
+    if base_prompt:
+        system_prompt = f"{base_prompt}\n\n{system_prompt}"
 
     extra_tools = list(load_mcp_tools())  # contrato: [] em QUALQUER falha
     agent = create_deep_agent(
@@ -193,6 +203,33 @@ def _build_agent(req: ExecRequest):
         **({"tools": extra_tools} if extra_tools else {}),
     )
     return agent, usage_cb
+
+
+def _record_skill_usage(req: ExecRequest, skills: list[Any]) -> None:
+    """Atribuição: marca as skills injetadas neste request no ledger.
+
+    O id disponível é o melhor que existe: `run_id` se o request um dia ganhar
+    o campo, senão `session_id` (limitação documentada em attribution.py).
+    Guardado por try/except — atribuição nunca derruba o backend."""
+    usage_id = getattr(req, "run_id", None) or req.session_id
+    if not skills or not usage_id:
+        return
+    try:
+        from harness.skills import attribution
+
+        attribution.record_usage(usage_id, [s.name for s in skills])
+    except Exception:
+        pass
+
+
+def _executor_prompt() -> str:
+    """Conteúdo de prompts/executor.md, ou "" se ausente/ilegível."""
+    try:
+        if EXECUTOR_PROMPT_PATH.is_file():
+            return EXECUTOR_PROMPT_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        pass
+    return ""
 
 
 def _fs_allowlist(tools: tuple[str, ...]) -> list[str]:
