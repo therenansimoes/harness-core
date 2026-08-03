@@ -79,7 +79,10 @@ def action_stats(history: Iterable[Any]) -> dict[str, dict]:
 
 
 def select_action(
-    action_names: list[str], history: Iterable[Any], rng: random.Random
+    action_names: list[str],
+    history: Iterable[Any],
+    rng: random.Random,
+    explore: float = 1.0,
 ) -> str:
     """Escolhe a próxima ação de evolução.
 
@@ -90,15 +93,18 @@ def select_action(
     """
     if not action_names:
         raise ValueError("select_action sem ações: nada a escolher")
+    # `explore` (0..1, do governor.explore_budget) fecha a exploração perto do
+    # prazo: escala o bônus UCB e, em 0, ação sem amostra deixa de valer inf.
+    explore = min(1.0, max(0.0, explore))
     stats = action_stats(history)
     total = sum(s["n"] for s in stats.values())
     scores: dict[str, float] = {}
     for name in action_names:
         n = stats[name]["n"] if name in stats else 0
         if n == 0:
-            scores[name] = math.inf
+            scores[name] = math.inf if explore > 0.0 else 0.0
         else:
-            bonus = _EXPLORE * math.sqrt(math.log(total + 1) / n)
+            bonus = explore * _EXPLORE * math.sqrt(math.log(total + 1) / n)
             scores[name] = stats[name]["lower"] + bonus
     best = max(scores.values())
     tied = [name for name in action_names if scores[name] == best]
