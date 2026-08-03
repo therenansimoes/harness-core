@@ -51,6 +51,16 @@ Suite completa pós-sprint: 428 passed, 2 deselected.
 
 Aceites rodados de verdade pelos builders; suite completa pós-sprint: 499 passed, 2 deselected.
 
+## Sprint final (2026-08-03)
+
+- **exam:** exame selado real — `harness/improve/exam.py`: `run_sealed_exam(backend='mock', model='', sealed_dir=None, data_dir=None) -> bool` e `exam_report(...) -> list[{id, passed}]`. Descoberta via `benchmarks/sealed/*/unit.toml`; cada unidade roda por `run_unit` com thread_id único; passed = gate `accept`. Fail-closed: sem unidades descobríveis → False + 1 linha stderr; exceção (unidade ou descoberta) → False. Seeds `sealed_s01`/`sealed_s02` criadas (determinísticas no mock); `task_s01`/`s02` intactos, fora do exame (sem `unit.toml` — entrar exige ato humano). `tests/test_exam.py`: 7 verdes; regressão de 103 testes vizinhos verde.
+- **policy:** `harness/improve/policy.py` — bandit Wilson+UCB sobre KEEP-rate por ação, determinístico (rng seedado por `thread_id:cycle`), ação sem amostra nunca órfã. Plugado no autopilot: `_pick_target` escolhe via policy quando o chamador não fixa (param `action`/`CFG_ACTION`); `_record` grava `action=<nome>` no note da mutação (schema intocado) fechando o feedback — só em veredito concluído; rota forçada fica fora do bandit. Default do `CFG_SEALED_EXAM` agora é o exame real (`_default_sealed_exam` lazy, amarrado à raiz do ciclo; ImportError → False). 44+99 testes verdes. Pendente anotado: roteamento de backend real do exame default (fica `mock`).
+- **surface:** doctor +7 checks de evolução (skills, topology, actions, ruler, mcp, lineage, executor) → 17 checks, 0 falhas/avisos no repo. CLI: `harness skills [--lift]` (nome/kinds/descrição; lift com com=/sem=/lift=) e `harness actions` (nomes + placar global KEEP/DISCARD). Corte anotado: sem mapeamento mutação→ação no placar (MutationRow só carrega rule_id). `tests/test_doctor.py` +8; 36 verdes.
+
+Suite completa pós-sprint: 558 passed, 2 deselected.
+
+Fechamento: o harness agora escolhe sozinho qual das 7 evoluções tentar (bandit por KEEP-rate), julga com exame selado real fail-closed, e expõe tudo em doctor/skills/actions/lineage.
+
 Fiação feita (não é PR novo): o nó `route` do run_graph consome `routing/router.select()` no modo `auto` (`run_unit(route="auto")`, `harness run --route auto`), com escalação de tier por attempt; o modo `manual` — default, backend fixado pelo chamador — continua como era.
 
 ## Verificação global (última: 2026-08-02, 8/8 PASS)

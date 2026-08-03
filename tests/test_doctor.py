@@ -142,6 +142,88 @@ def test_doctor_ledger_corrompido_falha(sandbox):
     assert status_of("ledger", doctor.checks()) == doctor.FAIL
 
 
+# --- checks de evolução ------------------------------------------------------------
+
+
+def test_doctor_evolucao_sandbox_limpo(sandbox):
+    """Sandbox com o config real: subsistemas de evolução saem ok, executor
+    ausente é aviso (o mundo, não o harness) — e nada disso derruba o exit."""
+    result = doctor.checks()
+
+    for name in ("skills", "topology", "actions", "ruler", "mcp", "lineage"):
+        assert status_of(name, result) == doctor.OK, name
+    assert status_of("executor", result) == doctor.WARN
+    assert doctor.failures(result) == []
+
+
+def test_doctor_skills_carregam(sandbox):
+    (sandbox / "skills").mkdir()
+    (sandbox / "skills" / "a.md").write_text(
+        '---\nname = "a"\nkinds = ["code"]\ndescription = "d"\n---\ncorpo\n',
+        encoding="utf-8",
+    )
+
+    result = doctor.checks()
+
+    assert status_of("skills", result) == doctor.OK
+    assert "1 skill" in next(c.detail for c in result if c.name == "skills")
+
+
+def test_doctor_topology_torta_e_aviso_nao_falha(sandbox):
+    """Spec inválida não é FALHA: build_run_graph cai no default por desenho."""
+    (sandbox / "config" / "topology.toml").write_text(
+        'nodes = "não é lista"\n', encoding="utf-8"
+    )
+
+    result = doctor.checks()
+
+    assert status_of("topology", result) == doctor.WARN
+    assert doctor.failures(result) == []
+
+
+def test_doctor_actions_lista_o_registry(sandbox):
+    result = doctor.checks()
+
+    detail = next(c.detail for c in result if c.name == "actions")
+    assert status_of("actions", result) == doctor.OK
+    for name in ("codegen", "research"):
+        assert name in detail
+
+
+def test_doctor_ruler_quebrado_falha(sandbox):
+    (sandbox / "config" / "ruler.toml").write_text("isto [ não = toml", encoding="utf-8")
+
+    result = doctor.checks()
+
+    assert status_of("ruler", result) == doctor.FAIL
+    assert "ruler" in [c.name for c in doctor.failures(result)]
+
+
+def test_doctor_mcp_ausente_e_ok_com_nota(sandbox):
+    (sandbox / "config" / "mcp.toml").unlink()
+
+    result = doctor.checks()
+
+    assert status_of("mcp", result) == doctor.OK
+    assert "ausente" in next(c.detail for c in result if c.name == "mcp")
+
+
+def test_doctor_lineage_torta_nao_derruba(sandbox, capsys):
+    """load_lineage pula linha inválida por contrato; doctor reporta ok."""
+    data = sandbox / "data"
+    data.mkdir()
+    (data / "lineage.jsonl").write_text("{isto não é json}\n", encoding="utf-8")
+
+    assert status_of("lineage", doctor.checks()) == doctor.OK
+
+
+def test_doctor_executor_presente_e_ok(sandbox):
+    (sandbox / "prompts").mkdir()
+    (sandbox / "prompts" / "executor.md").write_text("# executor\n", encoding="utf-8")
+
+    assert status_of("executor", doctor.checks()) == doctor.OK
+
+
 # --- CLI ---------------------------------------------------------------------------
 
 

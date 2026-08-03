@@ -592,6 +592,52 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 1 if bad else 0
 
 
+def cmd_skills(args: argparse.Namespace) -> int:
+    """Lista as skills carregáveis; `--lift` anexa a atribuição do ledger.
+
+    Lift sem amostra num dos braços sai como traço: número inventado sobre
+    zero trial é pior que admitir que ninguém mediu ainda.
+    """
+    from harness.improve import root_dir
+    from harness.skills.loader import load_skills
+
+    skills = load_skills(root_dir() / "skills")
+    for s in skills:
+        kinds = ",".join(s.kinds) or "*"
+        line = f"{s.name:<24} {kinds:<12} {s.description}"
+        if args.lift:
+            from harness.skills.attribution import lift
+
+            d = lift(s.name)
+            (w_s, w_t), (wo_s, wo_t) = d["with"], d["without"]
+            delta = (
+                "-"
+                if w_t == 0 or wo_t == 0
+                else f"{d['wilson_low_with'] - d['wilson_low_without']:+.2f}"
+            )
+            line += f" com={w_s}/{w_t} sem={wo_s}/{wo_t} lift={delta}"
+        print(line)
+    print(f"skills={len(skills)}")
+    return 0
+
+
+def cmd_actions(args: argparse.Namespace) -> int:
+    """Lista as ações do registry e, havendo mutações, o placar KEEP/DISCARD."""
+    from harness.improve.target import actions
+
+    acts = actions()
+    for name in sorted(acts):
+        print(name)
+    muts = store.mutations(limit=None)
+    if muts:
+        keep = sum(1 for m in muts if m.verdict == "KEEP")
+        discard = sum(1 for m in muts if m.verdict == "DISCARD")
+        print(f"ações={len(acts)} mutações={len(muts)} KEEP={keep} DISCARD={discard}")
+    else:
+        print(f"ações={len(acts)} sem mutações no ledger")
+    return 0
+
+
 def _pct(values: list[float], q: int) -> float:
     """Percentil por rank mais próximo — sem dependência, honesto para n pequeno."""
     ordered = sorted(values)
@@ -732,6 +778,19 @@ def build_parser() -> argparse.ArgumentParser:
         "doctor", help="diagnóstico local: backends, genoma, config, dados, tracing"
     )
     doctor.set_defaults(func=cmd_doctor, parser=doctor)
+
+    skills = sub.add_parser(
+        "skills", help="lista as skills carregadas (nome, kinds, descrição)"
+    )
+    skills.add_argument("--lift", action="store_true",
+                        help="anexa o lift por skill (atribuição do ledger; "
+                             "sem amostra num braço = traço)")
+    skills.set_defaults(func=cmd_skills)
+
+    actions = sub.add_parser(
+        "actions", help="lista as ações do registry + KEEP/DISCARD do ledger"
+    )
+    actions.set_defaults(func=cmd_actions)
 
     seal = sub.add_parser(
         "seal", help="promove um exame da quarentena para benchmarks/sealed"

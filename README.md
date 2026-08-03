@@ -17,7 +17,7 @@ Licença MIT (`LICENSE`). Python ≥ 3.11.
 
 ```
 harness/
-  cli.py        run · ab · backends · improve · bench
+  cli.py        run · ab · backends · improve · bench · replay · lineage · seal · doctor · skills · actions
   types.py      UnitSpec ExecRequest ExecResult Selection Verdict RunRow MutationRow
   backends/     base(Protocol) registry(entry point) mock deepagents claude_code auth/
   graph/        run_graph (topologia de 1 run)  autopilot_graph (1 ciclo de melhoria)
@@ -25,7 +25,7 @@ harness/
   genome/       genome tamper                    ← o que pode mudar
   routing/      kinds (o QUE é)  router (QUANTO custa)
   workspace/    provision (git worktree + symlink de cache)
-  improve/      target mutate escalate research codegen meta synthesize ← o que vale a pena mudar
+  improve/      target policy mutate escalate research codegen meta synthesize exam ← o que vale a pena mudar
   evolve/       population (PBT) + archive (MAP-Elites)
   skills/       load/select/render de skills, injetadas no prompt por kind
   ledger/       store (SQLite; TSV é export)     ← fonte de verdade das runs
@@ -88,7 +88,8 @@ prior de sucesso é keyed em `(kind, tier, backend)` — histórico ruim de
 sobe um tier, assim como falha repetida escala por attempt.
 
 **autopilot** (`harness/graph/autopilot_graph.py` + `harness/improve/`) é o
-loop de melhoria: `pick_target → propose → genome_check → apply → fanout_ab →
+loop de melhoria: `pick_target (policy escolhe a ação quando o chamador não
+fixa) → propose → genome_check → apply → fanout_ab →
 score → [KEEP: commit_cfg | DISCARD/INCONCLUSIVE: revert_cfg] → attribute →
 record`. Qualquer nó pode desviar para `escalate`, que é `interrupt()` do
 LangGraph: o grafo para e espera um humano em vez de improvisar.
@@ -197,9 +198,18 @@ Auth segue o mesmo padrão, no entry point `harness.auth`
 > ToS e está fora deste repo** — existe só o slot `harness.auth` para quem
 > quiser publicar o próprio, por conta e risco próprios.
 
-## Auto-melhoria
+## Auto-evolução
 
-O loop não inventa mudança: ele escolhe de um catálogo declarado
+O ciclo completo, num parágrafo: a **policy** (`improve/policy.py`, bandit
+Wilson+UCB sobre o KEEP-rate histórico de cada ação, determinística com rng
+seedado por `thread_id:cycle`) escolhe qual das 7 ações do registry tentar →
+a ação faz `propose` → o apply passa por **genome check** fail-closed e, se a
+mudança toca o juiz, por `meta_check` (que exige **exame selado** verde +
+ack humano) → a mudança é julgada por **A/B alternado** (Wilson) ou pelo exame
+selado → `KEEP` commita, `DISCARD`/`INCONCLUSIVE` revertem → o veredito volta
+para a **linhagem** (`data/lineage.jsonl`), para a **atribuição** por skill e
+para o próprio bandit (o nome da ação viaja no `note` da mutação). O loop não
+inventa mudança: ele escolhe de um catálogo declarado
 (`config/catalog.toml`). Cada `[[rule]]` é uma hipótese falsificável sobre um
 knob — arquivo alvo, chave, `from`, `to`, e o `fails_on` que amarra a regra a
 `exit_reason` reais do ledger. `improve/target.py` ordena por ganho esperado
@@ -255,10 +265,15 @@ propose/apply (`improve/actions.py` adapta synthesize/topology/evolve;
 `improve/prompt_evolve.py` muta `prompts/executor.md`, o prompt-base evoluível
 do executor; `skills/attribution.py` mede lift por skill via tabela
 `skill_usage` no ledger e apenas *aposenta* skills para `skills/attic/`, nunca
-deleta). O apply do autopilot passa por `improve/meta.py::meta_check` antes de
-qualquer escrita: mudança que toca o juiz exige exame selado (injetável via
-config do grafo, default fail-closed) — quarantined/blocked param o loop e
-escalam.
+deleta). Quando o chamador não fixa a ação (`--action`/config), quem escolhe é
+a policy — bandit por KEEP-rate; ação sem amostra nunca fica órfã. O apply do
+autopilot passa por `improve/meta.py::meta_check` antes de qualquer escrita:
+mudança que toca o juiz exige exame selado verde. O exame é **real**:
+`improve/exam.py::run_sealed_exam` descobre `benchmarks/sealed/*/unit.toml` e
+roda cada unidade por `run_unit`; passa quando todo gate dá `accept`.
+Fail-closed de ponta a ponta — sealed sem unidades descobríveis, ou qualquer
+exceção, é `False`. O default do autopilot já é esse exame (injetável via
+config do grafo para teste); quarantined/blocked param o loop e escalam.
 
 `harness improve` sem `--unit` usa `benchmarks/held_in/*/unit.toml`; enquanto
 esse diretório não tiver unidades no formato novo, passe `--unit` (repetível).
@@ -268,9 +283,13 @@ esse diretório não tiver unidades no formato novo, passe `--unit` (repetível)
 e nomeia os *confounders* (outras mutações KEEP no meio — atribuição honesta
 diz o que não consegue separar). `harness lineage` desenha a genealogia das
 mutações de código (`data/lineage.jsonl` + verdict do sqlite) em árvore ASCII —
-`--limit N` corta pelas N últimas raízes. `harness doctor` roda o diagnóstico completo:
-preflight de todos os backends, genoma/tamper, tracing desligado, configs
-parseáveis.
+`--limit N` corta pelas N últimas raízes. `harness skills` lista as skills
+carregáveis (`--lift` anexa a atribuição do ledger: com=/sem=/lift= por skill);
+`harness actions` lista as ações do registry + placar KEEP/DISCARD do ledger.
+`harness doctor` roda o diagnóstico completo (17 checks): preflight de todos os
+backends, genoma/tamper, tracing desligado, configs parseáveis, e os checks de
+evolução — skills, topologia, registry de ações, `ruler.toml`/`mcp.toml`,
+linhagem e prompt do executor.
 
 ## Régua e genoma
 
@@ -303,7 +322,7 @@ Três detalhes que fazem parte da mesma defesa:
 
 ## Estado
 
-`uv run --extra deepagents pytest -q` → **499 passed, 2 deselected**. Os 2
+`uv run --extra deepagents pytest -q` → **558 passed, 2 deselected**. Os 2
 deselecionados são os testes que exigem máquina de verdade: marker `ollama`
 (servidor local) e `claude_cli` (gasta dinheiro). Ver `CONTRIBUTING.md`.
 

@@ -1,0 +1,4 @@
+id = "sealed_s01"
+kind = "code"
+prompt = "Escreva a saída do executor no diretório de trabalho."
+verify_cmd = "test -f mock_output.txt"

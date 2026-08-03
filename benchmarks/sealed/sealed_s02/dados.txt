@@ -1,0 +1,1 @@
+fixture selada: este arquivo deve existir no workspace após o run.

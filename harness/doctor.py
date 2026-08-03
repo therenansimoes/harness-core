@@ -63,6 +63,12 @@ def checks(root: Path | str | None = None, data: Path | None = None) -> list[Che
         *_config(base),
         _data(data_dir),
         _ledger(data_dir / store.DB_NAME),
+        _skills(base),
+        _topology(base),
+        _actions(),
+        *_optional_toml(base),
+        _lineage(data_dir),
+        _executor(base),
         *_backends(),
     ]
 
@@ -179,6 +185,88 @@ def _ledger(db: Path) -> Check:
     except sqlite3.Error as exc:
         return Check("ledger", FAIL, f"{db} ilegível: {exc}")
     return Check("ledger", OK, f"{db} runs={runs} mutações={muts}")
+
+
+def _skills(base: Path) -> Check:
+    """Loader nunca levanta por contrato; exceção aqui é bug nosso."""
+    try:
+        from harness.skills.loader import load_skills
+
+        skills = load_skills(base / "skills")
+    except Exception as exc:
+        return Check("skills", FAIL, f"{type(exc).__name__}: {exc}")
+    if not skills:
+        return Check("skills", OK, f"{base / 'skills'} sem skill (dir ausente ou vazio)")
+    return Check("skills", OK, f"{len(skills)} skill(s): {', '.join(s.name for s in skills)}")
+
+
+def _topology(base: Path) -> Check:
+    """Spec torta/ausente não é FALHA: build_run_graph cai no default por desenho."""
+    try:
+        from harness.graph import topology
+
+        path = base / CONFIG_SUBDIR / topology.TOPOLOGY_TOML
+        spec = topology.load_spec(path)
+        topology.compile_spec(spec)
+    except Exception as exc:
+        return Check(
+            "topology", WARN,
+            f"{type(exc).__name__}: {exc} — run_graph usa a topologia default",
+        )
+    return Check(
+        "topology", OK,
+        f"{path} compila: nodes={len(spec.get('nodes', []))} "
+        f"edges={len(spec.get('edges', []))}",
+    )
+
+
+def _actions() -> Check:
+    try:
+        from harness.improve.target import actions
+
+        acts = actions()
+    except Exception as exc:
+        return Check("actions", FAIL, f"registry não carrega: {type(exc).__name__}: {exc}")
+    if not acts:
+        return Check("actions", FAIL, "registry carrega mas nenhuma ação registrada")
+    return Check("actions", OK, f"{len(acts)} ação(ões): {', '.join(sorted(acts))}")
+
+
+def _optional_toml(base: Path) -> list[Check]:
+    """ruler.toml e mcp.toml são opcionais: ausente é ok com nota, torto é FALHA."""
+    out: list[Check] = []
+    for stem in ("ruler", "mcp"):
+        path = base / CONFIG_SUBDIR / f"{stem}.toml"
+        if not path.is_file():
+            out.append(Check(stem, OK, f"{path} ausente (opcional)"))
+            continue
+        try:
+            tomllib.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+            out.append(Check(stem, FAIL, f"{path} não parseia: {exc}"))
+            continue
+        out.append(Check(stem, OK, f"{path} parseia"))
+    return out
+
+
+def _lineage(data_dir: Path) -> Check:
+    path = data_dir / "lineage.jsonl"
+    if not path.is_file():
+        return Check("lineage", OK, f"{path} ainda não existe (nasce no primeiro codegen)")
+    try:
+        from harness.improve.lineage import load_lineage
+
+        entries = load_lineage(path)
+    except Exception as exc:
+        return Check("lineage", FAIL, f"{path} ilegível: {type(exc).__name__}: {exc}")
+    return Check("lineage", OK, f"{path} entradas={len(entries)}")
+
+
+def _executor(base: Path) -> Check:
+    path = base / "prompts" / "executor.md"
+    if not path.is_file():
+        return Check("executor", WARN, f"{path} ausente — executor roda sem prompt base")
+    return Check("executor", OK, f"{path} ({path.stat().st_size} bytes)")
 
 
 def _backends() -> list[Check]:

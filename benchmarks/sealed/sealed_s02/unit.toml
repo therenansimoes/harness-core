@@ -1,0 +1,4 @@
+id = "sealed_s02"
+kind = "code"
+prompt = "O diretório de trabalho contém dados.txt; preserve-o e escreva sua saída."
+verify_cmd = "test -f dados.txt && test -s mock_output.txt"

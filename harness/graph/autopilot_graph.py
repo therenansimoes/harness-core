@@ -39,6 +39,7 @@ from __future__ import annotations
 import contextlib
 import operator
 import os
+import random
 import time
 import uuid
 from collections.abc import Iterator
@@ -73,6 +74,9 @@ CFG_N = "harness_n_per_arm"
 # loop é False por construção (ver improve/meta.py), então o melhor caso do
 # autopilot sozinho é quarentena, nunca aplicação.
 CFG_SEALED_EXAM = "harness_sealed_exam"
+# Ação de evolução fixada pelo chamador. Ausente → a policy (bandit sobre o
+# histórico de mutações) escolhe entre as ações do registry.
+CFG_ACTION = "harness_action"
 # Chave do LangGraph, não nossa: é o `thread_id` do `configurable`.
 CFG_THREAD = "thread_id"
 
@@ -261,8 +265,25 @@ def _pick_target(state: AutopilotState, config=None) -> dict:
                 },
             )
 
+    target_d = _target_dict(target)
+    # Ação de evolução do ciclo: fixada pelo chamador, ou escolhida pela
+    # policy (bandit sobre o KEEP-rate por ação no ledger). Rota forçada pelo
+    # humano fica fora do bandit: ele já decidiu a regra, a policy não vota.
+    action = _cfg(config, CFG_ACTION, None)
+    if not action and not forced:
+        from harness.improve import policy
+        from harness.improve import target as improve_target
+
+        rng = random.Random(f"{_cfg(config, CFG_THREAD, '')}:{state['cycle']}")
+        action = policy.select_action(
+            sorted(improve_target.actions()),
+            store.mutations(path=db),
+            rng,
+        )
+    target_d["action"] = action
+
     return {
-        "target": _target_dict(target),
+        "target": target_d,
         "forced_rule_id": None,
         "escalation": None,
         "events": [
@@ -271,6 +292,7 @@ def _pick_target(state: AutopilotState, config=None) -> dict:
                 rule=target.rule.id,
                 gain=target.gain,
                 pattern=target.pattern,
+                action=action,
             )
         ],
     }
@@ -364,6 +386,23 @@ def _genome_check(state: AutopilotState, config=None) -> dict:
     return stop
 
 
+def _default_sealed_exam(config=None):
+    """Default do meta-exame quando o chamador não injeta `CFG_SEALED_EXAM`:
+    o exame selado REAL, amarrado à raiz do ciclo. Import guardado porque
+    `exam.py` pode não existir num checkout parcial — aí o default degrada
+    para o antigo `lambda: False`. Fail-closed por construção nos dois
+    braços: sealed vazio, erro ou módulo ausente → False, nada aprovado."""
+    try:
+        from harness.improve import exam
+    except ImportError:
+        return lambda: False
+    root = _root(config)
+    return lambda: exam.run_sealed_exam(
+        sealed_dir=root / exam.SEALED_DIR,
+        data_dir=_cfg(config, CFG_DATA_DIR, "data"),
+    )
+
+
 def _apply(state: AutopilotState, config=None) -> dict:
     """Escreve a mutação. Depois deste nó o repo está sujo até commit/revert."""
     if (stop := _expired(state, "apply")) is not None:
@@ -374,7 +413,7 @@ def _apply(state: AutopilotState, config=None) -> dict:
         # (config/ruler.toml) exige exame selado + ack humano, e o autopilot
         # NUNCA produz ack (human_ack=False fixo). Alvo comum => "allowed"
         # sem custo; "quarantined"/"blocked" => escalate, nada é aplicado.
-        run_exam = _cfg(config, CFG_SEALED_EXAM, None) or (lambda: False)
+        run_exam = _cfg(config, CFG_SEALED_EXAM, None) or _default_sealed_exam(config)
         meta_verdict = meta.meta_check(
             Path(rule.target_file), run_sealed_exam=run_exam, human_ack=False
         )
@@ -600,6 +639,16 @@ def _record(state: AutopilotState, config=None) -> dict:
     # quando o humano já respondeu: `escalation` é o que ainda espera resposta,
     # e o `escalate` a limpa ao ser respondido.
     note = (state.get("escalation") or {}).get("reason") or state.get("abort_reason")
+    # Fecha o feedback do bandit: o nome da ação escolhida no `pick_target`
+    # viaja no campo livre `note` (schema do ledger intocado) e é o que a
+    # policy relê no próximo ciclo para pontuar o KEEP-rate por ação. Só em
+    # veredito concluído — ABORTED não é evidência sobre a ação, e o note do
+    # aborto (motivo da parada) fica intacto para o humano.
+    from harness.improve import policy
+
+    action = target.get("action")
+    if verdict in ("KEEP", "DISCARD", "INCONCLUSIVE"):
+        note = policy.note_with_action(action, note)
 
     store.record_mutation(
         MutationRow(
@@ -633,6 +682,7 @@ def _record(state: AutopilotState, config=None) -> dict:
             "delta": rate_b - rate_a,
             "gain": target.get("gain"),
             "pattern": target.get("pattern"),
+            "action": action,
             "reverted": reverted,
             "note": note,
         }],
@@ -852,6 +902,7 @@ def run_autopilot(
     root: Path | str | None = None,
     thread_id: str | None = None,
     resume: Any = None,
+    action: str | None = None,
 ) -> AutopilotReport:
     """Roda `cycles` ciclos de melhoria. Mesmo `thread_id` + `data_dir` = retomada.
 
@@ -899,6 +950,8 @@ def run_autopilot(
                 CFG_BACKEND: backend,
                 CFG_MODEL: model,
                 CFG_N: int(n or cfg["n_per_arm"]),
+                # None = a policy escolhe a ação; string = chamador fixou.
+                CFG_ACTION: action,
             },
             # ~10 supersteps por ciclo, com folga para as escalações.
             "recursion_limit": 16 * (cycles + 1),
