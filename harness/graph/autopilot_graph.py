@@ -275,8 +275,22 @@ def _pick_target(state: AutopilotState, config=None) -> dict:
         from harness.improve import target as improve_target
 
         rng = random.Random(f"{_cfg(config, CFG_THREAD, '')}:{state['cycle']}")
+        names = sorted(improve_target.actions())
+        # Banco do governor: ação que só propõe e nunca cola KEEP sai da
+        # roleta. Fail-open, e nunca esvazia a lista — foco não é paralisia.
+        try:
+            from harness.governor import governor as gov_mod
+
+            stats = policy.action_stats(store.mutations(path=db))
+            benched = gov_mod.bench(
+                {n: {"proposals": s["n"], "keeps": s["keep"]} for n, s in stats.items()},
+                gov_mod.load_gov(),
+            )
+            names = [n for n in names if n not in benched] or names
+        except Exception:
+            pass
         action = policy.select_action(
-            sorted(improve_target.actions()),
+            names,
             store.mutations(path=db),
             rng,
         )
