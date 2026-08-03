@@ -52,6 +52,7 @@ class ExecRequest:
     env: Mapping[str, str] = field(default_factory=dict)
     session_id: str | None = None
     trace_path: Path = Path("trace.jsonl")
+    run_id: str | None = None
 
 
 @dataclass(frozen=True)

@@ -1,9 +1,11 @@
 """Observabilidade da linhagem: a árvore genealógica das mutações de código.
 
 Lê `data/lineage.jsonl` (uma linha JSON por mutação: id, parent_id, target,
-ts — quem escreve é `codegen._append_lineage`), junta com a tabela
-`mutations` do ledger para anexar o veredito KEEP/DISCARD quando ele existe,
-e renderiza a árvore em ASCII. Só leitura: este módulo nunca grava nada.
+ts — quem escreve é `codegen._append_lineage`; linhas com `verdict` e sem
+`target` são eventos de veredito, mesclados sobre a proposta pelo id), junta
+com a tabela `mutations` do ledger para anexar o veredito KEEP/DISCARD quando
+o jsonl não o tem (jsonl tem precedência), e renderiza a árvore em ASCII.
+Só leitura: este módulo nunca grava nada.
 """
 
 from __future__ import annotations
@@ -19,14 +21,18 @@ REQUIRED = ("id", "target", "ts")
 
 
 def load_lineage(path: Path | str | None = None) -> list[dict]:
-    """Entradas do jsonl, na ordem do arquivo. Ausente → []; linha torta
-    (JSON inválido ou sem os campos obrigatórios) → pula, com um único
-    aviso agregado no stderr."""
+    """Entradas do jsonl, na ordem do arquivo, com eventos de veredito
+    (linha com `verdict` e sem `target`) mesclados sobre a proposta pelo id.
+    Ausente → []; linha torta (JSON inválido ou sem os campos obrigatórios)
+    → pula, com um único aviso agregado no stderr; veredito sem proposta
+    correspondente → ignora, com aviso."""
     p = Path(path) if path is not None else LINEAGE_FILE
     if not p.is_file():
         return []
     entries: list[dict] = []
+    by_id: dict[str, dict] = {}
     bad = 0
+    orphan_verdicts = 0
     for raw in p.read_text(encoding="utf-8").splitlines():
         raw = raw.strip()
         if not raw:
@@ -36,14 +42,30 @@ def load_lineage(path: Path | str | None = None) -> list[dict]:
         except json.JSONDecodeError:
             bad += 1
             continue
-        if not isinstance(obj, dict) or any(k not in obj for k in REQUIRED):
+        if not isinstance(obj, dict):
+            bad += 1
+            continue
+        if "verdict" in obj and "target" not in obj:
+            proposal = by_id.get(obj.get("id"))
+            if proposal is None:
+                orphan_verdicts += 1
+            else:
+                proposal["verdict"] = obj["verdict"]
+            continue
+        if any(k not in obj for k in REQUIRED):
             bad += 1
             continue
         obj.setdefault("parent_id", None)
         entries.append(obj)
+        by_id[obj["id"]] = obj
     if bad:
         print(
             f"lineage: {bad} linha(s) inválida(s) ignorada(s) em {p}",
+            file=sys.stderr,
+        )
+    if orphan_verdicts:
+        print(
+            f"lineage: {orphan_verdicts} veredito(s) sem proposta ignorado(s) em {p}",
             file=sys.stderr,
         )
     return entries
@@ -65,8 +87,9 @@ def build_tree(entries: list[dict]) -> list[dict]:
 
 
 def enrich(entries: list[dict], db_path: Path | str | None = None) -> list[dict]:
-    """Anexa `verdict` (KEEP/DISCARD) da tabela `mutations` do ledger; sem
-    match → None. DB ausente não é erro (e não é criado): tudo None."""
+    """Anexa `verdict` (KEEP/DISCARD) da tabela `mutations` do ledger onde o
+    jsonl ainda não trouxe um (verdict do jsonl tem precedência); sem match
+    → None. DB ausente não é erro (e não é criado): tudo None."""
     p = Path(db_path) if db_path is not None else store.db_path()
     verdicts: dict[str, str] = {}
     if p.is_file():
@@ -74,7 +97,7 @@ def enrich(entries: list[dict], db_path: Path | str | None = None) -> list[dict]
             m.mutation_id: m.verdict for m in store.mutations(limit=None, path=p)
         }
     for e in entries:
-        e["verdict"] = verdicts.get(e["id"])
+        e["verdict"] = e.get("verdict") or verdicts.get(e["id"])
     return entries
 
 

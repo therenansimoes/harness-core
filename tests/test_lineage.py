@@ -71,6 +71,60 @@ def test_enrich_junta_verdict_do_ledger(tmp_path):
     assert by_id["cccc2222dddd"] is None
 
 
+def test_load_mescla_verdict_do_jsonl(tmp_path):
+    p = tmp_path / "lineage.jsonl"
+    _write_jsonl(
+        p,
+        _entries()
+        + [
+            {"id": "aaaa1111bbbb", "verdict": "KEEP", "ts": "t4"},
+            {"id": "cccc2222dddd", "verdict": "DISCARD", "ts": "t5"},
+        ],
+    )
+    out = lineage.load_lineage(p)
+    assert [e["id"] for e in out] == [e["id"] for e in _entries()]
+    by_id = {e["id"]: e.get("verdict") for e in out}
+    assert by_id["aaaa1111bbbb"] == "KEEP"
+    assert by_id["cccc2222dddd"] == "DISCARD"
+    assert by_id["eeee3333ffff"] is None
+
+
+def test_load_verdict_sem_proposta_ignora_com_aviso(tmp_path, capsys):
+    p = tmp_path / "lineage.jsonl"
+    _write_jsonl(p, _entries() + [{"id": "fantasma", "verdict": "KEEP", "ts": "t9"}])
+    out = lineage.load_lineage(p)
+    assert [e["id"] for e in out] == [e["id"] for e in _entries()]
+    err = capsys.readouterr().err
+    assert "veredito" in err and "sem proposta" in err
+
+
+def test_enrich_jsonl_tem_precedencia_sobre_ledger(tmp_path):
+    db = tmp_path / "runs.sqlite"
+    store.record_mutation(_mutation("aaaa1111bbbb", "KEEP"), path=db)
+    entries = _entries()
+    entries[0]["verdict"] = "DISCARD"  # jsonl diz DISCARD, ledger diz KEEP
+    out = lineage.enrich(entries, db_path=db)
+    assert out[0]["verdict"] == "DISCARD"
+
+
+def test_render_verdict_do_jsonl_e_sem_marca_na_antiga(tmp_path):
+    p = tmp_path / "lineage.jsonl"
+    _write_jsonl(
+        p,
+        _entries()
+        + [
+            {"id": "aaaa1111bbbb", "verdict": "KEEP", "ts": "t4"},
+            {"id": "cccc2222dddd", "verdict": "DISCARD", "ts": "t5"},
+        ],
+    )
+    tree = lineage.build_tree(
+        lineage.enrich(lineage.load_lineage(p), db_path=tmp_path / "nada.sqlite")
+    )
+    out = lineage.render(tree)
+    assert "[KEEP]" in out and "[DISCARD]" in out
+    assert "eeee3333" in out and "[?]" in out  # linhagem antiga sem verdict
+
+
 def test_enrich_sem_db_tudo_none(tmp_path):
     entries = lineage.enrich(_entries(), db_path=tmp_path / "nada.sqlite")
     assert all(e["verdict"] is None for e in entries)

@@ -54,12 +54,16 @@ def test_keep_mantem_e_linhagem_com_parent(root: Path) -> None:
         json.loads(l)
         for l in (root / "data" / "lineage.jsonl").read_text(encoding="utf-8").splitlines()
     ]
-    assert linhas[-1] == {
+    assert linhas[0] == {
         "id": m.mutation_id,
         "parent_id": "abc123",
         "target": "plugins/kpi_lines.py",
         "ts": m.ts,
     }
+    # evento de veredito: mesma id, chave 'verdict', sem 'target'
+    assert linhas[1]["id"] == m.mutation_id
+    assert linhas[1]["verdict"] == codegen.KEEP
+    assert "target" not in linhas[1]
 
 
 def test_discard_restaura_byte_a_byte(root: Path) -> None:
@@ -70,6 +74,13 @@ def test_discard_restaura_byte_a_byte(root: Path) -> None:
     veredito = codegen.judge_code_mutation(m, run_exam=lambda: False, root=root)
     assert veredito == codegen.DISCARD
     assert alvo.read_bytes() == antes
+
+    ultima = json.loads(
+        (root / "data" / "lineage.jsonl").read_text(encoding="utf-8").splitlines()[-1]
+    )
+    assert ultima["id"] == m.mutation_id
+    assert ultima["verdict"] == codegen.DISCARD
+    assert "target" not in ultima
 
 
 def test_discard_de_arquivo_novo_apaga(root: Path) -> None:

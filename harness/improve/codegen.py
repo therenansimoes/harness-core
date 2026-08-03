@@ -101,15 +101,23 @@ def judge_code_mutation(
     root: Path | str | None = None,
 ) -> str:
     """KEEP se o exame injetado passa; DISCARD restaura o fonte anterior
-    byte a byte (ou apaga, se o arquivo era novo)."""
+    byte a byte (ou apaga, se o arquivo era novo). Em ambos os casos appenda
+    um evento de veredito na linhagem (linha com `verdict`, sem `target`) —
+    mutação DISCARDed não fica sem marca na árvore."""
+    base = root_dir(root)
     if run_exam():
-        return KEEP
-    path = root_dir(root) / mutation.target
-    if mutation.before_source is None:
-        path.unlink(missing_ok=True)
+        verdict = KEEP
     else:
-        _write(path, mutation.before_source)
-    return DISCARD
+        verdict = DISCARD
+        path = base / mutation.target
+        if mutation.before_source is None:
+            path.unlink(missing_ok=True)
+        else:
+            _write(path, mutation.before_source)
+    _append_lineage(
+        base, {"id": mutation.mutation_id, "verdict": verdict, "ts": store.now_iso()}
+    )
+    return verdict
 
 
 def _write(path: Path, text: str) -> None:

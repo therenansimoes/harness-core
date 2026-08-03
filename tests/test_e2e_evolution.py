@@ -111,15 +111,22 @@ def test_ciclo_codegen_keep_depois_discard(root: Path):
     assert codegen.judge_code_mutation(m2, run_exam=lambda: False, root=root) == codegen.DISCARD
     assert alvo.read_text(encoding="utf-8") == V1
 
-    # Linhagem: duas linhas, a segunda aponta a primeira como parent.
+    # Linhagem: duas propostas (a segunda aponta a primeira como parent)
+    # e um evento de veredito por julgamento.
     linhas = [
         json.loads(l)
         for l in (root / "data" / "lineage.jsonl").read_text(encoding="utf-8").splitlines()
     ]
-    assert [l["id"] for l in linhas] == [m1.mutation_id, m2.mutation_id]
-    assert linhas[0]["parent_id"] is None
-    assert linhas[1]["parent_id"] == m1.mutation_id
-    assert {l["target"] for l in linhas} == {"plugins/kpi_lines.py"}
+    propostas = [l for l in linhas if "target" in l]
+    vereditos = [l for l in linhas if "verdict" in l]
+    assert [l["id"] for l in propostas] == [m1.mutation_id, m2.mutation_id]
+    assert propostas[0]["parent_id"] is None
+    assert propostas[1]["parent_id"] == m1.mutation_id
+    assert {l["target"] for l in propostas} == {"plugins/kpi_lines.py"}
+    assert {(v["id"], v["verdict"]) for v in vereditos} == {
+        (m1.mutation_id, codegen.KEEP),
+        (m2.mutation_id, codegen.DISCARD),
+    }
 
 
 # --- 3. guardrails de ponta a ponta ---------------------------------------------

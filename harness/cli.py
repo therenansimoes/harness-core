@@ -206,6 +206,7 @@ def run_once(
                 model=model,
                 max_turns=max_turns,
                 trace_path=ws / "trace.jsonl",
+                run_id=run_id,
             )
         )
         # A régua decide, não o executor: verify roda sempre que houve execução
