@@ -8,6 +8,13 @@
 # build_cmd = "npm run build"            # roda antes do verify_cmd, no worktree
 # verify_default = "npm test"            # verify de unidade que não declara um
 # queue_dir = "projects/<nome>/queue"    # default
+#
+# ATENÇÃO: `harness init` reescreve este arquivo do zero (projects._write) e
+# apaga comentário. Se rodar init de novo, recolocar este cabeçalho à mão.
 
-[projects.demo_site]
+[projects."demo_site"]
 repo = "projects/demo_site/site"
+
+[projects."oficina"]
+repo = "/Users/renansimoes/projects/oficina-site"
+queue_dir = "/Users/renansimoes/projects/harness-core/projects/oficina/queue"

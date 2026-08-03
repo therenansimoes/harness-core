@@ -1,0 +1,25 @@
+# Painel da Oficina — unidade autorada à mão; verify_cmd escrito ANTES do run.
+# Tabela real: 16 <tr>, 60 <td> e os 4 cabecalhos — descricao vaga nao passa.
+id = "u2_inventario"
+kind = "code"
+project = "oficina"
+prompt = "Leia prompt.md no diretório de trabalho e cumpra o que está lá à risca. Trabalhe no diretório de trabalho atual (é o repo do site); todos os arquivos do site ficam em dist/."
+verify_cmd = '''
+python3 - <<'PY'
+import re
+h = open('dist/inventario.html', encoding='utf-8').read()
+low = h.lower()
+trs = len(re.findall(r'<tr\b', h, re.I))
+assert trs >= 16, f'<tr> = {trs}, precisa de pelo menos 16 (1 cabecalho + 15 itens)'
+tds = len(re.findall(r'<td\b', h, re.I))
+assert tds >= 60, f'<td> = {tds}, precisa de pelo menos 60 (15 itens x 4 colunas)'
+for col in ('nome', 'categoria', 'qtd', 'gaveta'):
+    assert col in low, f'coluna "{col}" nao aparece em dist/inventario.html'
+ths = len(re.findall(r'<th\b', h, re.I))
+assert ths >= 4, f'<th> = {ths}, precisa dos 4 cabecalhos de coluna'
+assert re.search(r'<table\b', h, re.I), 'sem <table>'
+assert re.search(r'charset\s*=\s*["\']?utf-8', h, re.I), 'inventario.html sem charset utf-8'
+assert 'index.html' in h, 'inventario.html sem link de volta para index.html'
+print('u2 ok:', trs, 'linhas,', tds, 'celulas')
+PY
+'''

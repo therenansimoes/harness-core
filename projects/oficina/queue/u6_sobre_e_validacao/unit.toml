@@ -1,0 +1,51 @@
+# Painel da Oficina — unidade autorada à mão; verify_cmd escrito ANTES do run.
+# Validacao global: varre dist/*.html, links internos e charset — fail-closed.
+id = "u6_sobre_e_validacao"
+kind = "code"
+project = "oficina"
+prompt = "Leia prompt.md no diretório de trabalho e cumpra o que está lá à risca. Trabalhe no diretório de trabalho atual (é o repo do site); todos os arquivos do site ficam em dist/."
+verify_cmd = '''
+python3 - <<'PY'
+import glob, os, re, sys
+pages = sorted(glob.glob('dist/*.html'))
+assert 'dist/sobre.html' in pages, 'falta dist/sobre.html'
+assert len(pages) >= 4, f'esperado ao menos 4 paginas em dist/, achei {len(pages)}: {pages}'
+erros = []
+for p in pages:
+    h = open(p, encoding='utf-8').read()
+    if not re.search(r'charset\s*=\s*["\']?utf-8', h, re.I):
+        erros.append(f'{p}: sem <meta charset="utf-8">')
+    if not re.search(r'<html\b[^>]*lang=', h, re.I):
+        erros.append(f'{p}: <html> sem lang')
+    for attr, vals in (('href', re.findall(r'href\s*=\s*["\']([^"\']+)["\']', h)),
+                       ('src', re.findall(r'src\s*=\s*["\']([^"\']+)["\']', h))):
+        for ref in vals:
+            if ref.startswith(('http://', 'https://', '//', '#', 'mailto:', 'data:', 'tel:')):
+                continue
+            alvo = ref.split('#')[0].split('?')[0]
+            if not alvo:
+                continue
+            caminho = os.path.normpath(os.path.join('dist', alvo))
+            if not os.path.exists(caminho):
+                erros.append(f'{p}: {attr} quebrado -> {ref} (esperado {caminho})')
+for obrig in ('dist/index.html', 'dist/inventario.html', 'dist/projetos.html', 'dist/sobre.html'):
+    if obrig not in pages:
+        erros.append(f'pagina obrigatoria ausente: {obrig}')
+s = open('dist/sobre.html', encoding='utf-8').read()
+if 'Painel da Oficina' not in s:
+    erros.append('sobre.html nao menciona "Painel da Oficina"')
+if len(re.findall(r'<p\b', s, re.I)) < 3:
+    erros.append('sobre.html com menos de 3 paragrafos')
+if os.path.getsize('dist/sobre.html') <= 1024:
+    erros.append(f'sobre.html tem {os.path.getsize("dist/sobre.html")} bytes, precisa passar de 1024')
+alvos = {'inventario.html', 'projetos.html', 'sobre.html', 'index.html'}
+for p in pages:
+    h = open(p, encoding='utf-8').read()
+    faltam = [a for a in alvos if a != os.path.basename(p) and f'href="{a}"' not in h]
+    if faltam:
+        erros.append(f'{p}: nav sem links para {sorted(faltam)}')
+if erros:
+    sys.exit('\n'.join(erros))
+print('u6 ok:', len(pages), 'paginas, links internos e charset validados')
+PY
+'''

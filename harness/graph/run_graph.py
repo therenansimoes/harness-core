@@ -262,6 +262,20 @@ def _verdict_from_payload(d: dict) -> Verdict:
     )
 
 
+def _record_episode(unit: UnitSpec, trace: str, db: Path | None = None) -> None:
+    """Ponta de escrita da memória episódica: verify vermelho vira caso passado.
+
+    Mesmo fail-open do `_episodic_block` que consome isto no backend — import
+    lazy (o módulo pode não existir num genoma antigo) e except largo, porque
+    memória que derruba o run vale menos que memória nenhuma."""
+    try:
+        from harness.memory import episodic
+
+        episodic.record_failure(unit.kind, unit.id, trace, db)
+    except Exception:
+        pass
+
+
 def _specs_payload(specs: Mapping[str, KpiSpec]) -> dict:
     return {
         n: {"cmd": s.cmd, "direction": s.direction, "timeout_s": s.timeout_s}
@@ -554,6 +568,9 @@ def _verify(state: RunState, config=None) -> dict:
     payload = _verdict_payload(verdict)
     if tail:
         payload["tail"] = tail
+        # Veredito fechado e vermelho: daqui o gate só sai por retry/revert, então
+        # este é o caso a lembrar no próximo run do mesmo kind.
+        _record_episode(state["unit"], tail, db)
     store.record_node(run_id, "verify", payload, db, attempt=attempt)
     return {
         "verdict": verdict,

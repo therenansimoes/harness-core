@@ -1,0 +1,25 @@
+# Painel da Oficina — unidade autorada à mão; verify_cmd escrito ANTES do run.
+# Grafico real: 5+ <rect> com width/height, 6+ <text>, eixos e a palavra horas.
+id = "u5_grafico_svg"
+kind = "code"
+project = "oficina"
+prompt = "Leia prompt.md no diretório de trabalho e cumpra o que está lá à risca. Trabalhe no diretório de trabalho atual (é o repo do site); todos os arquivos do site ficam em dist/."
+verify_cmd = '''
+python3 - <<'PY'
+import re
+h = open('dist/projetos.html', encoding='utf-8').read()
+assert re.search(r'<svg\b', h, re.I), 'dist/projetos.html sem <svg> inline'
+rects = len(re.findall(r'<rect\b', h, re.I))
+assert rects >= 5, f'<rect> = {rects}, precisa de pelo menos 5 barras'
+texts = len(re.findall(r'<text\b', h, re.I))
+assert texts >= 6, f'<text> = {texts}, precisa de pelo menos 6 (labels das barras + eixo)'
+assert re.search(r'<line\b|<polyline\b|<path\b', h, re.I), 'sem eixos (<line>/<polyline>/<path>)'
+assert 'horas' in h.lower(), 'a pagina nao fala de horas por projeto'
+for r in re.findall(r'<rect\b[^>]*>', h, re.I)[:20]:
+    assert 'height' in r and 'width' in r, f'<rect> sem width/height: {r[:60]}'
+assert re.search(r'charset\s*=\s*["\']?utf-8', h, re.I), 'projetos.html sem charset utf-8'
+assert 'index.html' in h, 'projetos.html sem link de volta para index.html'
+assert re.search(r'id=["\']tema["\']', h), 'projetos.html sem o botao de tema id="tema"'
+print('u5 ok:', rects, 'barras,', texts, 'textos')
+PY
+'''

@@ -24,6 +24,7 @@ from harness.ab import ArmSpec, run_ab
 from harness.backends import registry
 from harness.improve.replay import DEFAULT_LIMIT
 from harness.ledger import store
+from harness.report import DEFAULT_SINCE_HOURS as REPORT_SINCE
 from harness.routing import ROUTE_AUTO, ROUTE_MANUAL, ROUTE_MODES, router
 from harness.ruler.gate import Decision, gate
 from harness.ruler.kpi import collect, load_kpis
@@ -184,6 +185,20 @@ class RunOutcome:
     verify_tail: str = ""
 
 
+def _record_episode(unit: UnitSpec, trace: str) -> None:
+    """Verify vermelho vira caso na memória episódica (banco default: episódio é
+    conhecimento entre runs, não do banco de um experimento).
+
+    Mesmo fail-open do `_episodic_block` que consome isto no backend: import
+    lazy e except largo — memória nunca derruba o run."""
+    try:
+        from harness.memory import episodic
+
+        episodic.record_failure(unit.kind, unit.id, trace)
+    except Exception:
+        pass
+
+
 def run_once(
     unit: UnitSpec,
     backend_name: str,
@@ -240,6 +255,7 @@ def run_once(
                 verdict = run_verify(unit, ws)
             if not verdict.passed:
                 verify_tail = log_tail(verdict.log_path)
+                _record_episode(unit, verify_tail)
             # `specs=` do ANTES: a mudança avaliada não pode redefinir a régua
             # reescrevendo o kpis.toml (buraco de Goodhart do review do PR-4).
             decision = gate(verdict, kpi_before, collect(ws, specs=specs), [], specs)
@@ -953,6 +969,23 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_report(args: argparse.Namespace) -> int:
+    """Auto-relatório do loop em markdown. Fail-open: sempre exit 0."""
+    from harness import report as report_mod
+
+    text = report_mod.build_report(
+        since_hours=args.since, db_path=args.db, lineage_file=args.file
+    )
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8")
+        print(f"report {out}")
+    else:
+        print(text, end="")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="harness", description="agent harness provider-agnostic")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1057,6 +1090,19 @@ def build_parser() -> argparse.ArgumentParser:
     lineage.add_argument("--limit", type=int, default=None, metavar="N",
                          help="mostra só as N últimas raízes")
     lineage.set_defaults(func=cmd_lineage)
+
+    report = sub.add_parser(
+        "report", help="auto-relatório do loop (runs, mutações, skills, linhagem)"
+    )
+    report.add_argument("--since", type=float, default=REPORT_SINCE, metavar="HORAS",
+                        help=f"janela de tempo (default {REPORT_SINCE:g}h)")
+    report.add_argument("--out", default=None, metavar="PATH",
+                        help="grava o markdown no arquivo em vez do stdout")
+    report.add_argument("--file", default=None, metavar="PATH",
+                        help="jsonl de linhagem (default data/lineage.jsonl)")
+    report.add_argument("--db", default=None, metavar="PATH",
+                        help="banco do ledger (default data/runs.sqlite)")
+    report.set_defaults(func=cmd_report)
 
     ui = sub.add_parser(
         "ui-verify",
