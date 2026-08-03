@@ -5,7 +5,7 @@ kind = "code"
 project = "oficina"
 prompt = "Leia prompt.md no diretório de trabalho e cumpra o que está lá à risca. Trabalhe no diretório de trabalho atual (é o repo do site); todos os arquivos do site ficam em dist/."
 verify_cmd = '''
-set -e
+set -ex
 grep -q 'id="busca"' dist/inventario.html
 grep -q 'addEventListener' dist/app.js
 python3 - <<'PY'
