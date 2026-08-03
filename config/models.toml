@@ -70,3 +70,13 @@ output_per_mtok = 0.0
 [pricing."ollama:qwen3-coder:30b"]
 input_per_mtok = 0.0
 output_per_mtok = 0.0
+
+[pricing."openai:qwen3.5-9b-optiq"]
+# LM Studio local (MLX, porta 1234) — custo marginal $0, mesmo racional do ollama:*
+input_per_mtok = 0.0
+output_per_mtok = 0.0
+
+[pricing."openai:qwen3.5-9b-mlx"]
+# LM Studio local (MLX, porta 1234) — custo marginal $0, mesmo racional do ollama:*
+input_per_mtok = 0.0
+output_per_mtok = 0.0

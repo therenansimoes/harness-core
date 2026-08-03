@@ -52,6 +52,10 @@ FORBIDDEN_VERIFY = (
 # Verify que passa sempre não prova nada.
 TRIVIAL_VERIFY = ("true", ":", "exit 0")
 
+# `--ui`: a régua autorada não enxerga tela em branco. Este sufixo serve o dist,
+# exige que exista CSS carregável e olha o screenshot (`harness ui-verify`).
+UI_VERIFY_SUFFIX = " && harness ui-verify dist --expect-asset css"
+
 
 class AddError(RuntimeError):
     """Falha de autoria: erro claro, nada escrito pela metade."""
@@ -267,6 +271,7 @@ def add(
     model: str = ADD_MODEL,
     max_usd: float = ADD_MAX_USD,
     dry: bool = False,
+    ui: bool = False,
     projects_file: Path | None = None,
     out_dir: Path | None = None,
     out=None,
@@ -280,6 +285,10 @@ def add(
     context = project_context(repo)
     text = _call_author(authoring_prompt(task, project, context), model, max_usd)
     spec = parse_author_json(text)
+    # Sufixo DEPOIS da validação: o verify autorado continua tendo de se sustentar
+    # sozinho; o ui-verify é exigência extra, não muleta para régua fraca.
+    if ui and "harness ui-verify" not in spec["verify_cmd"]:
+        spec["verify_cmd"] += UI_VERIFY_SUFFIX
     content = render_unit_toml(spec, project, task)
     tomllib.loads(content)  # round-trip: o que sai daqui SEMPRE carrega
 

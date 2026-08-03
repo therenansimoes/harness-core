@@ -314,6 +314,70 @@ def _resolve_route(args: argparse.Namespace, unit: UnitSpec) -> Selection:
     )
 
 
+def _last_event(final: dict, node: str) -> dict:
+    """Último evento de `node` no trace do grafo (vazio se o nó não rodou)."""
+    return next(
+        (e for e in reversed(final.get("events", [])) if e.get("node") == node), {}
+    )
+
+
+def _run_via_graph(args: argparse.Namespace, unit: UnitSpec, sel: Selection) -> int:
+    """`run` de unidade com `project=`: entrega em branch só existe no grafo.
+
+    O worktree do repo (provision) e a poda no fim são nós do grafo; o fluxo
+    inline do `run_once` roda em tmpdir e por isso nunca entregaria a branch.
+    Rotear para cá é o que faz `harness run --unit` de projeto valer o mesmo que
+    a fila. Saída equivalente à do fluxo inline: uma linha com a decisão e, no
+    vermelho, o tail do verify no stderr (que o nó `verify` já gravou no ledger).
+    """
+    from harness.graph.run_graph import run_unit
+
+    # Flags que o grafo não recebe: dizer isto alto é melhor que obedecer pela
+    # metade em silêncio.
+    if args.max_turns is not None:
+        print(
+            "run: --max-turns não vale no modo projeto (o grafo usa o teto do "
+            "config/graph.toml + governor)",
+            file=sys.stderr,
+        )
+    if args.repo:
+        print(
+            "run: --repo ignorado no modo projeto (o workspace é o worktree do "
+            f"repo registrado em project={unit.project!r})",
+            file=sys.stderr,
+        )
+
+    # `auto` vai como auto: quem escolhe a cada tentativa é o router do grafo, e
+    # é dele a escalação de tier no retry. `manual` leva a seleção já resolvida.
+    auto = args.route == ROUTE_AUTO
+    t0 = time.monotonic()
+    final = run_unit(
+        Path(args.unit),
+        None if auto else sel.backend,
+        None if auto else (sel.model or None),
+        store.data_dir(),
+        thread_id=uuid.uuid4().hex[:12],
+        route=args.route,
+    )
+    sec_total = time.monotonic() - t0
+
+    decision = final.get("decision")
+    if decision is None:
+        print(f"run: grafo parou sem decisão (thread {final['run_id']})", file=sys.stderr)
+        return 1
+    graph_sel = final.get("selection")
+    print(
+        f"{final['run_id']} {unit.id} "
+        f"{graph_sel.backend if graph_sel else '-'} "
+        f"{decision.action} {decision.reason} {sec_total:.2f}s "
+        f"ledger#{_last_event(final, 'record').get('row_id')}"
+    )
+    tail = _last_event(final, "verify").get("tail", "")
+    if decision.action != "accept" and tail:
+        print(f"verify falhou — últimas linhas do log:\n{tail}", file=sys.stderr)
+    return 0 if decision.action == "accept" else 1
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     unit = load_unit(Path(args.unit))
     sel = _resolve_route(args, unit)
@@ -322,6 +386,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             f"route auto {unit.id} kind={sel.kind} tier={sel.tier} "
             f"{sel.backend} {sel.model or '-'} [{' '.join(sel.reasons)}]"
         )
+    if unit.project:
+        return _run_via_graph(args, unit, sel)
     try:
         outcome = run_once(
             unit,
@@ -799,6 +865,7 @@ def cmd_add(args: argparse.Namespace) -> int:
             model=args.model or ADD_MODEL,
             max_usd=ADD_MAX_USD if args.max_usd is None else args.max_usd,
             dry=args.dry,
+            ui=args.ui,
             projects_file=Path(args.projects) if args.projects else None,
             out_dir=Path(args.out_dir) if args.out_dir else None,
         )
@@ -1166,6 +1233,9 @@ def build_parser() -> argparse.ArgumentParser:
                          help="projeto registrado em config/projects.toml")
     add_cmd.add_argument("--dry", action="store_true",
                          help="mostra a unit autorada sem gravar nada")
+    add_cmd.add_argument("--ui", action="store_true",
+                         help="tarefa de frontend: gruda `harness ui-verify dist "
+                              "--expect-asset css` no verify_cmd autorado")
     add_cmd.add_argument("--model", default=None,
                          help="modelo da autoria (default: haiku)")
     add_cmd.add_argument("--max-usd", type=float, default=None, dest="max_usd",

@@ -1,7 +1,7 @@
 """Caixa de entrada universal: `data/inbox/*.json` acorda o harness.
 
 Qualquer coisa que saiba escrever um arquivo acorda o loop — git hook,
-webhook, `curl` via `serve_webhook`, humano, MCP — largando um JSON aqui.
+webhook (`triggers.webhook.serve_webhook`), humano, MCP — largando um JSON aqui.
 Tipos documentados:
 
     {"type": "run_failed", "unit_id": "u1"}    # unidade falhou (CI, hook)
@@ -20,8 +20,6 @@ import json
 import shutil
 import subprocess
 import sys
-import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Callable
 
@@ -105,52 +103,3 @@ def _handle_research(payload: dict) -> None:
 def _handle_run_failed(payload: dict) -> None:
     """Só registra: virar gradiente é papel do ledger, não do evento."""
     print(f"[inbox] run_failed unit_id={payload.get('unit_id', '?')}", file=sys.stderr)
-
-
-# --------------------------------------------------------------------------
-# Webhook mínimo: POST → arquivo no inbox
-
-
-def serve_webhook(
-    port: int,
-    inbox_dir: Path,
-    max_requests: int | None = None,
-    on_bind: Callable[[int], None] | None = None,
-) -> None:
-    """HTTP stdlib: corpo do POST vira `web-<ns>.json` no inbox, responde 202.
-
-    Não processa nada — só deposita; quem processa é o watcher do inbox.
-    `port=0` + `on_bind` = porta efêmera p/ teste; `max_requests` p/ não
-    servir para sempre.
-    """
-    inbox = Path(inbox_dir)
-    inbox.mkdir(parents=True, exist_ok=True)
-
-    class _Handler(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:  # noqa: N802 - contrato do BaseHTTPRequestHandler
-            n = int(self.headers.get("Content-Length") or 0)
-            body = self.rfile.read(n)
-            try:
-                json.loads(body.decode("utf-8"))
-            except Exception:
-                self.send_response(400)
-                self.end_headers()
-                return
-            (inbox / f"web-{time.time_ns()}.json").write_bytes(body)
-            self.send_response(202)
-            self.end_headers()
-
-        def log_message(self, *args: object) -> None:
-            pass  # silêncio: stderr é do watcher
-
-    server = HTTPServer(("127.0.0.1", port), _Handler)
-    try:
-        if on_bind is not None:
-            on_bind(server.server_address[1])
-        if max_requests is None:
-            server.serve_forever()
-        else:
-            for _ in range(max_requests):
-                server.handle_request()
-    finally:
-        server.server_close()

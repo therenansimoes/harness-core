@@ -182,3 +182,44 @@ def test_sem_projeto_o_workspace_default_fica_intacto(tmp_path, config_dir, data
     ws = Path(final["workspace"])
     assert ws.is_dir() and (ws / "mock_output.txt").is_file()
     assert not (ws / ".git").exists()
+
+
+def test_cli_run_de_unidade_com_projeto_entrega_branch(
+    tmp_path, config_dir, data_dir, capsys
+):
+    """`harness run --unit` de projeto passa pelo grafo: sem isto o run no dedo
+    rodava em tmpdir e a branch de entrega nunca existia."""
+    repo = _toy_repo(tmp_path)
+    init_project(repo, "toy", queue_dir=tmp_path / "fila")
+    unit = _unit(tmp_path, (
+        'id = "u6"\nkind = "code"\nproject = "toy"\n'
+        'prompt = "escreve a saída do mock"\n'
+        'verify_cmd = "test -f mock_output.txt && test -f app.txt"\n'
+    ))
+    assert cli.main(["run", "--unit", str(unit), "--backend", "mock"]) == 0
+
+    out = capsys.readouterr().out.strip()
+    assert " u6 mock accept " in out and "ledger#" in out
+    assert _branches(repo) == {"harness/u6"}
+    # worktree podado e working tree principal intocada
+    assert _git(repo, "status", "--porcelain") == ""
+    assert _git(repo, "worktree", "list").count("\n") == 1
+    assert store.history()[0].project == "toy"
+
+
+def test_cli_run_sem_projeto_nao_passa_pelo_grafo(
+    tmp_path, config_dir, data_dir, capsys, monkeypatch
+):
+    """Unidade sem `project`: fluxo inline como sempre foi. O grafo explodiria."""
+    from harness.graph import run_graph
+
+    def _boom(*a, **k):
+        raise AssertionError("run_unit não deveria ser chamado sem project")
+
+    monkeypatch.setattr(run_graph, "run_unit", _boom)
+    unit = _unit(tmp_path, (
+        'id = "u7"\nkind = "code"\nprompt = "escreve a saída do mock"\n'
+        'verify_cmd = "test -f mock_output.txt"\n'
+    ))
+    assert cli.main(["run", "--unit", str(unit), "--backend", "mock"]) == 0
+    assert " u7 mock accept " in capsys.readouterr().out

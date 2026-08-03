@@ -140,6 +140,26 @@ def test_duplicate_slug_refused(env):
         _add(env)
 
 
+def test_ui_flag_appends_ui_verify(env):
+    """`--ui` gruda o ui-verify no verify autorado; sem a flag, nada muda."""
+    plain = _add(env)
+    assert load_unit(plain).verify_cmd == FIXED["verify_cmd"]
+
+    with_ui = add("tarefa", "faz", projects_file=env.projects_file,
+                  out_dir=env.out_dir / "ui", ui=True)
+    data = tomllib.loads((with_ui / "unit.toml").read_text())  # TOML segue válido
+    assert data["verify_cmd"] == FIXED["verify_cmd"] + add_mod.UI_VERIFY_SUFFIX
+    assert load_unit(with_ui).verify_cmd == data["verify_cmd"]
+
+
+def test_cli_add_ui_flag(env, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    rc = main(["add", "arruma o layout", "--project", "faz", "--dry", "--ui",
+               "--projects", str(env.projects_file)])
+    assert rc == 0
+    assert add_mod.UI_VERIFY_SUFFIX in capsys.readouterr().out
+
+
 def test_cli_add_dry(env, tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     rc = main(["add", "põe o título", "--project", "faz", "--dry",
