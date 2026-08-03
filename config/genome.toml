@@ -28,6 +28,8 @@ immutable = [
 
 mutable = [
     "config/*.toml",
+    # workflows nomeados que o loop pode criar; a validação de compile é o guardrail.
+    "config/workflows/*.toml",
     "prompts/**",
     # skills são conhecimento destilado que o loop pode evoluir; a régua continua imutável.
     "skills/**",

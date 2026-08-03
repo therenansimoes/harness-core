@@ -24,6 +24,7 @@ def test_load_shipped_config():
     assert "benchmarks/sealed/**" in g.immutable
     assert g.mutable == (
         "config/*.toml",
+        "config/workflows/*.toml",
         "prompts/**",
         "skills/**",
         "plugins/**",

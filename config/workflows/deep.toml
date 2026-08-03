@@ -1,0 +1,35 @@
+# Workflow "deep": caminho completo COM reflect entre plan e route — um passo
+# extra de estrutura, provado por dado, sem tocar código de nó. Workflows são
+# mutáveis: o loop pode propor novos ou evoluir estes via ação 'workflow'.
+
+nodes = [
+  "plan",
+  "reflect",
+  "route",
+  "provision",
+  "execute",
+  "verify",
+  "measure",
+  "gate",
+  "accept",
+  "retry",
+  "escalate",
+  "revert",
+  "record",
+]
+
+edges = [
+  ["START", "plan"],
+  ["plan", "reflect"],
+  ["reflect", "route"],
+  ["route", "provision"],
+  ["provision", "execute"],
+  ["execute", "verify"],
+  ["verify", "measure"],
+  ["measure", "gate"],
+  ["retry", "route"],
+  ["accept", "record"],
+  ["escalate", "record"],
+  ["revert", "record"],
+  ["record", "END"],
+]

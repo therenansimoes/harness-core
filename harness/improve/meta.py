@@ -18,13 +18,17 @@ MetaVerdict = Literal["allowed", "quarantined", "blocked"]
 ALLOWED, QUARANTINED, BLOCKED = "allowed", "quarantined", "blocked"
 
 RULER_CONFIG_NAME = "ruler.toml"
+GOVERNOR_CONFIG_NAME = "governor.toml"
 RULER_CONFIG_DIR = "config"
+# O guarda cobre o juiz E o chefe: mudar a régua do gate ou o prazo/pressão do
+# governor é o loop mexendo em quem o vigia — mesmo exame duro para os dois.
+GUARDED_CONFIG_NAMES = frozenset({RULER_CONFIG_NAME, GOVERNOR_CONFIG_NAME})
 
 
 def _targets_ruler_config(target: Path) -> bool:
-    """Casa por sufixo `config/ruler.toml` — vale para path relativo ou absoluto."""
+    """Casa por sufixo `config/{ruler,governor}.toml` — path relativo ou absoluto."""
     t = Path(target)
-    return t.name == RULER_CONFIG_NAME and t.parent.name == RULER_CONFIG_DIR
+    return t.name in GUARDED_CONFIG_NAMES and t.parent.name == RULER_CONFIG_DIR
 
 
 def meta_check(
@@ -34,7 +38,7 @@ def meta_check(
 ) -> MetaVerdict:
     """Veredito sobre uma mutação, em ordem:
 
-    1. alvo não é `config/ruler.toml`      -> "allowed" (exame nem roda)
+    1. alvo fora de config/{ruler,governor}.toml -> "allowed" (exame nem roda)
     2. exame selado falhou                  -> "blocked"
     3. exame ok, sem ack humano             -> "quarantined" (não aplica)
     4. exame ok + ack humano                -> "allowed"

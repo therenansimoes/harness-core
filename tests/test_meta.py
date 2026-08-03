@@ -85,3 +85,33 @@ def test_tolerancia_invalida_cai_no_default(tmp_path):
     negativa = tmp_path / "neg.toml"
     negativa.write_text("[gate]\nkpi_regression_tolerance = -1.0\n", encoding="utf-8")
     assert kpi_regression_tolerance(negativa) == 0.0
+
+
+# --- meta_check também guarda config/governor.toml (o chefe) ---
+
+GOVERNOR = Path("config/governor.toml")
+
+
+def test_meta_alvo_governor_exame_falha_bloqueia():
+    assert meta_check(GOVERNOR, lambda: False, human_ack=True) == "blocked"
+
+
+def test_meta_alvo_governor_exame_ok_sem_ack_quarentena():
+    # o loop não afrouxa o próprio prazo: sem ack humano, não aplica.
+    assert meta_check(GOVERNOR, lambda: True, human_ack=False) == "quarantined"
+
+
+def test_meta_alvo_governor_exame_ok_com_ack_permite():
+    abs_gov = Path("/abs/repo/config/governor.toml")
+    assert meta_check(abs_gov, lambda: True, human_ack=True) == "allowed"
+
+
+def test_meta_governor_fora_de_config_nao_e_guardado():
+    chamado = []
+
+    def exam() -> bool:
+        chamado.append(True)
+        return False
+
+    assert meta_check(Path("outra/governor.toml"), exam, human_ack=False) == "allowed"
+    assert not chamado

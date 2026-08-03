@@ -34,7 +34,7 @@ import subprocess
 import time
 import tomllib
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -43,6 +43,7 @@ from harness.genome import tamper
 from harness.genome.genome import DEFAULT_PATH as GENOME_PATH
 from harness.genome.genome import Genome
 from harness.genome.genome import load as load_genome
+from harness.governor.governor import CUTOFF, check_deadline, load_gov, taper_turns
 from harness.graph.checkpoint import open_checkpointer
 from harness.graph.state import Budget, Decision, Event, RunState
 from harness.ledger import store
@@ -136,6 +137,20 @@ def load_policy(path: Path | None = None) -> GraphPolicy:
 
 
 # --- helpers de config/serialização ------------------------------------------
+
+
+def _gov_deadline(run_id: str, db: Path, gov=None) -> str:
+    """'continue'/'cutoff' contra o `started_ts` que o plan gravou no ledger
+    (wall clock: vale mesmo com resume noutro processo). Fail-open: sem plan
+    ou ts torto -> 'continue' — comportamento atual intacto."""
+    if gov is None:
+        gov = load_gov()
+    plan_ev = store.get_node(run_id, "plan", db) or {}
+    try:
+        started = float(plan_ev["started_ts"])
+    except (KeyError, TypeError, ValueError):
+        return "continue"
+    return check_deadline(started, time.time(), gov)
 
 
 def _cfg(config, key: str, default: Any = None) -> Any:
@@ -306,11 +321,22 @@ def _route(state: RunState, config=None) -> dict:
             reasons=("manual:pedido_do_chamador",),
         )
 
+    # Governor: o chefe aperta a cada passagem (route é o único nó que roda de
+    # novo a cada tentativa). Taper no max_turns; o prazo é consultado aqui e
+    # carimbado no trace, mas o desvio para escalate acontece no gate — único
+    # ponto condicional da topologia. Sem governor.toml, tudo é no-op.
+    gov = load_gov()
+    turns = taper_turns(selection.max_turns, attempt, gov)
+    if turns != selection.max_turns:
+        selection = replace(selection, max_turns=turns)
+    deadline = _gov_deadline(state["run_id"], _db(config), gov)
+
     return {
         "selection": selection,
         "events": [
             _event(
                 "route",
+                deadline=deadline,
                 backend=selection.backend,
                 model=selection.model,
                 tier=selection.tier,
@@ -514,6 +540,11 @@ def _gate(state: RunState, config=None) -> dict:
     if action == "retry" and attempt + 1 >= max_attempts:
         action = "escalate_human"
         reason = f"{reason}; acabaram as {max_attempts} tentativas"
+    # Governor: prazo estourado transforma retry em escalate — nova tentativa
+    # depois do cutoff seria o loop pagando pra não entregar.
+    if action == "retry" and _gov_deadline(state["run_id"], _db(config)) == CUTOFF:
+        action = "escalate_human"
+        reason = f"{reason}; governor:prazo_estourado"
     decision = Decision(action, reason)  # tipo do estado, não o do ruler
 
     return {

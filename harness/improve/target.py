@@ -312,6 +312,7 @@ def unregister_action(name: str) -> None:
 _OPTIONAL_ACTION_MODULES = (
     "harness.skills.attribution",
     "harness.improve.prompt_evolve",
+    "harness.improve.workflow_action",
 )
 
 

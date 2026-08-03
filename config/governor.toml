@@ -1,0 +1,18 @@
+# Este arquivo é o CHEFE: prazo, pressão e foco do loop de melhoria.
+# Mutação AQUI passa pelo mesmo meta-exame do juiz (improve/meta.py):
+# exame selado + ack humano — o loop não afrouxa o próprio prazo.
+# Campo torto degrada para o default congelado em harness/governor/governor.py.
+
+[deadline]
+run_s = 900.0      # teto wall-clock de um run; estourou -> escalate, não retry
+cycle_s = 3600.0   # teto de um ciclo do loop de melhoria
+
+[pressure]
+cost_cap_usd = 5.0   # teto de gasto por run
+turn_taper = 0.75    # max_turns * taper^attempt: resultado não vem, corda encurta
+
+[focus]
+explore_frac_start = 0.5   # fração de exploração no início do ciclo
+explore_frac_end = 0.0     # perto do prazo só explota
+bench_after = 3            # propostas recentes sem KEEP -> ação vai pro banco
+bench_cycles = 2           # ciclos no banco antes de a ação voltar

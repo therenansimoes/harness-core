@@ -1,0 +1,31 @@
+# Workflow "hotfix": caminho enxuto SEM measure — patch pequeno não paga
+# medição. Workflows são mutáveis: o loop pode propor novos ou evoluir estes
+# via ação 'workflow', sempre fail-closed (compile + genoma antes de escrever).
+
+nodes = [
+  "plan",
+  "route",
+  "provision",
+  "execute",
+  "verify",
+  "gate",
+  "accept",
+  "retry",
+  "escalate",
+  "revert",
+  "record",
+]
+
+edges = [
+  ["START", "plan"],
+  ["plan", "route"],
+  ["route", "provision"],
+  ["provision", "execute"],
+  ["execute", "verify"],
+  ["verify", "gate"],
+  ["retry", "route"],
+  ["accept", "record"],
+  ["escalate", "record"],
+  ["revert", "record"],
+  ["record", "END"],
+]
