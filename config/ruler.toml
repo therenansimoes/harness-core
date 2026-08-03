@@ -13,6 +13,16 @@
 # "after" NUNCA é tolerado, independente do valor aqui.
 kpi_regression_tolerance = 0.0
 
+[pareto]
+# Segundo filtro do A/B (harness/ruler/pareto.py): KEEP de Wilson que piorou
+# custo ou tempo além da tolerância vira INCONCLUSIVE. Os valores abaixo são os
+# defaults congelados no código — `enabled = false` é o comportamento de hoje,
+# só Wilson, idêntico ao histórico.
+enabled = false
+# Piora RELATIVA da média POR RUN tolerada em cada eixo (0.10 = 10%).
+cost_tolerance_pct = 0.10
+sec_tolerance_pct = 0.10
+
 [exam]
 # Quem EXECUTA o exame selado (harness/improve/exam.py). Fica aqui de propósito:
 # este arquivo passa pelo meta-exame, então o loop não troca o executor da

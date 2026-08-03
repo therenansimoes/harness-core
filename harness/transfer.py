@@ -19,13 +19,22 @@ from pathlib import Path
 
 from harness import __version__
 from harness.improve import root_dir
+from harness.ledger import store
 
 BUNDLE_VERSION = 1
 SKILLS_DIR = "skills"
 ATTIC_DIR = "attic"        # skills/attic: aposentadas, não viajam
 PRIOR_FILE = "routing_prior.json"
 MANIFEST_FILE = "manifest.json"
-IMPORTED_PRIOR = Path("data") / "imported_prior.json"
+IMPORTED_PRIOR_NAME = "imported_prior.json"
+
+
+def imported_prior_path() -> Path:
+    """`$HARNESS_DATA_DIR/imported_prior.json`, default `data/imported_prior.json`
+    relativo ao cwd — mesma resolução do ledger (`store.data_dir()`), e em
+    call-time: o teste (ou uma run com data dir isolado) muda a env e isto
+    acompanha."""
+    return store.data_dir() / IMPORTED_PRIOR_NAME
 
 
 def routing_prior(db_path: Path | None = None) -> dict[str, dict[str, int]]:
@@ -113,7 +122,7 @@ def import_bundle(bundle_path: Path | str, root: Path | str | None = None) -> di
             target.write_bytes(raw)
             imported.append(name)
         prior = _member_json(tar, PRIOR_FILE)
-    merged = _merge_prior(base / IMPORTED_PRIOR, prior)
+    merged = _merge_prior(imported_prior_path(), prior)
     return {
         "imported": sorted(imported),
         "skipped": sorted(skipped),

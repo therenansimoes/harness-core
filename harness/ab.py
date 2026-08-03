@@ -21,6 +21,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from harness.ledger import store
+from harness.ruler import pareto
 from harness.ruler.wilson import MIN_N, AbVerdict, Arm, decide_ab
 from harness.types import RunRow, Selection
 
@@ -50,6 +51,11 @@ class AbReport:
     rows_a: tuple[RunRow, ...]
     rows_b: tuple[RunRow, ...]
     sec_total: float
+    # Eixos do Pareto (custo/tempo médios por run, por braço) e os eixos em que
+    # B regrediu — vazio quando `[pareto]` está desligado no ruler.toml.
+    axes_a: dict
+    axes_b: dict
+    pareto_worse: tuple[str, ...] = ()
 
 
 def run_ab(
@@ -130,13 +136,23 @@ def run_ab(
     sec_total = time.monotonic() - t0
 
     arms = {label: _tally(rows[label]) for label in ARMS}
+    axes = {label: _axes(rows[label]) for label in ARMS}
+    verdict, worse = pareto.apply(
+        decide_ab(arms["a"], arms["b"], min_n=min_n),
+        axes["a"],
+        axes["b"],
+        pareto.load_pareto(),
+    )
     return AbReport(
-        verdict=decide_ab(arms["a"], arms["b"], min_n=min_n),
+        verdict=verdict,
         arm_a=arms["a"],
         arm_b=arms["b"],
         rows_a=tuple(rows["a"]),
         rows_b=tuple(rows["b"]),
         sec_total=sec_total,
+        axes_a=axes["a"],
+        axes_b=axes["b"],
+        pareto_worse=tuple(worse),
     )
 
 
@@ -151,6 +167,21 @@ def _spec(arm: ArmSpec | Selection) -> ArmSpec:
         tier=getattr(arm, "tier", None),
         max_turns=getattr(arm, "max_turns", None),
     )
+
+
+def _axes(rows: list[RunRow]) -> dict:
+    """Média POR RUN de cada eixo do Pareto.
+
+    `cost_usd` sai do numerador E do denominador quando a run não mediu (mock
+    não cobra): média de custo diluída por runs de $0 diria que o braço é
+    barato. `None` quando nenhuma run mediu — o Pareto trata isso como eixo
+    ausente e não bloqueia.
+    """
+    costs = [r.cost_usd for r in rows if r.cost_usd is not None]
+    return {
+        "cost_usd": sum(costs) / len(costs) if costs else None,
+        "sec_total": sum(r.sec_total for r in rows) / len(rows) if rows else None,
+    }
 
 
 def _tally(rows: list[RunRow]) -> Arm:

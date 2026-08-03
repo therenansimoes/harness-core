@@ -83,8 +83,14 @@ def seed_failures(sandbox: Path, n: int = 3) -> None:
         )
 
 
-def rows(name: str, keep: int, other: int, other_verdict: str = "DISCARD") -> list[dict]:
-    tag = f"action={name}"
+def rows(
+    name: str,
+    keep: int,
+    other: int,
+    other_verdict: str = "DISCARD",
+    kind: str | None = None,
+) -> list[dict]:
+    tag = policy.note_with_action(name, None, kind=kind)
     return (
         [{"verdict": "KEEP", "note": tag}] * keep
         + [{"verdict": other_verdict, "note": tag}] * other
@@ -135,6 +141,65 @@ def test_action_stats_conta_so_veredito_concluido():
     assert (stats["a"]["keep"], stats["a"]["n"]) == (2, 4)
     assert stats["a"]["rate"] == pytest.approx(0.5)
     assert 0.0 < stats["a"]["lower"] < 0.5
+
+
+# --- prior por (kind, ação) -----------------------------------------------------
+
+
+def test_prior_por_kind_escolhe_diferente_por_tipo():
+    """`a` paga em code, `b` paga em content: o global empata, a célula decide."""
+    history = (
+        rows("a", 8, 1, kind="code") + rows("b", 1, 8, kind="code")
+        + rows("a", 1, 8, kind="content") + rows("b", 8, 1, kind="content")
+    )
+    # Global: 9/18 para as duas — sem kind o bandit não tem como diferenciar.
+    glob = policy.action_stats(history)
+    assert glob["a"]["lower"] == pytest.approx(glob["b"]["lower"])
+
+    assert policy.select_action(["a", "b"], history, random.Random(0), kind="code") == "a"
+    assert (
+        policy.select_action(["a", "b"], history, random.Random(0), kind="content") == "b"
+    )
+
+
+def test_celula_rala_nao_vira_o_jogo():
+    """1 amostra na célula pesa 1/5: o agregado global continua mandando."""
+    history = (
+        rows("boa", 17, 2) + rows("ruim", 2, 17)
+        + rows("boa", 0, 1, kind="code")      # única amostra em code: DISCARD
+        + rows("ruim", 1, 0, kind="code")     # única amostra em code: KEEP
+    )
+    cell = policy.action_stats(history, kind="code")
+    assert (cell["boa"]["n"], cell["ruim"]["n"]) == (1, 1)
+    assert policy.select_action(["boa", "ruim"], history, random.Random(0), kind="code") == "boa"
+
+
+def test_celula_vazia_usa_global_e_acao_virgem_ainda_explora():
+    """Kind sem nenhuma amostra: vale o global (não zera, não vira inf)."""
+    history = rows("boa", 9, 1, kind="code") + rows("ruim", 1, 9, kind="code")
+    assert (
+        policy.select_action(["boa", "ruim"], history, random.Random(0), kind="content")
+        == "boa"
+    )
+    # "nova" não tem amostra em lugar nenhum: exploração como sempre.
+    assert (
+        policy.select_action(
+            ["boa", "ruim", "nova"], history, random.Random(0), kind="content"
+        )
+        == "nova"
+    )
+
+
+def test_note_kind_roundtrip():
+    assert policy.note_with_action("research", None, kind="code") == "action=research;kind=code"
+    assert (
+        policy.note_with_action("research", "deadline", kind="code")
+        == "action=research;kind=code;deadline"
+    )
+    assert policy.note_with_action(None, "deadline", kind="code") == "deadline"
+    linha = SimpleNamespace(note="action=research;kind=code;deadline", verdict="KEEP")
+    assert (policy.action_of(linha), policy.kind_of(linha)) == ("research", "code")
+    assert policy.kind_of(SimpleNamespace(note="action=research")) is None
 
 
 def test_note_roundtrip():

@@ -88,10 +88,10 @@ def test_verify_falho_e_retry_antes_de_olhar_kpi(data_dir, tmp_path):
     assert store.history()[0].exit_reason == "verify_failed"
 
 
-def test_verify_grava_log_no_workspace(data_dir, unit, tmp_path):
+def test_verify_grava_log_fora_do_workspace(data_dir, unit, tmp_path):
     repo = _repo(tmp_path, ESTAVEL)
     cli.main(["run", "--unit", unit, "--backend", "mock", "--repo", str(repo)])
-    assert (repo / ".harness" / "verify.log").is_file()
+    assert not (repo / ".harness" / "verify.log").exists()
 
 
 def test_repo_sujo_e_recusado_antes_de_executar(data_dir, unit, tmp_path):

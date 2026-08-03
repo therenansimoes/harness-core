@@ -64,6 +64,7 @@ from harness.improve.target import (
 )
 from harness.ledger import store
 from harness.routing import CONFIG_DIR_ENV
+from harness.ruler import pareto
 from harness.ruler.wilson import MIN_N, Arm, decide_ab, wilson_interval
 from harness.types import MutationRow
 
@@ -108,6 +109,9 @@ class AutopilotState(TypedDict):
     target: dict | None
     mutation: dict | None
     arms: dict | None
+    # Eixos do Pareto do ciclo: {"a": {"cost_usd": …, "sec_total": …}, "b": {…}},
+    # médias por run acumuladas no `fanout_ab`. Só o `score` lê.
+    axes: dict
     verdict: str | None
     escalation: dict | None
     abort_reason: str | None
@@ -186,6 +190,25 @@ def _target_dict(target: Target) -> dict:
         "gain": target.gain,
         "reasons": list(target.reasons),
     }
+
+
+def _units_kind(state: AutopilotState) -> str | None:
+    """Kind das unidades do ciclo, quando é UM só. Misto/ilegível/ausente → None.
+
+    É a chave do prior por (kind, ação) do bandit: `mutations` não tem `kind`
+    nem `run_id` para juntar com `runs`, então o kind vem daqui e é gravado no
+    note pelo `_record`. Ciclo com unidades de kinds diferentes não tem kind:
+    misturar `code` com `content` num rótulo só ensinaria a coisa errada.
+    """
+    from harness.cli import load_unit
+
+    kinds = set()
+    for unit in state["units"]:
+        try:
+            kinds.add(load_unit(Path(unit)).kind)
+        except Exception:
+            return None
+    return kinds.pop() if len(kinds) == 1 else None
 
 
 def _stop(state: AutopilotState, reason: str, evidence: dict) -> dict:
@@ -323,9 +346,14 @@ def _pick_target(state: AutopilotState, config=None) -> dict:
             )
 
     target_d = _target_dict(target)
+    # Kind do ciclo: chave do prior por (kind, ação) na policy e rótulo que o
+    # `_record` grava no note. Vale também com ação fixada — o ledger precisa da
+    # célula preenchida para o bandit do ciclo seguinte ter o que ler.
+    kind = _units_kind(state)
     # Ação de evolução do ciclo: fixada pelo chamador, ou escolhida pela
-    # policy (bandit sobre o KEEP-rate por ação no ledger). Rota forçada pelo
-    # humano fica fora do bandit: ele já decidiu a regra, a policy não vota.
+    # policy (bandit sobre o KEEP-rate por (kind, ação) no ledger, global quando
+    # o kind é desconhecido). Rota forçada pelo humano fica fora do bandit: ele
+    # já decidiu a regra, a policy não vota.
     action = _cfg(config, CFG_ACTION, None)
     # Banco intacto quando o bandit não vota neste ciclo (ação fixada, rota do
     # humano): ninguém cumpre pena de ciclo que não julgou ninguém.
@@ -362,8 +390,10 @@ def _pick_target(state: AutopilotState, config=None) -> dict:
             store.mutations(path=db),
             rng,
             explore=explore,
+            kind=kind,
         )
     target_d["action"] = action
+    target_d["kind"] = kind
 
     return {
         "target": target_d,
@@ -378,6 +408,7 @@ def _pick_target(state: AutopilotState, config=None) -> dict:
                 gain=target.gain,
                 pattern=target.pattern,
                 action=action,
+                kind=kind,
                 benched=sorted(bench_since),
             )
         ],
@@ -604,6 +635,10 @@ def _fanout_ab(state: AutopilotState, config=None) -> dict:
         return ArmSpec(sel.backend, sel.model or None, sel.tier, sel.max_turns)
 
     totals = {"a": Arm(0, 0), "b": Arm(0, 0)}
+    # Eixos do Pareto somados sobre TODAS as unidades: custo com denominador
+    # próprio (run que não mediu sai dos dois lados da divisão), tempo com o seu.
+    acc = {label: {"cost_sum": 0.0, "cost_n": 0, "sec_sum": 0.0, "sec_n": 0}
+           for label in ("a", "b")}
     try:
         for unit in state["units"]:
             unit_spec = load_unit(Path(unit))
@@ -619,6 +654,14 @@ def _fanout_ab(state: AutopilotState, config=None) -> dict:
                 totals[label] = Arm(
                     totals[label].succ + arm.succ, totals[label].n + arm.n
                 )
+            for label, arm_rows in (("a", report.rows_a), ("b", report.rows_b)):
+                bucket = acc[label]
+                for row in arm_rows:
+                    if row.cost_usd is not None:
+                        bucket["cost_sum"] += float(row.cost_usd)
+                        bucket["cost_n"] += 1
+                    bucket["sec_sum"] += float(row.sec_total)
+                    bucket["sec_n"] += 1
     except _DeadlineHit:
         # Reverte AQUI, não no `revert_cfg` de depois do resume: o processo pode
         # devolver o controle ao humano e ficar parado por dias, e a árvore não
@@ -638,9 +681,11 @@ def _fanout_ab(state: AutopilotState, config=None) -> dict:
     except Exception as exc:   # preflight, unit ilegível, backend explodindo
         return _stop(state, esc.ERROR, {"error": f"{type(exc).__name__}: {exc}"})
 
+    axes = {label: _mean_axes(acc[label]) for label in ("a", "b")}
     return {
         "arms": {"a": [totals["a"].succ, totals["a"].n],
                  "b": [totals["b"].succ, totals["b"].n]},
+        "axes": axes,
         "events": [
             _event(
                 "fanout_ab",
@@ -650,19 +695,40 @@ def _fanout_ab(state: AutopilotState, config=None) -> dict:
                 sequential=True,   # config global: ver docstring do módulo
                 a=_arm_text(totals["a"]),
                 b=_arm_text(totals["b"]),
+                cost_a=axes["a"]["cost_usd"],
+                cost_b=axes["b"]["cost_usd"],
+                sec_a=axes["a"]["sec_total"],
+                sec_b=axes["b"]["sec_total"],
             )
         ],
     }
 
 
+def _mean_axes(bucket: dict) -> dict:
+    """Soma acumulada -> média por run. `None` = nenhuma run mediu o eixo."""
+    return {
+        "cost_usd": bucket["cost_sum"] / bucket["cost_n"] if bucket["cost_n"] else None,
+        "sec_total": bucket["sec_sum"] / bucket["sec_n"] if bucket["sec_n"] else None,
+    }
+
+
 def _score(state: AutopilotState, config=None) -> dict:
-    """A régua fala. Nada aqui além de `decide_ab` — é o ponto do repo inteiro."""
+    """A régua fala. `decide_ab` decide qualidade; o Pareto (desligado por
+    default) só pode transformar um KEEP em INCONCLUSIVE por custo/tempo."""
     arm_a, arm_b = _arms(state)
     verdict = decide_ab(arm_a, arm_b)
+    axes = state.get("axes") or {}
+    verdict, worse = pareto.apply(
+        verdict, axes.get("a") or {}, axes.get("b") or {}, pareto.load_pareto()
+    )
+    extra = {"pareto": ",".join(worse)} if worse else {}
     return {
         "verdict": verdict,
         "events": [
-            _event("score", verdict=verdict, a=_arm_text(arm_a), b=_arm_text(arm_b))
+            _event(
+                "score", verdict=verdict, a=_arm_text(arm_a), b=_arm_text(arm_b),
+                **extra,
+            )
         ],
     }
 
@@ -736,7 +802,10 @@ def _record(state: AutopilotState, config=None) -> dict:
     action = target.get("action")
     recorded_action = None
     if verdict in ("KEEP", "DISCARD", "INCONCLUSIVE"):
-        note = policy.note_with_action(action, note)
+        # O kind do ciclo vai junto no note: é o que faz o prior por
+        # (kind, ação) existir no ciclo seguinte. Sem coluna própria em
+        # `mutations`, o note é a única casa dele.
+        note = policy.note_with_action(action, note, kind=target.get("kind"))
         recorded_action = action
 
     store.record_mutation(
@@ -924,6 +993,7 @@ def initial_state(
         target=None,
         mutation=None,
         arms=None,
+        axes={"a": {}, "b": {}},
         verdict=None,
         escalation=None,
         abort_reason=None,

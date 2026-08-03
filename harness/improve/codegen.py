@@ -4,7 +4,7 @@
 o MESMO fail-closed do `mutate.check`: genoma barra ANTES de qualquer escrita,
 e sintaxe inválida (`ast.parse`) recusa antes do disco também. Cada mutação
 escreve atômico guardando o fonte anterior e appenda linhagem em
-`data/lineage.jsonl`. Quem julga é um exame INJETADO (na vida real,
+`$HARNESS_DATA_DIR/lineage.jsonl` (default `data/lineage.jsonl` sob o root). Quem julga é um exame INJETADO (na vida real,
 benchmarks/sealed): KEEP mantém, DISCARD restaura byte a byte — o código
 mutado nunca julga a si mesmo.
 """
@@ -20,13 +20,12 @@ from pathlib import Path
 from typing import Callable
 
 from harness.genome.genome import Genome
-from harness.improve import mutate, root_dir
+from harness.improve import lineage, mutate, root_dir
 from harness.ledger import store
 
 ACTION = "codegen"
 KEEP = "KEEP"
 DISCARD = "DISCARD"
-LINEAGE_FILE = Path("data") / "lineage.jsonl"
 
 
 class CodegenError(Exception):
@@ -132,7 +131,10 @@ def _write(path: Path, text: str) -> None:
 
 
 def _append_lineage(base: Path, line: dict) -> None:
-    p = base / LINEAGE_FILE
+    # `lineage.lineage_path()` é relativo (`data/lineage.jsonl`) quando
+    # $HARNESS_DATA_DIR não está setado — aí vale sob `base`, como antes; setado
+    # (absoluto) ele manda, e escrita e leitura caem no MESMO arquivo.
+    p = base / lineage.lineage_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("a", encoding="utf-8") as f:
         f.write(json.dumps(line, ensure_ascii=False) + "\n")

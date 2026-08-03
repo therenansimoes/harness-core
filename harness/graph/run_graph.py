@@ -69,7 +69,7 @@ from harness.routing import (
 )
 from harness.ruler.gate import gate as ruler_gate
 from harness.ruler.kpi import KpiSpec, collect, load_kpis
-from harness.ruler.verify import log_tail
+from harness.ruler.verify import log_tail, run_log_dir
 from harness.types import ExecRequest, ExecResult, RunRow, Selection, UnitSpec, Verdict
 from harness.workspace.provision import add_worktree, remove_worktree
 from harness.workspace.sealing import VERIFIER_NAMES, is_verifier, verifier_visible
@@ -529,7 +529,11 @@ def _verify(state: RunState, config=None) -> dict:
         }
 
     ws = Path(state["workspace"])
-    log_path = ws / VERIFY_LOG
+    # Fora do ws, um arquivo por tentativa: no ws o verificador selado imprimiria
+    # o golden e a tentativa seguinte o leria como resposta.
+    log_path = (
+        run_log_dir(run_id, _cfg(config, CFG_DATA_DIR, "data")) / f"verify.a{attempt}.log"
+    )
     t0 = time.monotonic()
     # Prova selada: o verificador só existe no workspace dentro deste `with` —
     # o agente já rodou e a tentativa seguinte também não vai vê-lo.
@@ -722,6 +726,10 @@ def _retry(state: RunState, config=None) -> dict:
     anterior com a corrente se o processo morrer entre `retry` e `execute`.
     """
     attempt = state["attempt"] + 1
+    # Legado: run que gravou o log dentro do ws antes desta mudança. Só no
+    # tmpdir — em `--repo` o worktree é do alvo e não é nosso para limpar.
+    if not state["unit"].project:
+        (Path(state["workspace"]) / VERIFY_LOG).unlink(missing_ok=True)
     return {
         "attempt": attempt,
         "exec": None,

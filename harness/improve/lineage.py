@@ -1,6 +1,6 @@
 """Observabilidade da linhagem: a árvore genealógica das mutações de código.
 
-Lê `data/lineage.jsonl` (uma linha JSON por mutação: id, parent_id, target,
+Lê `$HARNESS_DATA_DIR/lineage.jsonl` (uma linha JSON por mutação: id, parent_id, target,
 ts — quem escreve é `codegen._append_lineage`; linhas com `verdict` e sem
 `target` são eventos de veredito, mesclados sobre a proposta pelo id), junta
 com a tabela `mutations` do ledger para anexar o veredito KEEP/DISCARD quando
@@ -16,8 +16,15 @@ from pathlib import Path
 
 from harness.ledger import store
 
-LINEAGE_FILE = Path("data") / "lineage.jsonl"
+LINEAGE_NAME = "lineage.jsonl"
 REQUIRED = ("id", "target", "ts")
+
+
+def lineage_path() -> Path:
+    """`$HARNESS_DATA_DIR/lineage.jsonl`, default `data/lineage.jsonl` relativo
+    ao cwd — mesma resolução do ledger (`store.data_dir()`), e em call-time:
+    o teste (ou uma run com data dir isolado) muda a env e isto acompanha."""
+    return store.data_dir() / LINEAGE_NAME
 
 
 def load_lineage(path: Path | str | None = None) -> list[dict]:
@@ -26,7 +33,7 @@ def load_lineage(path: Path | str | None = None) -> list[dict]:
     Ausente → []; linha torta (JSON inválido ou sem os campos obrigatórios)
     → pula, com um único aviso agregado no stderr; veredito sem proposta
     correspondente → ignora, com aviso."""
-    p = Path(path) if path is not None else LINEAGE_FILE
+    p = Path(path) if path is not None else lineage_path()
     if not p.is_file():
         return []
     entries: list[dict] = []

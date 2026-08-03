@@ -1,7 +1,8 @@
 """Verify: a régua roda o comando do alvo e devolve um Verdict.
 
-O agente não declara que passou — o exit code declara. O log fica dentro do
-workspace (`.harness/verify.log`) para viajar junto com o run.
+O agente não declara que passou — o exit code declara. O log fica FORA do
+workspace (`$HARNESS_DATA_DIR/logs/<run_id>/`): dentro do ws o retry leria o
+golden impresso pelo verificador selado e passaria a régua por decoração.
 """
 
 from __future__ import annotations
@@ -10,22 +11,44 @@ import subprocess
 import time
 from pathlib import Path
 
+from harness.ledger import store
 from harness.types import UnitSpec, Verdict
 
 LOG_REL = Path(".harness") / "verify.log"
+LOGS_REL = "logs"
 DEFAULT_TIMEOUT_S = 300.0
 TAIL_LINES = 15      # diagnóstico: o fim do log é onde o erro costuma estar
 TIMEOUT_EXIT = 124   # convenção do `timeout(1)`
 NOEXEC_EXIT = 127    # convenção do shell para "não deu para executar"
 
 
-def run_verify(unit: UnitSpec, ws: Path, timeout_s: float = DEFAULT_TIMEOUT_S) -> Verdict:
+def run_log_dir(run_id: str, data_dir: Path | str | None = None) -> Path:
+    """Diretório dos logs deste run, fora de qualquer workspace.
+
+    Absoluto de propósito: `HARNESS_DATA_DIR` relativo mais o cwd do subprocess
+    do verify daria caminhos diferentes para o mesmo run.
+    """
+    base = Path(data_dir) if data_dir is not None else store.data_dir()
+    path = (base / LOGS_REL / run_id).resolve()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def run_verify(
+    unit: UnitSpec,
+    ws: Path,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
+    *,
+    log_dir: Path | None = None,
+) -> Verdict:
     """Roda `unit.verify_cmd` com `ws` de cwd; stdout+stderr vão para o log.
 
     Timeout e falha de execução viram exit code próprio em vez de exceção: o
     gate precisa de um veredito, não de um traceback.
+    `log_dir` (o de `run_log_dir`) tira o log do workspace; sem ele o log cai em
+    `ws / LOG_REL`, que é o caminho de quem só quer um veredito solto.
     """
-    log_path = ws / LOG_REL
+    log_path = (log_dir / "verify.log") if log_dir is not None else ws / LOG_REL
     log_path.parent.mkdir(parents=True, exist_ok=True)
     t0 = time.monotonic()
     try:

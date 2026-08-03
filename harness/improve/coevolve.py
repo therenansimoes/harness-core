@@ -20,8 +20,16 @@ from collections.abc import Callable
 from pathlib import Path
 
 from harness.improve.synthesize import QUARANTINE_DIR
+from harness.ledger import store
 
-FRONTIER_FILE = Path("data") / "frontier.jsonl"
+FRONTIER_NAME = "frontier.jsonl"
+
+
+def frontier_path() -> Path:
+    """`$HARNESS_DATA_DIR/frontier.jsonl`, default `data/frontier.jsonl` relativo
+    ao cwd — mesma resolução do ledger (`store.data_dir()`), e em call-time:
+    o teste (ou uma run com data dir isolado) muda a env e isto acompanha."""
+    return store.data_dir() / FRONTIER_NAME
 
 
 def _discover(quarantine_dir: Path) -> list[Path]:
@@ -90,7 +98,7 @@ def screen_quarantine(
     if frontier_path is not None:
         frontier_file = Path(frontier_path)
     else:
-        frontier_file = data / FRONTIER_FILE.name
+        frontier_file = data / FRONTIER_NAME
 
     if not quarantine.is_dir():
         print(f"coevolve: {quarantine} não existe — fronteira vazia", file=sys.stderr)

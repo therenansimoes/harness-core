@@ -28,7 +28,7 @@ from harness.report import DEFAULT_SINCE_HOURS as REPORT_SINCE
 from harness.routing import ROUTE_AUTO, ROUTE_MANUAL, ROUTE_MODES, router
 from harness.ruler.gate import Decision, gate
 from harness.ruler.kpi import collect, load_kpis
-from harness.ruler.verify import log_tail, run_verify
+from harness.ruler.verify import log_tail, run_log_dir, run_verify
 from harness.ruler.wilson import MIN_N, Arm, decide_ab, wilson_interval
 from harness.types import ExecRequest, ExecResult, RunRow, Selection, UnitSpec
 from harness.uiverify import ASSET_KINDS, DEFAULT_MIN_KB, SHOT_NAME
@@ -233,6 +233,9 @@ def run_once(
         # Specs do ANTES: a mudança avaliada não redefine a direção da régua.
         specs = load_kpis(ws)
         kpi_before = collect(ws, specs=specs)
+        # Log de run anterior não fica no workspace para o agente ler: o golden
+        # impresso pelo verificador selado seria a resposta pronta.
+        (ws / ".harness" / "verify.log").unlink(missing_ok=True)
         result = backend.execute(
             ExecRequest(
                 prompt=unit.prompt,
@@ -251,8 +254,9 @@ def run_once(
         if ran:
             # O verificador entra agora, com o agente já fora: durante o
             # execute ele não existe no workspace (prova selada).
+            log_dir = run_log_dir(run_id)
             with verifier_visible(unit.path, ws):
-                verdict = run_verify(unit, ws)
+                verdict = run_verify(unit, ws, log_dir=log_dir)
             if not verdict.passed:
                 verify_tail = log_tail(verdict.log_path)
                 _record_episode(unit, verify_tail)
