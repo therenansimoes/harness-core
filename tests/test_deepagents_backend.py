@@ -57,7 +57,12 @@ def test_pricing_file_has_only_free_local_models():
     pricing = da.load_pricing(Path("config"))
     assert pricing, "config/models.toml sem [pricing]"
     # locais grátis: ollama:* e os modelos MLX servidos pelo LM Studio em loopback
-    local_openai = {"openai:qwen3.5-9b-optiq", "openai:qwen3.5-9b-mlx"}
+    local_openai = {
+        "openai:qwen3.5-9b-optiq",
+        "openai:qwen3.5-9b-mlx",
+        "openai:bonsai-27b-mlx",
+        "openai:gemma-4-e4b-it-qat-optiq-4bit",
+    }
     assert all(k.startswith("ollama:") or k in local_openai for k in pricing)
     assert all(
         v.get("input_per_mtok") == 0.0 and v.get("output_per_mtok") == 0.0

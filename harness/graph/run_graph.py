@@ -262,8 +262,13 @@ def _verdict_from_payload(d: dict) -> Verdict:
     )
 
 
-def _record_episode(unit: UnitSpec, trace: str, db: Path | None = None) -> None:
+def _record_episode(unit: UnitSpec, trace: str) -> None:
     """Ponta de escrita da memória episódica: verify vermelho vira caso passado.
+
+    Episódio é conhecimento global entre runs/experimentos: grava sempre no
+    ledger default, nunca no `_db(config)` do run — a leitura (`_episodic_block`)
+    também é global, e escrever no db do experimento tornaria o episódio
+    invisível.
 
     Mesmo fail-open do `_episodic_block` que consome isto no backend — import
     lazy (o módulo pode não existir num genoma antigo) e except largo, porque
@@ -271,7 +276,7 @@ def _record_episode(unit: UnitSpec, trace: str, db: Path | None = None) -> None:
     try:
         from harness.memory import episodic
 
-        episodic.record_failure(unit.kind, unit.id, trace, db)
+        episodic.record_failure(unit.kind, unit.id, trace)
     except Exception:
         pass
 
@@ -574,7 +579,7 @@ def _verify(state: RunState, config=None) -> dict:
         payload["tail"] = tail
         # Veredito fechado e vermelho: daqui o gate só sai por retry/revert, então
         # este é o caso a lembrar no próximo run do mesmo kind.
-        _record_episode(state["unit"], tail, db)
+        _record_episode(state["unit"], tail)
     store.record_node(run_id, "verify", payload, db, attempt=attempt)
     return {
         "verdict": verdict,

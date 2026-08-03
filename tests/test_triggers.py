@@ -313,3 +313,35 @@ def test_serve_webhook_grava_post_autenticado_e_recusa_sem_token(
     files = list(tmp_path.glob("web-*.json"))
     assert len(files) == 1  # a recusada não deixou arquivo no inbox
     assert json.loads(files[0].read_text(encoding="utf-8")) == {"type": "improve"}
+
+
+def test_cli_webhook_esta_no_parser_e_serve_o_inbox_do_data_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """A porta existia sem ninguém para abri-la: `harness webhook` é o comando.
+
+    O socket não sobe aqui — `serve_webhook` já tem teste próprio; o que se
+    cobra do comando é a flag, o inbox (`$HARNESS_DATA_DIR/inbox`) e o bind
+    impresso no loopback.
+    """
+    from harness import cli
+
+    args = cli.build_parser().parse_args(["webhook"])
+    assert (args.func, args.port) == (cli.cmd_webhook, cli.WEBHOOK_PORT)
+    assert cli.build_parser().parse_args(["webhook", "--port", "0"]).port == 0
+
+    seen: dict = {}
+
+    def fake_serve(port, inbox, on_bind=None, **kw):
+        seen.update(port=port, inbox=Path(inbox))
+        if on_bind is not None:
+            on_bind(port)
+
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr("harness.triggers.webhook.serve_webhook", fake_serve)
+    assert cli.cmd_webhook(args) == 0
+    assert seen == {
+        "port": cli.WEBHOOK_PORT,
+        "inbox": tmp_path / "data" / "inbox",
+    }
+    assert f"127.0.0.1:{cli.WEBHOOK_PORT}" in capsys.readouterr().out

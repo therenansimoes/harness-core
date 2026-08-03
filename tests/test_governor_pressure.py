@@ -89,6 +89,45 @@ def test_bench_marca_torta_ou_do_futuro_reentra_no_ciclo_corrente():
     assert banned == {"fria"} and since == {"fria": 4}
 
 
+def test_bench_por_celula_bane_no_kind_ruim_e_solta_no_kind_bom():
+    gov = Governor(bench_after=3, bench_cycles=2)
+    glob = {"pesquisa": {"proposals": 6, "keeps": 2}}
+    code = {"pesquisa": {"proposals": 3, "keeps": 0}}
+    content = {"pesquisa": {"proposals": 3, "keeps": 2}}
+
+    banned, since = bench_with_expiry(glob, gov, 4, {}, kind="code", cell_stats=code)
+    assert banned == {"pesquisa"} and since == {"code:pesquisa": 4}
+
+    # Mesmo ciclo, outro kind: a célula de content colou KEEP -> a ação continua
+    # viva lá, e a marca de code sobrevive intacta (banco de uma célula não é
+    # perdoado porque o ciclo de hoje é de outra).
+    banned, since = bench_with_expiry(
+        glob, gov, 4, since, kind="content", cell_stats=content
+    )
+    assert banned == set() and since == {"code:pesquisa": 4}
+
+    # O prazo de soltura corre por célula, como o banco.
+    banned, since = bench_with_expiry(glob, gov, 6, since, kind="code", cell_stats=code)
+    assert banned == set() and since == {}
+
+
+def test_bench_por_celula_cai_no_global_quando_a_celula_esta_muda():
+    gov = Governor(bench_after=3, bench_cycles=2)
+    glob = {
+        "fria": {"proposals": 5, "keeps": 0},
+        "quente": {"proposals": 5, "keeps": 1},
+    }
+    # Kind sem amostra nenhuma: o agregado global julga — ausência de evidência
+    # naquele kind não absolve quem nunca emplacou em lugar nenhum.
+    banned, since = bench_with_expiry(glob, gov, 0, {}, kind="content", cell_stats={})
+    assert banned == {"fria"} and since == {"content:fria": 0}
+
+    # Sem kind é o caminho de sempre (marca com o nome nu), e a marca da célula
+    # fica guardada para quando o kind dela voltar a rodar.
+    banned, since = bench_with_expiry(glob, gov, 0, since)
+    assert banned == {"fria"} and since == {"fria": 0, "content:fria": 0}
+
+
 def test_bench_with_expiry_sem_estado_e_o_bench_de_sempre():
     gov = Governor(bench_after=3, bench_cycles=2)
     stats = {

@@ -1,6 +1,6 @@
 """CLI do harness. `harness run` / `ab` / `backends` / `improve` / `replay` /
 `lineage` / `export` / `import` / `doctor` / `skills` / `actions` / `seal` /
-`frontier` / `evolve` / `ui-verify` / `bench` / `queue`."""
+`frontier` / `evolve` / `ui-verify` / `bench` / `queue` / `webhook`."""
 
 from __future__ import annotations
 
@@ -39,6 +39,7 @@ UNIT_FILE = "unit.toml"
 SCRATCH_DIR = ".harness"   # log do verify; não conta como sujeira do repo-alvo
 DEFAULT_MAX_TURNS = 8
 HELD_IN = Path("benchmarks/held_in")   # unidades default do `harness improve`
+WEBHOOK_PORT = 8787   # porta default do `harness webhook` (loopback)
 # Resposta default do `--resume`: abortar. Retomar um loop sem dizer o que
 # fazer não pode significar "continua sozinho" — quem foi chamado tem que
 # escolher explicitamente continuar.
@@ -1059,6 +1060,29 @@ def cmd_queue(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_webhook(args: argparse.Namespace) -> int:
+    """`harness webhook --port N`: a porta HTTP que deposita eventos no inbox.
+
+    Bind sempre em 127.0.0.1 (quem decide é o `serve_webhook`): expor para a
+    rede é trabalho de proxy reverso, não de flag nossa. Sem token o servidor
+    SOBE recusando tudo com 403 e o `serve_webhook` imprime o `NO_TOKEN_HELP` —
+    serviço que morre calado esconde a config faltando. Ctrl-C sai 0: parar um
+    vigia não é erro.
+    """
+    from harness.triggers.webhook import serve_webhook
+
+    inbox = store.data_dir() / "inbox"
+    try:
+        serve_webhook(
+            args.port,
+            inbox,
+            on_bind=lambda p: print(f"[webhook] 127.0.0.1:{p} -> {inbox}"),
+        )
+    except KeyboardInterrupt:
+        print("[webhook] parado", file=sys.stderr)
+    return 0
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     """Auto-relatório do loop em markdown. Fail-open: sempre exit 0."""
     from harness import report as report_mod
@@ -1332,6 +1356,15 @@ def build_parser() -> argparse.ArgumentParser:
                         help="sqlite do MAP-Elites (default data/archive.sqlite)")
     evolve.add_argument("--project", default=None)
     evolve.set_defaults(func=cmd_evolve, parser=evolve)
+
+    webhook = sub.add_parser(
+        "webhook",
+        help="sobe a porta HTTP (loopback) que deposita eventos no inbox",
+    )
+    webhook.add_argument("--port", type=int, default=WEBHOOK_PORT,
+                         help=f"porta em 127.0.0.1 (default {WEBHOOK_PORT}; "
+                              "0 = efêmera, o bind é impresso)")
+    webhook.set_defaults(func=cmd_webhook)
 
     bench = sub.add_parser("bench", help="mede o custo de uma operação do harness")
     bench.add_argument("what", choices=["provision"])

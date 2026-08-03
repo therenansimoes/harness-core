@@ -10,7 +10,9 @@ Três alavancas, todas caindo sobre quem gasta:
 - foco: `explore_budget` derrete a fração de exploração conforme o prazo se
   aproxima (perto do fim só explota); `bench` tira do jogo ação que propõe
   muito e não emplaca KEEP, e `bench_with_expiry` a devolve depois de
-  `bench_cycles` ciclos — banco é castigo com prazo, não pena perpétua.
+  `bench_cycles` ciclos — banco é castigo com prazo, não pena perpétua. Com o
+  kind do ciclo na mão o banco é por célula (`bench_cell`): ação reprovada em
+  `code` segue jogando em `content`, como o prior do bandit.
 
 Tudo função PURA com `now`/`ts` injetados: testável sem dormir. `load_gov`
 falha aberta campo a campo, como `load_policy` do grafo — config ausente ou
@@ -30,6 +32,9 @@ from typing import Any, Literal, Mapping
 from harness.routing import config_dir
 
 GOVERNOR_TOML = "governor.toml"
+
+# Separador da chave composta do banco por célula: "<kind>:<ação>".
+MARK_SEP = ":"
 
 DeadlineStatus = Literal["continue", "cutoff"]
 CONTINUE: DeadlineStatus = "continue"
@@ -181,14 +186,43 @@ def bench(action_stats: Mapping[str, Mapping[str, Any]], gov: Governor) -> set[s
     `action_stats`: nome -> {"proposals": int, "keeps": int}. Stat torta ou
     incompleta conta como zero — ninguém vai pro banco por dado quebrado."""
     banned: set[str] = set()
-    for name, stats in action_stats.items():
-        if not isinstance(stats, Mapping):
-            continue
-        proposals = _pos_int(stats.get("proposals"), 0)
-        keeps = _pos_int(stats.get("keeps"), 0)
+    for name in action_stats:
+        proposals, keeps = _pair(action_stats, name)
         if proposals >= gov.bench_after and keeps == 0:
             banned.add(name)
     return banned
+
+
+def bench_cell(
+    cell_stats: Mapping[str, Mapping[str, Any]],
+    action_stats: Mapping[str, Mapping[str, Any]],
+    gov: Governor,
+) -> set[str]:
+    """`bench` por célula (kind, ação): a célula manda, o global é o fallback.
+
+    Mesmo critério do `bench`, aplicado ao placar do kind corrente
+    (`cell_stats`): ação que só propõe e nunca cola KEEP em `code` vai pro
+    banco em `code` e continua livre em `content`. Célula MUDA sobre uma ação
+    (nenhuma proposta naquele kind) não é absolvição — é ausência de evidência,
+    e aí o agregado global (`action_stats`) julga, senão ação já reprovada em
+    todo lugar renasceria a cada kind novo.
+    """
+    banned: set[str] = set()
+    for name in set(cell_stats) | set(action_stats):
+        proposals, keeps = _pair(cell_stats, name)
+        if proposals == 0:
+            proposals, keeps = _pair(action_stats, name)
+        if proposals >= gov.bench_after and keeps == 0:
+            banned.add(name)
+    return banned
+
+
+def _pair(stats: Mapping[str, Mapping[str, Any]], name: str) -> tuple[int, int]:
+    """(propostas, keeps) de uma ação. Linha ausente ou torta conta como zero."""
+    row = stats.get(name)
+    if not isinstance(row, Mapping):
+        return 0, 0
+    return _pos_int(row.get("proposals"), 0), _pos_int(row.get("keeps"), 0)
 
 
 def bench_with_expiry(
@@ -196,35 +230,71 @@ def bench_with_expiry(
     gov: Governor,
     cycle: int,
     since: Mapping[str, Any] | None = None,
+    kind: str | None = None,
+    cell_stats: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> tuple[set[str], dict[str, int]]:
     """`bench` com prazo de soltura. Devolve `(banidas, since')`.
 
-    `since` é o estado do banco: ação -> ciclo em que ela entrou. Quem entrou
-    há `bench_cycles` ciclos ou mais SAI — banco sem prazo é pena perpétua, e
-    ação nunca solta nunca produz a amostra que a absolveria. Sair limpa a
-    marca: se ela continuar propondo sem KEEP, volta pro banco no ciclo
+    `since` é o estado do banco: chave da marca -> ciclo em que ela entrou.
+    Quem entrou há `bench_cycles` ciclos ou mais SAI — banco sem prazo é pena
+    perpétua, e ação nunca solta nunca produz a amostra que a absolveria. Sair
+    limpa a marca: se ela continuar propondo sem KEEP, volta pro banco no ciclo
     seguinte (castigo cíclico, não morte). `cycle` é injetado, como `now` nas
     outras: nada aqui lê relógio nem disco.
+
+    `kind` (o tipo da tarefa do ciclo) troca o julgamento global pelo da célula
+    `(kind, ação)` — `bench_cell` sobre `cell_stats`, com `action_stats` de
+    fallback — e passa a marcar em `"<kind>:<ação>"`. Chave string composta, não
+    dict aninhado: o estado atravessa o checkpointer msgpack. Marca de OUTRA
+    célula sobrevive intacta: o banco de `code` não é perdoado porque o ciclo de
+    hoje é `content`. `kind=None` é o caminho de sempre, marca com o nome nu da
+    ação — e nem toca nas marcas com `:`, que pertencem a outras células.
 
     Marca torta ou do futuro (checkpoint velho, ciclo reiniciado) é reescrita
     com o ciclo corrente em vez de derrubar a chamada — fail-open igual ao
     resto do governor.
     """
-    candidates = bench(action_stats, gov)
+    if kind:
+        candidates = bench_cell(cell_stats or {}, action_stats, gov)
+    else:
+        candidates = bench(action_stats, gov)
     prev = since if isinstance(since, Mapping) else {}
     banned: set[str] = set()
-    out: dict[str, int] = {}
+    # Marca de fora desta célula é carregada como está (só a inteira: valor
+    # torto morre aqui e renasce quando o kind dele voltar a rodar).
+    out: dict[str, int] = {
+        k: v
+        for k, v in prev.items()
+        if not _mine(k, kind) and isinstance(v, int) and not isinstance(v, bool)
+    }
     for name in candidates:
+        key = _mark(kind, name)
         try:
-            entered: int | None = int(prev[name])
+            entered: int | None = int(prev[key])
         except (KeyError, TypeError, ValueError):
             entered = None
         if entered is None or entered < 0 or entered > cycle:
-            out[name] = cycle          # entrando agora (ou marca do futuro)
+            out[key] = cycle           # entrando agora (ou marca do futuro)
             banned.add(name)
         elif cycle - entered >= gov.bench_cycles:
             continue                   # cumpriu o prazo: sai do banco e da marca
         else:
-            out[name] = entered
+            out[key] = entered
             banned.add(name)
     return banned, out
+
+
+def _mark(kind: str | None, name: str) -> str:
+    """Chave da marca no banco: `"<kind>:<ação>"`, ou o nome nu sem kind."""
+    return f"{kind}{MARK_SEP}{name}" if kind else name
+
+
+def _mine(key: str, kind: str | None) -> bool:
+    """A marca pertence à célula que está sendo julgada agora?
+
+    Sem kind, a célula é o espaço das chaves nuas — marca com `:` é de outra
+    célula e não se mistura (nome de ação é identificador, sem `:`).
+    """
+    if not kind:
+        return MARK_SEP not in key
+    return key.startswith(f"{kind}{MARK_SEP}")

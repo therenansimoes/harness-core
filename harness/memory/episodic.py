@@ -7,10 +7,18 @@ convenção de `skills/attribution.py`).
 FTS5 é opcional no sqlite: build sem a extensão faz `record_failure` virar
 no-op silencioso e `recall` devolver []. Toda a API é fail-open — memória que
 derruba o run vale menos que memória nenhuma.
+
+O namespace da memória é o data dir GLOBAL (`HARNESS_DATA_DIR`), não o db do
+experimento: trocar `HARNESS_DATA_DIR` reseta a memória episódica, e isso é por
+design — cada data dir é um harness com sua própria história.
+
+`HARNESS_EPISODIC=0` (ou off/false/no) é kill switch lido a cada chamada:
+`record_failure` devolve False e `recall` devolve [].
 """
 
 from __future__ import annotations
 
+import os
 import re
 import sqlite3
 from pathlib import Path
@@ -31,6 +39,13 @@ CREATE VIRTUAL TABLE IF NOT EXISTS {TABLE} USING fts5(
 """
 
 _TOKEN = re.compile(r"[0-9A-Za-z_]{3,}")
+_OFF = {"0", "off", "false", "no"}
+
+
+def _enabled() -> bool:
+    """Kill switch lido NA CHAMADA, não no import: teste e operador precisam
+    poder desligar a memória sem reimportar o módulo."""
+    return os.environ.get("HARNESS_EPISODIC", "1").strip().lower() not in _OFF
 
 
 def _connect(path: Path | None = None) -> sqlite3.Connection:
@@ -55,6 +70,8 @@ def record_failure(
     Sem `trace` não há caso a lembrar. `kind` vazio virá "" — a busca é sempre
     keyed em kind, então falha sem kind simplesmente nunca é recuperada.
     """
+    if not _enabled():
+        return False
     if not trace or not trace.strip():
         return False
     try:
@@ -80,6 +97,8 @@ def recall(
     `query` é texto livre (o prompt da unidade): vira OR dos seus tokens, porque
     a sintaxe do MATCH não perdoa pontuação. Qualquer erro => [] (fail-open).
     """
+    if not _enabled():
+        return []
     if not kind or k <= 0:
         return []
     match = _match_expr(kind, query)

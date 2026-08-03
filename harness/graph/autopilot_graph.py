@@ -125,7 +125,9 @@ class AutopilotState(TypedDict):
     # zera a cada processo não tem teto nenhum. None = ciclo sem marca (thread
     # de antes deste campo) e o teto do ciclo não corta.
     cycle_started_ts: float | None
-    # Banco do governor: ação -> ciclo em que ela entrou. Vive no checkpoint
+    # Banco do governor: `"<kind>:<ação>"` (ou a ação nua, quando o ciclo não
+    # tem kind) -> ciclo em que ela entrou. Chave string composta, não dict
+    # aninhado: é o que atravessa o checkpointer msgpack. Vive no checkpoint
     # porque o prazo de soltura (`bench_cycles`) se conta em ciclos DESTA thread;
     # derivar do ledger daria "há quantas mutações", não "há quantos ciclos".
     bench_since: dict[str, int]
@@ -209,6 +211,11 @@ def _units_kind(state: AutopilotState) -> str | None:
         except Exception:
             return None
     return kinds.pop() if len(kinds) == 1 else None
+
+
+def _bench_stats(stats: dict[str, dict]) -> dict[str, dict[str, int]]:
+    """Placar da policy -> vocabulário do banco do governor (`bench`)."""
+    return {n: {"proposals": s["n"], "keeps": s["keep"]} for n, s in stats.items()}
 
 
 def _stop(state: AutopilotState, reason: str, evidence: dict) -> dict:
@@ -367,19 +374,24 @@ def _pick_target(state: AutopilotState, config=None) -> dict:
         # Governor no bandit: (a) banco — ação que só propõe e nunca cola KEEP
         # sai da roleta (nunca esvazia: foco não é paralisia) e volta depois de
         # `bench_cycles` ciclos, com o ciclo de entrada guardado em
-        # `bench_since`; (b) exploração fecha conforme os ciclos correm
-        # (explore_budget). Fail-open.
+        # `bench_since` sob a chave `"<kind>:<ação>"` (o banco é por célula
+        # quando o kind do ciclo é conhecido, como o prior do bandit); (b)
+        # exploração fecha conforme os ciclos correm (explore_budget). Fail-open.
         explore = 1.0
         try:
             from harness.governor import governor as gov_mod
 
             gov = gov_mod.load_gov()
-            stats = policy.action_stats(store.mutations(path=db))
+            mutations = list(store.mutations(path=db))
             benched, bench_since = gov_mod.bench_with_expiry(
-                {n: {"proposals": s["n"], "keeps": s["keep"]} for n, s in stats.items()},
+                _bench_stats(policy.action_stats(mutations)),
                 gov,
                 state["cycle"],
                 state.get("bench_since"),
+                kind=kind,
+                cell_stats=_bench_stats(policy.action_stats(mutations, kind=kind))
+                if kind
+                else None,
             )
             names = [n for n in names if n not in benched] or names
             explore = gov_mod.explore_budget(state["cycle"] / max(1, state["cycles"]), gov)
