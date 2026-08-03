@@ -1,0 +1,46 @@
+# Topologia do run-graph como dado (zona mutável do genoma).
+#
+# Contrato (harness/graph/topology.py):
+# - `nodes`: nomes da whitelist NODE_IMPLS. Obrigatório conter plan, execute,
+#   verify, gate, record — e os alvos do gate (accept, retry, escalate,
+#   revert). Impl desconhecida => spec recusada.
+# - `edges`: pares [origem, destino]; "START" e "END" são os terminais.
+#   Aresta linear saindo de "gate" é recusada: as saídas do gate são
+#   condicionais (decisão da régua -> accept/retry/escalate/revert) e vivem
+#   no código, não aqui.
+# - Qualquer erro (arquivo ausente, toml torto, validação) => build_run_graph
+#   cai na topologia embutida, com 1 linha no stderr. O código dos nós é
+#   imutável; este arquivo só rearranja a estrutura.
+#
+# Este default reproduz EXATAMENTE a topologia embutida — comportamento
+# idêntico até alguém provar uma variação no A/B.
+
+nodes = [
+  "plan",
+  "route",
+  "provision",
+  "execute",
+  "verify",
+  "measure",
+  "gate",
+  "accept",
+  "retry",
+  "escalate",
+  "revert",
+  "record",
+]
+
+edges = [
+  ["START", "plan"],
+  ["plan", "route"],
+  ["route", "provision"],
+  ["provision", "execute"],
+  ["execute", "verify"],
+  ["verify", "measure"],
+  ["measure", "gate"],
+  ["retry", "route"],
+  ["accept", "record"],
+  ["escalate", "record"],
+  ["revert", "record"],
+  ["record", "END"],
+]

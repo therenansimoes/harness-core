@@ -1,0 +1,14 @@
+# Knobs operacionais do juiz (harness/ruler/gate.py).
+#
+# Este arquivo é MUTÁVEL — mas mutação aqui só é aceita via meta-exame
+# (harness/improve/meta.py: exame selado + ack humano). O autopilot sozinho
+# nunca aplica mudança neste arquivo.
+#
+# Ausente ou malformado => valem os defaults congelados no código, que são
+# exatamente os valores abaixo (comportamento idêntico ao de hoje).
+
+[gate]
+# Tolerância ABSOLUTA de piora de KPI antes de reverter. 0.0 = estrito
+# (default atual): qualquer piora é regressão. KPI que vira NaN ou some no
+# "after" NUNCA é tolerado, independente do valor aqui.
+kpi_regression_tolerance = 0.0

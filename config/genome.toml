@@ -31,4 +31,8 @@ mutable = [
     "prompts/**",
     # skills são conhecimento destilado que o loop pode evoluir; a régua continua imutável.
     "skills/**",
+    # única zona de código que o loop reescreve, julgada por exame selado.
+    "plugins/**",
+    # exames propostos; selar é ato humano, sealed continua imutável.
+    "benchmarks/quarantine/**",
 ]

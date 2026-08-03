@@ -33,6 +33,14 @@ Pacote `harness/` (núcleo, zero menção a vendor) sobre LangGraph; legado cong
 
 Suite completa pós-sprint: 428 passed, 2 deselected.
 
+## Escada evolutiva (sprint 2) — 2026-08-03
+
+- **topology:** topologia do run_graph vira dado — `harness/graph/topology.py` (whitelist `NODE_IMPLS` c/ nó novo `reflect` pass-through, `load_spec`/`compile_spec` fail-closed via `TopologyError`); `build_run_graph` tenta `config/topology.toml`, qualquer falha → 1 linha no stderr + topologia embutida inalterada. Toml shipado reproduz a topologia atual. 26 passed.
+- **evolve:** `harness/evolve` — population PBT (`mutate_config`/`crossover`/`run_population`, seleção por Wilson lower bound, elitismo 25%) + archive MAP-Elites em sqlite próprio (`data/archive.sqlite`, nichos `(kind, cost_bucket)`). Não registrado no Action registry ainda. 7 passed.
+- **codegen:** zona de código mutável `plugins/` (seed `kpi_lines.py`) + `harness/improve/codegen.py`: `propose_code_mutation` (genome check fail-closed, `ast.parse`, escrita atômica, linhagem em `data/lineage.jsonl`) e `judge_code_mutation` (exame injetado; DISCARD restaura/apaga). `plugins/**` agora mutável no genoma. 39 passed.
+- **meta-ruler:** knobs do juiz em `config/ruler.toml` (`[gate].kpi_regression_tolerance`, default congelado 0.0 em qualquer falha de leitura); `meta.py` c/ `meta_check` (allowed/quarantined/blocked — mudar o juiz exige exame selado + ack humano). 64 passed.
+- **synthesize:** `synthesize_from_failures` gera exames de quarentena (`benchmarks/quarantine/`) a partir de runs falhas/revertidas do ledger; `harness seal <name> --yes` move quarantine → sealed (selar é ato humano). `benchmarks/quarantine/**` agora mutável no genoma; `sealed/**` segue imutável. 16 passed.
+
 Fiação feita (não é PR novo): o nó `route` do run_graph consome `routing/router.select()` no modo `auto` (`run_unit(route="auto")`, `harness run --route auto`), com escalação de tier por attempt; o modo `manual` — default, backend fixado pelo chamador — continua como era.
 
 ## Verificação global (última: 2026-08-02, 8/8 PASS)

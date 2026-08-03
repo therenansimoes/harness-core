@@ -1,5 +1,5 @@
 """CLI do harness. `harness run` / `ab` / `improve` / `replay` / `doctor` /
-`backends` / `bench`."""
+`backends` / `seal` / `bench`."""
 
 from __future__ import annotations
 
@@ -593,6 +593,34 @@ def cmd_bench(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_seal(args: argparse.Namespace) -> int:
+    """Promove um exame da quarentena para sealed. Selar é ato humano."""
+    from harness.improve import synthesize
+
+    src = synthesize.QUARANTINE_DIR / args.name
+    if not src.is_dir():
+        print(
+            f"seal: '{args.name}' não existe em {synthesize.QUARANTINE_DIR}",
+            file=sys.stderr,
+        )
+        return 1
+    if not args.yes:
+        print(
+            "seal: recusado — selar é ato humano e exige --yes. "
+            "Revise o unit.toml antes de confirmar; nada foi movido.",
+            file=sys.stderr,
+        )
+        return 1
+    dst = synthesize.SEALED_DIR / args.name
+    if dst.exists():
+        print(f"seal: '{args.name}' já existe em {synthesize.SEALED_DIR}", file=sys.stderr)
+        return 1
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(dst))
+    print(f"selado: {dst}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="harness", description="agent harness provider-agnostic")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -672,6 +700,14 @@ def build_parser() -> argparse.ArgumentParser:
         "doctor", help="diagnóstico local: backends, genoma, config, dados, tracing"
     )
     doctor.set_defaults(func=cmd_doctor, parser=doctor)
+
+    seal = sub.add_parser(
+        "seal", help="promove um exame da quarentena para benchmarks/sealed"
+    )
+    seal.add_argument("name", help="nome do dir em benchmarks/quarantine")
+    seal.add_argument("--yes", action="store_true",
+                      help="confirmação humana; sem isto o comando recusa")
+    seal.set_defaults(func=cmd_seal)
 
     bench = sub.add_parser("bench", help="mede o custo de uma operação do harness")
     bench.add_argument("what", choices=["provision"])

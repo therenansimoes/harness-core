@@ -22,7 +22,13 @@ def test_load_shipped_config():
     assert "harness/ruler/**" in g.immutable
     assert "uv.lock" in g.immutable
     assert "benchmarks/sealed/**" in g.immutable
-    assert g.mutable == ("config/*.toml", "prompts/**", "skills/**")
+    assert g.mutable == (
+        "config/*.toml",
+        "prompts/**",
+        "skills/**",
+        "plugins/**",
+        "benchmarks/quarantine/**",
+    )
 
 
 def test_load_normalizes_patterns(tmp_path):

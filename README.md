@@ -25,11 +25,13 @@ harness/
   genome/       genome tamper                    ← o que pode mudar
   routing/      kinds (o QUE é)  router (QUANTO custa)
   workspace/    provision (git worktree + symlink de cache)
-  improve/      target mutate escalate research  ← o que vale a pena mudar
+  improve/      target mutate escalate research codegen meta synthesize ← o que vale a pena mudar
+  evolve/       population (PBT) + archive (MAP-Elites)
   skills/       load/select/render de skills, injetadas no prompt por kind
   ledger/       store (SQLite; TSV é export)     ← fonte de verdade das runs
 skills/*.md     skills destiladas (frontmatter TOML + markdown), mutáveis pelo loop
-config/*.toml   models kinds tools catalog genome graph mcp ← a zona calibrável pelo loop
+plugins/        única zona de CÓDIGO mutável pelo loop, julgada por exame selado
+config/*.toml   models kinds tools catalog genome graph mcp topology ruler ← a zona calibrável pelo loop
 ```
 
 `config/mcp.toml` declara servidores MCP opcionais (stdio/streamable_http, via
@@ -43,8 +45,11 @@ sempre passando pelo genome check fail-closed antes de escrever.
 [accept | retry → route | escalate | revert] → record → END`. Checkpoint em
 `SqliteSaver` com `thread_id = run_id` e nós idempotentes: matar o processo no
 meio do `execute` e reinvocar a mesma thread completa a run sem executar duas
-vezes (`tests/test_resume.py` faz isso com `kill -9` de verdade). A topologia é
-imutável no genoma — o loop calibra TOML, não nós. `measure` e `gate` rodam a
+vezes (`tests/test_resume.py` faz isso com `kill -9` de verdade). Os NÓS são
+imutáveis no genoma, mas a fiação agora é dado: `config/topology.toml` declara
+nodes/edges validados fail-closed contra a whitelist de
+`harness/graph/topology.py` (inclui o nó `reflect` pass-through), e qualquer
+falha cai na topologia embutida com 1 linha no stderr. `measure` e `gate` rodam a
 régua de verdade: `provision` congela baseline (specs+valores de KPI do ANTES e
 fingerprint de tamper do genoma, padrões congelados — a run não redefine a
 própria régua), `measure` coleta o DEPOIS e `gate` chama o combinador de
@@ -60,11 +65,16 @@ mudança; `wilson.py` dá o intervalo e o veredito KEEP/DISCARD/INCONCLUSIVE;
 sozinho; `gate.py` combina tudo num lugar só: tamper → `revert`, verify
 vermelho → `retry`, KPI regrediu → `revert`, senão `accept`. Tanto
 `cli.run_once` quanto o nó `gate` do run_graph passam por esse combinador.
+Os knobs do juiz moram em `config/ruler.toml` (hoje só
+`[gate].kpi_regression_tolerance`; qualquer leitura torta cai no default
+congelado 0.0) — e mudar esse arquivo passa por `improve/meta.py::meta_check`,
+que exige exame selado verde + ack humano (`allowed`/`quarantined`/`blocked`).
 
 **genome** (`harness/genome/` + `config/genome.toml`) separa o mutável do
 imutável. Imutável: `harness/ruler/**`, `harness/genome/**`, `harness/routing/**`,
 `harness/graph/**`, `uv.lock`, `benchmarks/sealed/**`. Mutável: `config/*.toml`,
-`prompts/**` e `skills/**`. `tamper.py` sabe tirar fingerprint antes e comparar depois, e
+`prompts/**`, `skills/**`, `plugins/**` e `benchmarks/quarantine/**`.
+`tamper.py` sabe tirar fingerprint antes e comparar depois, e
 violação que chegue ao gate vira `revert` — o run_graph tira o fingerprint no
 `provision` e compara no `gate`; o `genome_check` do autopilot continua
 fail-closed ANTES de escrever.
@@ -231,6 +241,14 @@ fazer nunca pode significar "continua sozinho". Run retomada por humano entra
 no ledger com `intervention=1`, que é o que alimenta o `intervention_rate` —
 a métrica de autonomia mora fora do que ela mede.
 
+Além dos knobs de config, o loop agora muta **código** em `plugins/` — a única
+zona de código mutável — via `improve/codegen.py`: genome check fail-closed e
+`ast.parse` antes de escrever, linhagem em `data/lineage.jsonl`, e o veredito
+vem de exame injetado (DISCARD restaura byte a byte). `harness/evolve/` dá a
+camada populacional: PBT com seleção por Wilson lower bound
+(`run_population`) e um archive MAP-Elites em sqlite (`data/archive.sqlite`)
+que guarda o melhor config por nicho `(kind, cost_bucket)`.
+
 `harness improve` sem `--unit` usa `benchmarks/held_in/*/unit.toml`; enquanto
 esse diretório não tiver unidades no formato novo, passe `--unit` (repetível).
 
@@ -250,7 +268,13 @@ falsearia o próprio A/B; com acesso a `benchmarks/sealed/**` reescreveria a
 prova. Por isso essas zonas são `immutable` em `config/genome.toml`, o
 `uv.lock` também é (trocar versão de dep por baixo invalida qualquer
 comparação), e o que sobra para o loop calibrar é `config/*.toml` +
-`prompts/**` + `skills/**`.
+`prompts/**` + `skills/**` + `plugins/**` + `benchmarks/quarantine/**`.
+
+A quarentena fecha o ciclo dos exames: `improve/synthesize.py` destila runs
+falhas/revertidas do ledger em exames propostos em `benchmarks/quarantine/`
+(zona mutável), e `harness seal <name> --yes` é o ato **humano** que promove um
+exame para `benchmarks/sealed/` — o loop propõe prova, mas nunca sela a
+própria.
 
 Três detalhes que fazem parte da mesma defesa:
 

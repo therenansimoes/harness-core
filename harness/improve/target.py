@@ -309,9 +309,12 @@ def unregister_action(name: str) -> None:
 def actions() -> dict[str, Action]:
     # Import tardio como nos backends builtin: quem nunca consulta ações não
     # paga o import de research (que puxa o registry de backends).
-    from harness.improve import research
+    from harness.improve import codegen, research
 
-    out: dict[str, Action] = {research.ACTION: research.action()}
+    out: dict[str, Action] = {
+        research.ACTION: research.action(),
+        codegen.ACTION: codegen.action(),
+    }
     out.update(_manual_actions)
     return out
 

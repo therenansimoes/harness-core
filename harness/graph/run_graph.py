@@ -621,8 +621,22 @@ def _after_gate(state: RunState) -> str:
 
 
 def build_run_graph(checkpointer):
-    """Compila a topologia. Ela é immutable no genoma — o loop só calibra config."""
+    """Compila a topologia. Os nós são código imutável no genoma; a ESTRUTURA
+    é declarável em `config/topology.toml` (mutável) — spec válida vale,
+    qualquer falha cai na topologia embutida abaixo (fallback de 1 linha)."""
+    import sys
+
     from langgraph.graph import END, START, StateGraph
+
+    from harness.graph import topology
+
+    try:
+        return topology.compile_spec(topology.load_spec(), checkpointer)
+    except Exception as exc:
+        print(
+            f"run_graph: topology.toml ignorado ({exc}); topologia embutida",
+            file=sys.stderr,
+        )
 
     b = StateGraph(RunState)
     for name, fn in (
