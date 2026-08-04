@@ -1,0 +1,21 @@
+..F..F                                                                   [100%]
+=================================== FAILURES ===================================
+_________________________________ test_soma ___________________________________
+
+    def test_soma():
+>       assert soma(2, 2) == 5
+E       assert 4 == 5
+E        +  where 4 = soma(2, 2)
+
+tests/test_calc.py:12: AssertionError
+________________________________ test_divide __________________________________
+
+    def test_divide():
+>       assert divide(1, 0) == 0
+E       ZeroDivisionError: division by zero
+
+tests/test_calc.py:19: ZeroDivisionError
+=========================== short test summary info ============================
+FAILED tests/test_calc.py::test_soma - assert 4 == 5
+FAILED tests/test_calc.py::test_divide - ZeroDivisionError: division by zero
+2 failed, 4 passed in 0.31s

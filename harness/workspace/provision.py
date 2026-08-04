@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Literal
 
+from harness.backends import procs
 from harness.ledger.store import data_dir
 
 Mode = Literal["worktree", "tmpdir"]
@@ -90,6 +91,9 @@ def dispose(ws: Workspace, keep: bool = False) -> None:
     if keep:
         return
     _assert_inside_ws_root(ws.path)
+    # Antes de mexer no diretório: servidor vivo com cwd aqui dentro faz
+    # `git worktree remove --force` falhar e deixa o worktree meio removido.
+    procs.kill_all(ws.path)
     if ws.mode == "worktree" and is_git_repo(ws.repo):
         _git(ws.repo, "worktree", "remove", "--force", str(ws.path))
         _git(ws.repo, "worktree", "prune")

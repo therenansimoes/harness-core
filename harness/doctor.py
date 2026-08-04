@@ -70,6 +70,7 @@ def checks(root: Path | str | None = None, data: Path | None = None) -> list[Che
         _actions(),
         *_optional_toml(base),
         _lineage(data_dir),
+        _procs(data_dir),
         _executor(base),
         _lmstudio(base),
         *_backends(),
@@ -292,6 +293,32 @@ def _lineage(data_dir: Path) -> Check:
     except Exception as exc:
         return Check("lineage", FAIL, f"{path} ilegível: {type(exc).__name__}: {exc}")
     return Check("lineage", OK, f"{path} entradas={len(entries)}")
+
+
+def _procs(data_dir: Path) -> Check:
+    """Servidor sobrevivendo ao run que o subiu segura porta e worktree.
+
+    Órfão é registro cujo `harness_pid` já morreu — ninguém mais vai chamar o
+    cleanup dele. AVISO, nunca FALHA: processo pendurado é sujeira da máquina
+    (`harness procs --reap` limpa), não harness quebrado.
+    """
+    from harness.backends import procs
+
+    root = data_dir / "ws"
+    vivos = orfaos = 0
+    for path in root.glob(f"*/{procs.HARNESS_SUBDIR}/{procs.PROCS_FILE}"):
+        for entry in procs.read_procs(path.parent.parent):
+            try:
+                os.kill(int(entry.get("harness_pid")), 0)
+            except (OSError, TypeError, ValueError):
+                orfaos += 1
+            else:
+                vivos += 1
+    if orfaos:
+        return Check(
+            "procs", WARN, f"{orfaos} processo(s) órfão(s) — `harness procs --reap` limpa"
+        )
+    return Check("procs", OK, f"0 processos órfãos (registrados de runs vivos: {vivos})")
 
 
 def _executor(base: Path) -> Check:

@@ -348,6 +348,18 @@ def _build_agent(req: ExecRequest):
         extra_tools += list(load_web_tools(req.workspace))
     except Exception:
         pass
+    try:
+        from harness.backends.flow_tools import load_flow_tools
+
+        extra_tools += list(load_flow_tools(req.workspace))
+    except Exception:
+        pass
+    try:
+        from harness.backends.procs import make_proc_tools
+
+        extra_tools += list(make_proc_tools(req.workspace))
+    except Exception:
+        pass
     agent = create_deep_agent(
         model=_model_for(req.model),
         backend=fs,

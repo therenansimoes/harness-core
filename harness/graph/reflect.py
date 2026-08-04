@@ -63,6 +63,25 @@ def _exit_code(ev: Mapping[str, Any] | None) -> int | None:
         return None
 
 
+def _failed_checks(ev: Mapping[str, Any] | None) -> tuple[list[str], float] | None:
+    """`(nomes reprovados, score)` da régua graduada, ou None quando não há.
+
+    SÓ NOMES entram no hint: o nome do check vem do `unit.toml`, que o agente já
+    lê, mas a saída dele foi para o mesmo log selado do verify — citar o texto
+    reintroduziria o vazamento do gabarito pelo prompt (ver `build_hint`).
+    """
+    if not isinstance(ev, Mapping):
+        return None
+    names = [str(n) for n in (ev.get("failed") or ())][:MAX_ITEMS]
+    if not names:
+        return None
+    try:
+        score = float(ev.get("score", 0.0))
+    except (TypeError, ValueError):
+        score = 0.0
+    return names, score
+
+
 def _changed(state: Mapping[str, Any]) -> list[str]:
     return [str(f) for f in (getattr(state.get("exec"), "files_changed", None) or ())]
 
@@ -112,6 +131,12 @@ def build_hint(state: Mapping[str, Any]) -> str:
         lines.append(
             "Você alterou: " + (", ".join(changed[:MAX_ITEMS]) if changed else "nada")
         )
+        graded = _failed_checks(fail)
+        if graded:
+            names, score = graded
+            lines.append(
+                f"checks reprovados: {', '.join(names)} (score {score:.2f})"
+            )
         if files:
             lines.append("Checks do verify_cmd referenciam: " + ", ".join(files))
         if pats:
@@ -149,6 +174,8 @@ def hydrate(state: Mapping[str, Any], db: Path | None = None) -> Mapping[str, An
                         "node": "verify",
                         "tail": saved["tail"],
                         "exit_code": saved.get("exit_code"),
+                        "score": saved.get("score"),
+                        "failed": saved.get("failed") or (),
                     }
                 ]
     except Exception:

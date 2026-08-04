@@ -14,8 +14,10 @@ dependencies = [
 ]
 
 [dependency-groups]
-# Grupo (não extra) para o `uv run pytest` funcionar num sync limpo.
-dev = ["pytest>=8.0"]
+# Grupo (não extra) para o `uv run pytest` funcionar num sync limpo. O `ruff`
+# entra aqui porque `run_lint` (harness/backends/flow_tools.py) precisa de um
+# linter resolvível sem instalar nada no workspace do run.
+dev = ["pytest>=8.0", "ruff>=0.6"]
 
 [project.optional-dependencies]
 # Extra opcional do EXECUTOR: o núcleo não depende de LangChain (langgraph do
@@ -47,11 +49,17 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["harness"]
 
+[tool.ruff]
+# Mesma largura do código existente do repo (docstrings e tabelas de regex
+# passam de 88 e quebrá-las piora a leitura).
+line-length = 100
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 norecursedirs = ["legacy", ".venv", "projects", "benchmarks", "data"]
-addopts = "-m 'not lmstudio and not claude_cli'"
+addopts = "-m 'not lmstudio and not claude_cli and not slow'"
 markers = [
     "lmstudio: exige o servidor do LM Studio no ar (MLX, porta 1234; excluído por padrão)",
     "claude_cli: gasta dinheiro — exige o Claude Code CLI instalado e autenticado (excluído por padrão)",
+    "slow: baixa pacote de verdade e leva minutos (install_deps; excluído por padrão)",
 ]

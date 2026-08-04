@@ -39,17 +39,49 @@ def payload(
     unit: str | Sequence[str] | None = None,
     mutation: dict | None = None,
     evidence: dict[str, Any] | None = None,
+    kind: str | None = None,
 ) -> dict:
-    """Monta o dicionário do interrupt. Motivo fora do vocabulário é bug nosso."""
+    """Monta o dicionário do interrupt. Motivo fora do vocabulário é bug nosso.
+
+    Com `kind`, a evidência ganha duas coisas: o próprio `kind` (é o que permite
+    ao lado da resposta gravar a decisão na célula certa da memória de casos) e
+    `prior_decisions`, o que humanos já responderam a escalações deste
+    (kind, motivo). Precedente é evidência: quem lê a parada decide melhor
+    sabendo que a mesma pergunta já foi feita — e o rótulo do bloco deixa claro
+    que a resposta antiga não manda em nada.
+    """
     if reason not in REASONS:
         raise ValueError(f"motivo desconhecido: {reason!r} (use um de {REASONS})")
     units = [unit] if isinstance(unit, str) else list(unit or [])
+    ev = dict(evidence or {})
+    if kind:
+        ev["kind"] = kind
+        block = prior_decisions(kind, reason)
+        if block:
+            ev["prior_decisions"] = block
     return {
         "reason": reason,
         "unit": units,
         "mutation": mutation,
-        "evidence": dict(evidence or {}),
+        "evidence": ev,
     }
+
+
+def prior_decisions(kind: str | None, reason: str | None) -> str:
+    """Bloco "humano disse antes (não é ordem)", ou "" quando não há precedente.
+
+    Import tardio e except largo pelo mesmo motivo do `_episodic_block` do
+    backend: memória é acessório do loop, e acessório não derruba a escalação
+    (nem o prompt da tentativa seguinte, que lê o mesmo bloco).
+    """
+    if not kind:
+        return ""
+    try:
+        from harness.memory import decisions
+
+        return decisions.render_prompt(decisions.recall_decisions(kind, reason))
+    except Exception:
+        return ""
 
 
 def intervention_rate(

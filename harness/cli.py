@@ -9,6 +9,7 @@ import contextlib
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -24,13 +25,14 @@ from harness.ab import ArmSpec, run_ab
 from harness.backends import registry
 from harness.improve.replay import DEFAULT_LIMIT
 from harness.ledger import store
+from harness.projects import SETUP_TIMEOUT
 from harness.report import DEFAULT_SINCE_HOURS as REPORT_SINCE
 from harness.routing import ROUTE_AUTO, ROUTE_MANUAL, ROUTE_MODES, router
 from harness.ruler.gate import Decision, gate
 from harness.ruler.kpi import collect, load_kpis
-from harness.ruler.verify import log_tail, run_log_dir, run_verify
+from harness.ruler.verify import VERIFY_CHECK_NAME, log_tail, run_log_dir, run_verify
 from harness.ruler.wilson import MIN_N, Arm, decide_ab, wilson_interval
-from harness.types import ExecRequest, ExecResult, RunRow, Selection, UnitSpec
+from harness.types import Check, ExecRequest, ExecResult, RunRow, Selection, UnitSpec
 from harness.uiverify import ASSET_KINDS, DEFAULT_MIN_KB, SHOT_NAME
 from harness.workspace.provision import dispose, provision
 from harness.workspace.sealing import is_verifier, verifier_visible
@@ -44,6 +46,8 @@ WEBHOOK_PORT = 8787   # porta default do `harness webhook` (loopback)
 # fazer não pode significar "continua sozinho" — quem foi chamado tem que
 # escolher explicitamente continuar.
 IMPROVE_ANSWER = '{"action":"abort"}'
+# Nome de check: curto e sem espaço porque ele viaja em log, payload e hint.
+CHECK_NAME_RE = re.compile(r"[a-z0-9_-]{1,32}")
 
 
 def _bootstrap() -> None:
@@ -80,7 +84,50 @@ def load_unit(path: Path) -> UnitSpec:
         verify_cmd=str(verify_cmd),
         kind=data.get("kind"),
         project=str(project) if project else None,
+        checks=_load_checks(unit_file, data.get("checks")),
     )
+
+
+def _load_checks(unit_file: Path, raw: object) -> tuple[Check, ...]:
+    """`[checks]` do unit.toml -> tupla de Check. Ausente = () = régua de sempre.
+
+    Régua torta é erro na hora de carregar, não na hora de verificar: um check
+    com peso zero ou comando não-determinístico entraria no score e mentiria
+    sobre o quanto passou. `verify_cmd` é nome reservado — ele já é um check
+    implícito de peso 1.0 dentro do score.
+    """
+    if raw is None:
+        return ()
+    from harness.add import AddError, validate_verify_cmd   # lazy: igual ao resto do cli
+
+    if not isinstance(raw, dict):
+        raise ValueError(f"{unit_file}: [checks] precisa ser tabela nome -> tabela")
+    out: list[Check] = []
+    for name, body in raw.items():
+        if name == VERIFY_CHECK_NAME:
+            raise ValueError(f"{unit_file}: [checks.{name}] é nome reservado")
+        if not CHECK_NAME_RE.fullmatch(name):
+            raise ValueError(
+                f"{unit_file}: nome de check inválido: {name!r} "
+                f"(esperado [a-z0-9_-]{{1,32}})"
+            )
+        if any(c.name == name for c in out):
+            raise ValueError(f"{unit_file}: check duplicado: {name}")
+        if not isinstance(body, dict) or "cmd" not in body:
+            raise ValueError(f"{unit_file}: [checks.{name}] precisa de cmd")
+        try:
+            weight = float(body.get("weight", 1.0))
+        except (TypeError, ValueError):
+            raise ValueError(f"{unit_file}: [checks.{name}] weight não é número") from None
+        if not weight > 0 or math.isinf(weight):   # NaN já cai no `not > 0`
+            raise ValueError(f"{unit_file}: [checks.{name}] weight precisa ser > 0")
+        cmd = str(body["cmd"]).strip()
+        try:
+            validate_verify_cmd(cmd)   # mesma régua do `harness add`
+        except AddError as exc:
+            raise ValueError(f"{unit_file}: [checks.{name}] {exc}") from None
+        out.append(Check(name=name, cmd=cmd, weight=weight))
+    return tuple(out)
 
 
 def seed_workspace(unit: UnitSpec, ws: Path) -> list[str]:
@@ -547,6 +594,46 @@ def _improve_units(args: argparse.Namespace) -> list[Path]:
     return found
 
 
+def _pending_escalation(thread_id: str) -> dict:
+    """Payload da escalação que ainda espera resposta nesta thread, ou {}.
+
+    Lê o checkpoint direto porque o `run_autopilot` só devolve escalação
+    PENDENTE — respondida, ela sai do estado no próprio nó `escalate`, e o
+    relatório do resume não tem mais como dizer a que pergunta o humano
+    respondeu. Fail-open: memória de casos não derruba um resume.
+    """
+    try:
+        from harness.graph.autopilot_graph import build_autopilot_graph
+        from harness.graph.checkpoint import open_checkpointer
+
+        with open_checkpointer(store.data_dir()) as checkpointer:
+            graph = build_autopilot_graph(checkpointer)
+            state = graph.get_state({"configurable": {"thread_id": thread_id}})
+        return dict((state.values or {}).get("escalation") or {})
+    except Exception:
+        return {}
+
+
+def _record_human_decision(pending: dict, answer: dict | None) -> None:
+    """Grava na memória de casos o par (escalação, resposta do humano).
+
+    `context` é a evidência SEM o `prior_decisions`: o bloco de precedentes já é
+    memória renderizada, e regravá-lo faria cada resposta carregar a anterior
+    inteira — em três escalações o caso viraria só histórico do histórico.
+    """
+    from harness.memory import decisions
+
+    evidence = dict((pending.get("evidence") or {}))
+    evidence.pop("prior_decisions", None)
+    kind = evidence.pop("kind", None)
+    decisions.record_decision(
+        kind,
+        pending.get("reason"),
+        json.dumps(evidence, sort_keys=True, default=str, ensure_ascii=False),
+        json.dumps(answer, sort_keys=True, default=str, ensure_ascii=False),
+    )
+
+
 def cmd_improve(args: argparse.Namespace) -> int:
     """Um ciclo (ou mais) do loop de melhoria: propor, testar em A/B, decidir.
 
@@ -560,6 +647,7 @@ def cmd_improve(args: argparse.Namespace) -> int:
     from harness.improve.target import CatalogError
 
     answer = None
+    pending = {}
     if args.resume:
         raw = args.answer if args.answer is not None else IMPROVE_ANSWER
         try:
@@ -568,6 +656,10 @@ def cmd_improve(args: argparse.Namespace) -> int:
             args.parser.error(f"--answer não é JSON: {exc}")
         if not isinstance(answer, dict):
             args.parser.error(f"--answer tem que ser um objeto JSON: {raw!r}")
+        # A pergunta tem que ser lida ANTES do resume: o nó `escalate` limpa
+        # `escalation` do estado ao ser respondido, e sem os dois lados juntos
+        # (motivo + evidência de lá, resposta de cá) não há caso para gravar.
+        pending = _pending_escalation(args.resume)
     elif args.answer is not None:
         # Sentinela None, e não comparação com o texto do default: com
         # `!= IMPROVE_ANSWER` quem digitasse exatamente o JSON default sem
@@ -591,6 +683,9 @@ def cmd_improve(args: argparse.Namespace) -> int:
     except (FileNotFoundError, ValueError, CatalogError) as exc:
         print(exc, file=sys.stderr)
         return 1
+
+    if pending:
+        _record_human_decision(pending, answer)
 
     for r in report.results:
         change = f" {r['key']} {r['change']}" if r.get("key") else ""
@@ -777,6 +872,44 @@ def cmd_skills(args: argparse.Namespace) -> int:
         print(line)
     print(f"skills={len(skills)}")
     return 0
+
+
+def cmd_procs(args: argparse.Namespace) -> int:
+    """Lista servidores registrados nos workspaces; `--reap` mata os órfãos.
+
+    Órfão é o registro cujo `harness_pid` já morreu: o run que subiu o servidor
+    não existe mais, então ninguém vai chamar o cleanup dele. Registro de run
+    VIVO nunca é tocado — matar servidor de run em andamento é sabotagem.
+    """
+    from harness.backends import procs
+    from harness.workspace.provision import ws_root
+
+    total = mortos = orfaos = 0
+    for path in sorted(ws_root().glob(f"*/{procs.HARNESS_SUBDIR}/{procs.PROCS_FILE}")):
+        ws = path.parent.parent
+        for entry in procs.read_procs(ws):
+            total += 1
+            orfao = not _pid_vivo(entry.get("harness_pid"))
+            marca = "órfão" if orfao else "ativo"
+            print(
+                f"{entry.get('id', '?'):<10} {marca:<6} pid={entry.get('pid')} "
+                f"porta={entry.get('port')} run={entry.get('run_id')} "
+                f"cmd={entry.get('command')}"
+            )
+            if orfao:
+                orfaos += 1
+                if args.reap:
+                    mortos += procs.stop(ws, str(entry.get("id")))
+    print(f"procs={total} órfãos={orfaos}" + (f" mortos={mortos}" if args.reap else ""))
+    return 0
+
+
+def _pid_vivo(pid: object) -> bool:
+    try:
+        os.kill(int(pid), 0)  # type: ignore[arg-type]
+    except (OSError, TypeError, ValueError):
+        return False
+    return True
 
 
 def cmd_actions(args: argparse.Namespace) -> int:
@@ -1053,6 +1186,8 @@ def cmd_init(args: argparse.Namespace) -> int:
             build_cmd=args.build,
             verify_default=args.verify_default,
             queue_dir=args.queue_dir,
+            setup_cmd=args.setup_cmd,
+            setup_timeout=args.setup_timeout,
         )
     except ValueError as exc:
         print(exc, file=sys.stderr)
@@ -1203,6 +1338,13 @@ def build_parser() -> argparse.ArgumentParser:
                       help="verify_cmd default para unidade do projeto que não declara um")
     init.add_argument("--queue-dir", default=None, dest="queue_dir",
                       help="fila do projeto (default projects/<nome>/queue)")
+    init.add_argument("--setup-cmd", default=None, dest="setup_cmd",
+                      help="comando de setup (instalar dependência) do workspace; "
+                           "roda antes do executor, cacheado por lockfile. Sem ele, "
+                           "detecção automática (npm ci / uv sync)")
+    init.add_argument("--setup-timeout", type=int, default=SETUP_TIMEOUT,
+                      dest="setup_timeout",
+                      help=f"teto em segundos do setup (default {SETUP_TIMEOUT})")
     init.set_defaults(func=cmd_init, parser=init)
 
     status = sub.add_parser(
@@ -1352,6 +1494,14 @@ def build_parser() -> argparse.ArgumentParser:
         "actions", help="lista as ações do registry + KEEP/DISCARD do ledger"
     )
     actions.set_defaults(func=cmd_actions)
+
+    procs_cmd = sub.add_parser(
+        "procs", help="lista servidores registrados nos workspaces dos runs"
+    )
+    procs_cmd.add_argument("--reap", action="store_true",
+                           help="mata os processos cujo run já morreu (órfãos); "
+                                "run vivo nunca é tocado")
+    procs_cmd.set_defaults(func=cmd_procs)
 
     add_cmd = sub.add_parser(
         "add", help="autora uma unit a partir de uma tarefa em linguagem natural"

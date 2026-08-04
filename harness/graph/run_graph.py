@@ -39,7 +39,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping
 
-from harness.backends import registry
+from harness.backends import procs, registry
 from harness.genome import tamper
 from harness.genome.genome import DEFAULT_PATH as GENOME_PATH
 from harness.genome.genome import Genome
@@ -70,8 +70,15 @@ from harness.routing import (
 )
 from harness.ruler.gate import gate as ruler_gate
 from harness.ruler.kpi import KpiSpec, collect, load_kpis
-from harness.ruler.verify import log_tail, run_log_dir
+from harness.ruler.verify import (
+    CHECKS_EXIT,
+    graded_score,
+    log_tail,
+    run_extra_checks,
+    run_log_dir,
+)
 from harness.types import ExecRequest, ExecResult, RunRow, Selection, UnitSpec, Verdict
+from harness.workspace import setup as ws_setup
 from harness.workspace.provision import add_worktree, remove_worktree
 from harness.workspace.sealing import VERIFIER_NAMES, is_verifier, verifier_visible
 
@@ -251,16 +258,35 @@ def _verdict_payload(v: Verdict) -> dict:
         "exit_code": v.exit_code,
         "log_path": str(v.log_path),
         "sec": v.sec,
+        "score": v.score,
+        "failed": list(v.failed),
     }
 
 
 def _verdict_from_payload(d: dict) -> Verdict:
+    # `score`/`failed` ausentes: payload gravado antes da régua graduada existir.
+    # Retomar um run velho não pode virar KeyError.
     return Verdict(
         passed=bool(d["passed"]),
         exit_code=int(d["exit_code"]),
         log_path=Path(d["log_path"]),
         sec=float(d["sec"]),
+        score=float(d.get("score", 1.0)),
+        failed=tuple(d.get("failed") or ()),
     )
+
+
+def _episode_trace(v: Verdict, tail: str) -> str:
+    """Trace do episódio com os checks reprovados na frente.
+
+    Só os NOMES: o episódio é lido por um modelo na próxima vez que o mesmo kind
+    aparecer, e nome de check é contrato público do `unit.toml` — o texto do log
+    do verificador selado continua sendo o único conteúdo, e continua sem ir para
+    prompt nenhum (`reflect.build_hint`).
+    """
+    if not v.failed:
+        return tail
+    return f"checks_falhos: {','.join(v.failed)}\n{tail}"
 
 
 def _record_episode(unit: UnitSpec, trace: str) -> None:
@@ -470,14 +496,35 @@ def _provision(state: RunState, config=None) -> dict:
         ws = ws.resolve()  # `git -C repo worktree add` exige path absoluto
         add_worktree(get_project(unit.project).repo, ws, branch=run_branch(run_id))
     _copy_unit_files(unit.path, ws)
+    setup = {"skipped": True, "sec": 0.0, "ok": True}
+    if unit.project:
+        # Fail-open: setup que quebra segue para o executor (que pode consertar
+        # o ambiente). O evento carrega `setup_failed` para o trace não perder.
+        setup = ws_setup.ensure(ws, get_project(unit.project))
     sec = time.monotonic() - t0
     # Baseline junto do workspace: um SIGKILL entre copiar e medir não pode
     # deixar um provision "pela metade" — payload único, escrita única.
-    payload = {"workspace": str(ws), "sec": sec, **_baseline(ws, load_policy())}
+    payload = {
+        "workspace": str(ws),
+        "sec": sec,
+        "sec_setup": setup["sec"],
+        "setup_skipped": setup["skipped"],
+        "setup_failed": not setup["ok"],
+        **_baseline(ws, load_policy()),
+    }
     store.record_node(run_id, "provision", payload, db)
     return {
         "workspace": str(ws),
-        "events": [_event("provision", workspace=str(ws), reused=False)],
+        "events": [
+            _event(
+                "provision",
+                workspace=str(ws),
+                reused=False,
+                sec_setup=setup["sec"],
+                setup_skipped=setup["skipped"],
+                setup_failed=not setup["ok"],
+            )
+        ],
     }
 
 
@@ -498,8 +545,14 @@ def _prompt(state: RunState) -> str:
         return base
 
     from harness.graph.reflect import HINT_HEADER
+    from harness.improve.escalate import prior_decisions
 
-    return f"{base}\n\n{HINT_HEADER}\n{hint}"
+    out = f"{base}\n\n{HINT_HEADER}\n{hint}"
+    # Mesmo bloco que a escalação mostra ao humano, do lado de quem vai tentar
+    # de novo: se um humano já respondeu uma parada deste kind com este motivo,
+    # a tentativa seguinte decide sabendo do precedente. "" quando não há.
+    prior = prior_decisions(state["unit"].kind, hint)
+    return f"{out}\n\n{prior}" if prior else out
 
 
 def _execute(state: RunState, config=None) -> dict:
@@ -527,7 +580,11 @@ def _execute(state: RunState, config=None) -> dict:
             kind=sel.kind,
         )
     )
-    store.record_node(run_id, "execute", _exec_payload(result), db, attempt=attempt)
+    payload = _exec_payload(result)
+    payload["trace_saved"] = _save_trace(
+        result.trace_path, run_id, attempt, _cfg(config, CFG_DATA_DIR, "data")
+    )
+    store.record_node(run_id, "execute", payload, db, attempt=attempt)
     return {
         "exec": result,
         "events": [
@@ -539,6 +596,25 @@ def _execute(state: RunState, config=None) -> dict:
             )
         ],
     }
+
+
+def _save_trace(trace: Path, run_id: str, attempt: int, data_dir: Any) -> bool:
+    """Copia o trace da tentativa para fora do workspace, antes do dispose.
+
+    O trace é a única evidência do que o agente FEZ (turno a turno), e vive num
+    tmpdir que a próxima tentativa sobrescreve e o teardown apaga: sem esta cópia
+    todo post-mortem depende de o run ter falhado no lugar certo. Um arquivo por
+    tentativa, ao lado do log do verify.
+
+    Fail-open: trace inexistente ou disco recusando não pode derrubar um execute
+    que já foi pago — só marca `trace_saved: false` no payload.
+    """
+    try:
+        dst = run_log_dir(run_id, data_dir) / f"trace.{attempt}.jsonl"
+        shutil.copyfile(trace, dst)
+        return True
+    except OSError:
+        return False
 
 
 def _ui_verify(ws: Path, policy: GraphPolicy) -> list[str]:
@@ -614,6 +690,21 @@ def _verify(state: RunState, config=None) -> dict:
     if ui_fail:
         out += "".join(f"ui-verify FALHA {m}\n" for m in ui_fail).encode()
         exit_code = UI_VERIFY_EXIT
+
+    # Régua graduada (`[checks]` da unidade): mesmo padrão do ui_fail — as linhas
+    # entram no MESMO log e o veredito é UM. Rodam sempre (inclusive com o
+    # comando principal vermelho: é aí que "quanto passou" informa o retry), mas
+    # só derrubam exit code que estava verde. Orçamento próprio, como o do
+    # comando principal.
+    checks = state["unit"].checks
+    extra_score, failed, checks_log = run_extra_checks(
+        checks, ws, budget_s=policy.verify_timeout_s
+    )
+    if checks_log:
+        out += checks_log.encode()
+    verify_ok = exit_code == 0
+    if failed and verify_ok:
+        exit_code = CHECKS_EXIT
     log_path.write_bytes(out)
 
     verdict = Verdict(
@@ -621,6 +712,8 @@ def _verify(state: RunState, config=None) -> dict:
         exit_code=exit_code,
         log_path=log_path,
         sec=time.monotonic() - t0,
+        score=graded_score(verify_ok, checks, extra_score),
+        failed=failed,
     )
     # Sem isto o ledger guarda só `exit=N`: o motivo real fica no workspace, que
     # o retry sobrescreve e o tmpdir descarta.
@@ -630,8 +723,11 @@ def _verify(state: RunState, config=None) -> dict:
         payload["tail"] = tail
         # Veredito fechado e vermelho: daqui o gate só sai por retry/revert, então
         # este é o caso a lembrar no próximo run do mesmo kind.
-        _record_episode(state["unit"], tail)
+        _record_episode(state["unit"], _episode_trace(verdict, tail))
     store.record_node(run_id, "verify", payload, db, attempt=attempt)
+    # `score`/`failed` no evento só quando há régua graduada: sem `[checks]` o
+    # evento é o de sempre, chave por chave.
+    graded = {"score": verdict.score, "failed": list(failed)} if checks else {}
     return {
         "verdict": verdict,
         "events": [
@@ -641,6 +737,7 @@ def _verify(state: RunState, config=None) -> dict:
                 exit_code=exit_code,
                 attempt=attempt,
                 **({"tail": tail} if tail else {}),
+                **graded,
             )
         ],
     }
@@ -807,6 +904,13 @@ def _revert(state: RunState, config=None) -> dict:
 
 def _record(state: RunState, config=None) -> dict:
     """Uma linha no ledger por run, mesmo que o processo tenha morrido no meio."""
+    # Nó terminal de TODOS os caminhos (accept/retry esgotado/escalate/revert):
+    # é aqui que servidor de vida longa morre. Não no `_verify` — o verify é
+    # justamente quem pode precisar do server no ar.
+    try:
+        procs.kill_all(Path(state["workspace"]))
+    except Exception:
+        pass
     run_id = state["run_id"]
     db = _db(config)
     saved = store.get_node(run_id, "record", db)

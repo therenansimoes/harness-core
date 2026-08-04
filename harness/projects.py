@@ -35,6 +35,9 @@ QUEUE_STUCK = "stuck"
 UNIT_FILE = "unit.toml"
 MILESTONES_FILE = "MILESTONES.toml"
 MILESTONE_TABLE = "milestone"
+# Instalar dependência de projeto grande passa fácil de 5 min; o teto existe
+# para o setup não comer o run inteiro em silêncio.
+SETUP_TIMEOUT = 900
 
 
 @dataclass(frozen=True)
@@ -44,6 +47,10 @@ class Project:
     build_cmd: str | None = None
     verify_default: str | None = None
     queue_dir: Path | None = None
+    # Fase de setup do workspace (instalar dependência): roda uma vez por
+    # lockfile, antes do executor. Sem `setup_cmd` a detecção automática decide.
+    setup_cmd: str | None = None
+    setup_timeout: int = SETUP_TIMEOUT
 
 
 def projects_path() -> Path:
@@ -65,6 +72,8 @@ def load_projects(path: Path | None = None) -> dict[str, Project]:
             build_cmd=raw.get("build_cmd"),
             verify_default=raw.get("verify_default"),
             queue_dir=Path(raw["queue_dir"]) if raw.get("queue_dir") else None,
+            setup_cmd=raw.get("setup_cmd"),
+            setup_timeout=int(raw.get("setup_timeout", SETUP_TIMEOUT)),
         )
     return out
 
@@ -85,6 +94,8 @@ def init_project(
     build_cmd: str | None = None,
     verify_default: str | None = None,
     queue_dir: Path | str | None = None,
+    setup_cmd: str | None = None,
+    setup_timeout: int = SETUP_TIMEOUT,
     path: Path | None = None,
 ) -> Project:
     """Registra (ou atualiza) um projeto. Idempotente: re-init sobrescreve a
@@ -101,6 +112,8 @@ def init_project(
         verify_default=verify_default,
         # Absoluto no registro: `harness status` roda de qualquer cwd.
         queue_dir=qdir.expanduser().resolve(),
+        setup_cmd=setup_cmd,
+        setup_timeout=setup_timeout,
     )
     target = path or projects_path()
     projs = load_projects(target)
@@ -364,6 +377,10 @@ def _write(projs: dict[str, Project], path: Path) -> None:
             lines.append(f"verify_default = {json.dumps(pr.verify_default)}")
         if pr.queue_dir:
             lines.append(f"queue_dir = {json.dumps(str(pr.queue_dir))}")
+        if pr.setup_cmd:
+            lines.append(f"setup_cmd = {json.dumps(pr.setup_cmd)}")
+        if pr.setup_timeout != SETUP_TIMEOUT:
+            lines.append(f"setup_timeout = {pr.setup_timeout}")
         lines.append("")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines), encoding="utf-8")

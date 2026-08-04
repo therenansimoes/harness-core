@@ -219,12 +219,18 @@ def _bench_stats(stats: dict[str, dict]) -> dict[str, dict[str, int]]:
 
 
 def _stop(state: AutopilotState, reason: str, evidence: dict) -> dict:
-    """Update que desvia para o `escalate` sem tocar em mais nada."""
+    """Update que desvia para o `escalate` sem tocar em mais nada.
+
+    O `kind` do ciclo vai junto: é a chave da memória de casos (o precedente
+    humano entra na evidência pelo `esc.payload`, e a resposta é gravada nessa
+    mesma célula pelo lado da CLI).
+    """
     payload = esc.payload(
         reason,
         unit=state["units"],
         mutation=state.get("mutation"),
         evidence=evidence,
+        kind=_units_kind(state),
     )
     # `evidence` aninhada, não espalhada: ela traz chave livre (inclusive
     # "node"), e chave livre colidindo com o campo do evento é bug de trace.

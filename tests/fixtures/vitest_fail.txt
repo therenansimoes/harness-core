@@ -1,0 +1,28 @@
+
+ RUN  v1.6.0 /tmp/app
+
+ ✓ src/util.test.ts (2 tests) 4ms
+ ❯ src/soma.test.ts (3 tests | 1 failed) 9ms
+   ✕ soma soma dois numeros
+     → expected 4 to be 5 // Object.is equality
+
+ FAIL  src/soma.test.ts > soma > soma dois numeros
+AssertionError: expected 4 to be 5 // Object.is equality
+
+- Expected
++ Received
+
+- 5
++ 4
+
+ ❯ src/soma.test.ts:7:24
+      5|
+      6| test('soma dois numeros', () => {
+      7|   expect(soma(2, 2)).toBe(5)
+       |                        ^
+      8| })
+
+ Test Files  1 failed | 1 passed (2)
+      Tests  1 failed | 4 passed (5)
+   Start at  10:22:31
+   Duration  412ms

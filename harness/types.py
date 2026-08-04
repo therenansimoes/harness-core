@@ -13,6 +13,20 @@ ExitReason = Literal["done", "max_turns", "timeout", "error", "blocked", "stalle
 
 
 @dataclass(frozen=True)
+class Check:
+    """Um item da régua graduada, nomeado e com peso.
+
+    O `verify_cmd` continua sendo a régua binária; os checks nomeados dizem
+    QUANTO da régua passou, o que dá ao retry um alvo em vez de um "reprovou".
+    `weight` é relativo — só a proporção importa.
+    """
+
+    name: str
+    cmd: str
+    weight: float = 1.0
+
+
+@dataclass(frozen=True)
 class UnitSpec:
     """Unidade de trabalho: o que fazer, onde, e como provar que ficou pronto."""
 
@@ -26,6 +40,9 @@ class UnitSpec:
     # a branch `harness/<unit_id>` para review humano. `None` = workspace
     # comum, o caminho default.
     project: str | None = None
+    # `[checks]` do unit.toml: ADITIVO. Vazio (o default) = régua binária de
+    # sempre, byte a byte.
+    checks: tuple[Check, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -97,6 +114,12 @@ class Verdict:
     exit_code: int
     log_path: Path
     sec: float
+    # Régua graduada: fração do peso que passou (1.0 quando não há `[checks]`,
+    # que é o caso de toda unidade escrita antes disto) e nomes dos reprovados.
+    # Defaults obrigatórios — os call sites posicionais já existentes não sabem
+    # destes campos.
+    score: float = 1.0
+    failed: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
