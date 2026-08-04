@@ -29,18 +29,19 @@ Same convention for `HARNESS_CONFIG_DIR`, `HARNESS_ROOT` and
 `HARNESS_PROJECTS_ROOT`. A test that depends on the repo's `config/` is a test
 that breaks the moment the loop calibrates a TOML.
 
-## The `ollama` and `claude_cli` markers
+## The `lmstudio` and `claude_cli` markers
 
 Two markers flag what needs a real machine, and both are **off by default**
-(`addopts = "-m 'not ollama and not claude_cli'"` in `pyproject.toml`):
+(`addopts = "-m 'not lmstudio and not claude_cli'"` in `pyproject.toml`):
 
-- `ollama` — requires a local Ollama server running. Costs $0, but depends on
-  which model you have installed.
+- `lmstudio` — requires the LM Studio server up (`lms server start`, MLX on port
+  1234). Costs $0, but depends on which model you have loaded; the test skips
+  itself when the preflight probe fails.
 - `claude_cli` — requires the official CLI installed and authenticated. **Spends
   money.**
 
 ```bash
-uv run --extra deepagents pytest -m ollama -q      # explicit opt-in
+uv run --extra deepagents pytest -m lmstudio -q    # explicit opt-in
 ```
 
 A test that calls a real model without one of those markers is a broken test:

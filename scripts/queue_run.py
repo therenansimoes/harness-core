@@ -3,11 +3,11 @@
 O caminho de primeira classe agora é o CLI:
 
     uv run --extra deepagents harness queue --project oficina \
-        --backend deepagents --model ollama:qwen2.5:3b --deadline-s 3600
+        --backend deepagents --model openai:qwen3.5-9b-mlx --deadline-s 3600
 
 Este script continua porque há loop rodando com ele; a assinatura das env vars
 é preservada. Env: PROJ (default oficina) · BACKEND (default deepagents) ·
-MODEL (default ollama:qwen2.5:3b, vazio = default do backend) · DEADLINE_S
+MODEL (default openai:qwen3.5-9b-mlx, vazio = default do backend) · DEADLINE_S
 (default 3600, teto do loop inteiro) · ATTEMPTS (default: teto de
 config/graph.toml) · MOVE=0 (não mexe na fila: ensaio) · INTEGRATE=0 (não faz
 merge da entrega aceita no branch default — a fila deixa de compor) ·

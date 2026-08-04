@@ -19,9 +19,9 @@
 [[tier]]
 name = "t0"
 backend = "deepagents"
-# LM Studio local (MLX, porta 1234), $0 por run. Auditoria 2026-08-03: substitui
-# ollama:qwen2.5:3b, que falhou todas as unidades do dia — 3B não fecha
-# ler+editar+verificar. O teto de turnos acompanha o modelo que agora paga o t0.
+# LM Studio local (MLX, porta 1234), $0 por run — o ÚNICO runtime local desde
+# 2026-08-04. Auditoria 2026-08-03: o 3B anterior falhou todas as unidades do dia
+# (não fecha ler+editar+verificar). O teto de turnos acompanha o modelo do t0.
 model = "openai:qwen3.5-9b-mlx"
 max_turns = 40
 cost_rank = 0
@@ -59,37 +59,23 @@ refactor = "t2"
 # (arquivo mutável no genoma), a régua nunca depende dele.
 #
 # Chave = a string de modelo que o harness passa pro backend (`init_chat_model`).
-# Modelo ausente da tabela: `ollama:*` vale 0.0 (roda local, custo marginal $0),
-# qualquer outro vira `cost_usd = None` — melhor sem número que com número falso.
+# Modelo AUSENTE da tabela vira `cost_usd = None` — melhor sem número que com
+# número falso. Local não é exceção: os modelos servidos pelo LM Studio estão
+# listados abaixo, explicitamente a 0.0 (custo marginal $0 em loopback).
 
-[pricing."ollama:qwen3:4b"]
-input_per_mtok = 0.0
-output_per_mtok = 0.0
-
-[pricing."ollama:qwen2.5:3b"]
-input_per_mtok = 0.0
-output_per_mtok = 0.0
-
-[pricing."ollama:qwen3-coder:30b"]
-input_per_mtok = 0.0
-output_per_mtok = 0.0
-
+# LM Studio local (MLX, porta 1234) — custo marginal $0.
 [pricing."openai:qwen3.5-9b-optiq"]
-# LM Studio local (MLX, porta 1234) — custo marginal $0, mesmo racional do ollama:*
 input_per_mtok = 0.0
 output_per_mtok = 0.0
 
 [pricing."openai:qwen3.5-9b-mlx"]
-# LM Studio local (MLX, porta 1234) — custo marginal $0, mesmo racional do ollama:*
 input_per_mtok = 0.0
 output_per_mtok = 0.0
 
 [pricing."openai:bonsai-27b-mlx"]
-# LM Studio local (MLX, porta 1234) — custo marginal $0, mesmo racional do ollama:*
 input_per_mtok = 0.0
 output_per_mtok = 0.0
 
 [pricing."openai:google/gemma-4-e4b"]
-# LM Studio local (MLX, porta 1234) — custo marginal $0, mesmo racional do ollama:*
 input_per_mtok = 0.0
 output_per_mtok = 0.0

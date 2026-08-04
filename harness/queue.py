@@ -45,7 +45,7 @@ from harness.types import UnitSpec
 
 DEFAULT_PROJECT = "oficina"
 DEFAULT_BACKEND = "deepagents"
-DEFAULT_MODEL = "ollama:qwen2.5:3b"
+DEFAULT_MODEL = "openai:qwen3.5-9b-mlx"
 DEFAULT_DEADLINE_S = 3600.0
 REGRESSION_TIMEOUT_S = 120.0   # regressão é barata: verify que demora não é régua
 

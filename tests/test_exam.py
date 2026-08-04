@@ -129,7 +129,7 @@ def test_sem_config_extra_usa_mock(tmp_path, data_dir, monkeypatch):
 def test_config_exam_roteia_backend_real(tmp_path, data_dir, monkeypatch):
     cfg = tmp_path / "ruler.toml"
     cfg.write_text(
-        '[exam]\nbackend = "deepagents"\nmodel = "ollama:qwen2.5:3b"\n', encoding="utf-8"
+        '[exam]\nbackend = "deepagents"\nmodel = "openai:qwen3.5-9b-mlx"\n', encoding="utf-8"
     )
     calls = _spy_run_unit(monkeypatch)
     sealed = tmp_path / "sealed"
@@ -140,8 +140,8 @@ def test_config_exam_roteia_backend_real(tmp_path, data_dir, monkeypatch):
     )
     # backend real: NENHUMA unidade fica fora, e todas vão pro backend do config.
     assert calls == [
-        ("u_ok", "deepagents", "ollama:qwen2.5:3b"),
-        ("u_real", "deepagents", "ollama:qwen2.5:3b"),
+        ("u_ok", "deepagents", "openai:qwen3.5-9b-mlx"),
+        ("u_real", "deepagents", "openai:qwen3.5-9b-mlx"),
     ]
 
 

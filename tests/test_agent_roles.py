@@ -1,0 +1,97 @@
+"""load_roles: papel é dado do genoma; todo caminho torto vira [] ou papel fora."""
+
+import pytest
+
+from harness.backends.agent_roles import load_roles, roles_manual
+
+DOIS_PAPEIS = """\
+[agents.a]
+description = "faz a"
+prompt = "prompt a"
+tools = ["ls", "read_file"]
+
+[agents.b]
+enabled = false
+description = "faz b"
+prompt = "prompt b"
+tools = ["execute"]
+"""
+
+
+def _write(tmp_path, text, name="agents.toml"):
+    p = tmp_path / name
+    p.write_text(text, encoding="utf-8")
+    return p
+
+
+def test_toml_real_do_repo_tem_os_dois_papeis():
+    """O arquivo versionado tem que carregar no formato que a lib espera."""
+    roles = load_roles("config/agents.toml")
+    assert [r["name"] for r in roles] == ["planner", "reviewer"]
+    for r in roles:
+        assert set(r) >= {"name", "description", "system_prompt"}
+        assert r["description"] and r["system_prompt"].strip()
+        # `prompt` é o nome no toml; a lib só entende `system_prompt`.
+        assert "prompt" not in r
+
+
+def test_arquivo_ausente_e_toml_torto_viram_lista_vazia(tmp_path):
+    assert load_roles(tmp_path / "nao-existe.toml") == []
+    assert load_roles(_write(tmp_path, "[agents.a\nisso não é toml")) == []
+    assert load_roles(_write(tmp_path, "sem_secao_agents = 1")) == []
+
+
+def test_papel_sem_campo_obrigatorio_sai(tmp_path):
+    path = _write(
+        tmp_path,
+        '[agents.a]\ndescription = "só isso"\n[agents.b]\nprompt = "só isso"\n',
+    )
+    assert load_roles(path) == []
+
+
+def test_enabled_false_exclui_papel(tmp_path):
+    roles = load_roles(_write(tmp_path, DOIS_PAPEIS))
+    assert [r["name"] for r in roles] == ["a"]
+
+
+def test_allowlist_do_run_filtra_e_derruba_papel(tmp_path):
+    """Papel que sobra sem tool sai: subagent com mais permissão que o agente
+    principal seria escalada de privilégio."""
+    path = _write(
+        tmp_path,
+        '[agents.leitor]\ndescription = "lê"\nprompt = "p"\n'
+        'tools = ["ls", "read_file", "execute"]\n'
+        '[agents.shell]\ndescription = "roda"\nprompt = "p"\ntools = ["execute"]\n',
+    )
+    roles = load_roles(path, allowed=("ls", "read_file"))
+    assert [r["name"] for r in roles] == ["leitor"]
+    assert "ls, read_file" in roles[0]["system_prompt"]
+    assert "execute" not in roles[0]["system_prompt"]
+
+
+def test_backend_gera_middleware_que_restringe_as_tools(tmp_path):
+    """Com backend, a restrição é um FilesystemMiddleware próprio do papel —
+    `tools=` de SubAgent é aditivo e só aceita objeto de tool, não nome."""
+    pytest.importorskip("deepagents")
+    from deepagents.backends.local_shell import LocalShellBackend
+
+    fs = LocalShellBackend(root_dir=str(tmp_path), virtual_mode=True)
+    roles = load_roles("config/agents.toml", backend=fs)
+    planner = next(r for r in roles if r["name"] == "planner")
+    (mw,) = planner["middleware"]
+    nomes = {t.name for t in mw.tools}
+    assert "write_file" not in nomes and "execute" not in nomes
+    assert {"ls", "read_file", "glob", "grep"} <= nomes
+
+
+def test_sem_backend_nao_tem_middleware(tmp_path):
+    roles = load_roles("config/agents.toml")
+    assert all("middleware" not in r for r in roles)
+
+
+def test_manual_uma_linha_por_papel():
+    roles = load_roles("config/agents.toml")
+    manual = roles_manual(roles)
+    assert "task(subagent_type='planner')" in manual
+    assert "task(subagent_type='reviewer')" in manual
+    assert roles_manual([]) == ""

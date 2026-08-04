@@ -5,7 +5,7 @@ A **provider-agnostic** agent harness that improves itself with proof. The core
 the default executor is
 [deepagents](https://github.com/langchain-ai/deepagents) on
 [LangGraph](https://github.com/langchain-ai/langgraph). It runs for free against
-a local Ollama or LM Studio model; the same unit of work runs on any registered
+a local MLX model served by LM Studio; the same unit of work runs on any registered
 backend.
 
 What the harness adds on top of an ordinary agent loop is the **ruler**:
@@ -19,7 +19,8 @@ MIT licensed (`LICENSE`). Python >= 3.11.
 
 ```bash
 uv sync --extra deepagents
-ollama pull qwen2.5:3b      # 18GB laptop: keep the local model <= 8B
+lms server start                    # LM Studio: OpenAI-compatible API on :1234
+lms load qwen3.5-9b-mlx             # 18GB laptop: keep the local model <= 9B (MLX)
 ```
 
 Registered backends and preflight (deterministic, zero LLM calls):
@@ -40,10 +41,13 @@ optional `kind`). Running the `tiny_fix` fixture against the local model:
 
 ```bash
 uv run harness run --unit tests/fixtures/tiny_fix \
-  --backend deepagents --model ollama:qwen2.5:3b
+  --backend deepagents --model openai:qwen3.5-9b-mlx
 ```
 
-An `ollama:*` model costs $0 in the `[pricing]` table of `config/models.toml`,
+An `openai:*` model points at LM Studio, not at the cloud: the backend defaults
+`OPENAI_BASE_URL` to `http://localhost:1234/v1` (and `OPENAI_API_KEY` to a dummy,
+which LM Studio ignores). Set both explicitly to aim somewhere else. The local
+MLX models are listed at $0 in the `[pricing]` table of `config/models.toml`,
 so the ledger row lands with `cost_usd = 0.0`. That run's output depends on the
 model you happen to have installed, which is why it is not pasted here; the
 shape is the same as the `mock` example below.
@@ -245,7 +249,7 @@ A backend implements three methods (`harness/backends/base.py`):
 | backend | what it is | notes |
 |---|---|---|
 | `mock` | deterministic, writes the prompt to a file | the backend of the test suite; touches no network |
-| `deepagents` | default; model via `init_chat_model` (`ollama:…`, or any LangChain provider) | the only file in the repo that imports LangChain, and the import is lazy |
+| `deepagents` | default; model via `init_chat_model` (`openai:…` against LM Studio on :1234, or any LangChain provider) | the only file in the repo that imports LangChain, and the import is lazy |
 | `claude_code` | subprocess of the official CLI; `resumable=True` via `--resume` | requires the CLI installed and authenticated; costs money |
 
 A third-party backend does not need to touch the core: publish a package that

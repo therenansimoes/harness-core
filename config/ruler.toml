@@ -32,6 +32,6 @@ sec_tolerance_pct = 0.10
 # unidades com `requires_real_backend = true` no unit.toml ficam de fora.
 # Para exame de verdade, aponte para um backend real, ex.:
 #   backend = "deepagents"
-#   model = "ollama:qwen2.5:3b"   # local, $0 por run (config/models.toml)
+#   model = "openai:qwen3.5-9b-mlx"   # LM Studio local, $0 por run (config/models.toml)
 backend = "mock"
 model = ""

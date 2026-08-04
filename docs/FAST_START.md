@@ -24,9 +24,10 @@ fix the install instead of pointing the harness at real code.
 For a first run with an actual model, keep it free:
 
 ```bash
-ollama pull qwen2.5:3b           # 18GB laptop: keep the local model <= 8B
+lms server start                 # LM Studio: OpenAI-compatible API on :1234
+lms load qwen3.5-9b-mlx          # 18GB laptop: keep the local model <= 9B (MLX)
 uv run harness run --unit tests/fixtures/tiny_fix \
-  --backend deepagents --model ollama:qwen2.5:3b
+  --backend deepagents --model openai:qwen3.5-9b-mlx
 ```
 
 ---
@@ -77,7 +78,7 @@ Authoring calls a model (default `haiku`, capped by `--max-usd`, default 0.25).
 
 ```bash
 uv run harness queue --project myapp \
-  --backend deepagents --model ollama:qwen2.5:3b
+  --backend deepagents --model openai:qwen3.5-9b-mlx
 ```
 
 Units run one at a time, in filename order, each in its own git worktree on an

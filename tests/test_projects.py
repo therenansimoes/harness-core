@@ -9,11 +9,15 @@ from harness import cli
 from harness.graph.run_graph import run_unit
 from harness.ledger import store
 from harness.projects import (
+    QUEUE_DONE,
+    QUEUE_STUCK,
     IntegrateError,
     get_project,
     init_project,
     integrate,
     load_projects,
+    milestone_progress,
+    milestones,
 )
 from harness.routing import CONFIG_DIR_ENV
 
@@ -247,3 +251,68 @@ def test_cli_run_sem_projeto_nao_passa_pelo_grafo(
     ))
     assert cli.main(["run", "--unit", str(unit), "--backend", "mock"]) == 0
     assert " u7 mock accept " in capsys.readouterr().out
+
+
+# --- marcos -------------------------------------------------------------------
+
+
+def _com_marcos(tmp_path: Path, config_dir, toml: str) -> Path:
+    """Projeto registrado com fila em `projects/toy/queue` e MILESTONES.toml ao
+    lado. Devolve a fila."""
+    repo = _toy_repo(tmp_path)
+    q = tmp_path / "projects" / "toy" / "queue"
+    init_project(repo, "toy", queue_dir=q)
+    (q.parent / "MILESTONES.toml").write_text(toml, encoding="utf-8")
+    return q
+
+
+def test_milestone_progress_conta_só_o_que_está_em_done(tmp_path, config_dir):
+    q = _com_marcos(tmp_path, config_dir, (
+        '[[milestone]]\nname = "MVP"\nunits = ["u1", "u2", "u3"]\n\n'
+        '[[milestone]]\nname = "Tema"\nunits = ["u4a", "u4b"]\n'
+    ))
+    for name in ("u1", "u2"):                      # feitas
+        (q / QUEUE_DONE / name).mkdir(parents=True)
+    (q / "u3").mkdir()                             # ainda na fila
+    (q / QUEUE_STUCK / "u4a").mkdir(parents=True)  # parada: não conta
+    (q / QUEUE_DONE / "u9_fora_de_marco").mkdir()  # done sem marco: ignorada
+
+    proj = get_project("toy")
+    assert milestone_progress(proj) == [("MVP", 2, 3), ("Tema", 0, 2)]
+    assert [m["name"] for m in milestones(proj)] == ["MVP", "Tema"]
+
+
+def test_status_sem_milestones_fica_inalterado(tmp_path, config_dir, data_dir, capsys):
+    repo = _toy_repo(tmp_path)
+    q = tmp_path / "projects" / "toy" / "queue"
+    init_project(repo, "toy", queue_dir=q)
+    (q / QUEUE_DONE / "u1").mkdir(parents=True)
+
+    assert milestone_progress(get_project("toy")) == []
+    assert cli.main(["status"]) == 0
+    out = capsys.readouterr().out.strip().splitlines()
+    assert len(out) == 1
+    assert out[0].startswith("toy: fila=0 done=1 stuck=0")
+
+
+def test_status_mostra_marcos_e_toml_torto_só_avisa(
+    tmp_path, config_dir, data_dir, capsys
+):
+    q = _com_marcos(tmp_path, config_dir, (
+        '[[milestone]]\nname = "MVP"\nunits = ["u1", "u2"]\n\n'
+        '[[milestone]]\nname = "Tema"\nunits = ["u3"]\n'
+    ))
+    for name in ("u1", "u2"):
+        (q / QUEUE_DONE / name).mkdir(parents=True)
+
+    assert cli.main(["status"]) == 0
+    out = capsys.readouterr().out.strip().splitlines()
+    assert out[1] == "  ✔ MVP (2/2)"
+    assert out[2] == "  ○ Tema (0/1)"
+
+    # TOML torto: status segue com a linha do projeto e o aviso vai pro stderr.
+    (q.parent / "MILESTONES.toml").write_text("[[milestone\nname =", encoding="utf-8")
+    assert cli.main(["status"]) == 0
+    cap = capsys.readouterr()
+    assert cap.out.strip().splitlines() == [out[0]]
+    assert "milestones:" in cap.err and "inválido" in cap.err

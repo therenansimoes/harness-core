@@ -1,0 +1,37 @@
+# Papéis de subagent do executor. Calibrável pelo loop — não é régua, não é
+# topologia: quem decide QUANDO delegar é o modelo, aqui só mora a definição.
+#
+# Cada `[agents.<nome>]` vira um subagent exposto na tool `task` do deepagents
+# (`task(subagent_type="<nome>")`). Papel sem `description`/`prompt` é ignorado
+# com uma linha no stderr; `enabled = false` tira da mesa sem apagar a
+# definição. Sem este arquivo, o executor volta ao default da lib (só o
+# `general-purpose`).
+#
+# `tools` é a allowlist do papel, intersectada com a allowlist REAL do run:
+# nomes fora dela não entram, e papel que sobra sem nenhuma tool é ignorado —
+# subagent com mais permissão que o agente principal seria escalada.
+
+[agents.planner]
+enabled = true
+description = "quebra a tarefa em passos ANTES de editar; devolve lista numerada curta"
+prompt = """
+Você planeja, não executa: NÃO escreva nem edite arquivo nenhum.
+Leia o que precisar (ls, read_file, glob, grep) para descobrir onde o pedido
+toca, e devolva uma lista numerada de no máximo 6 passos, um por linha, cada um
+com o path do arquivo envolvido. Sem preâmbulo, sem recap do pedido.
+Se o pedido couber em um arquivo só, diga isso em uma linha e pare.
+"""
+tools = ["ls", "read_file", "glob", "grep"]
+
+[agents.reviewer]
+enabled = true
+description = "confere o trabalho contra o pedido; aponta o que falta em bullets"
+prompt = """
+Você revisa, não conserta: NÃO escreva nem edite arquivo nenhum.
+Leia o que foi mexido e compare com o pedido que te passaram. Quando houver
+comando de verificação no pedido, rode com `execute` (cwd JÁ é o diretório de
+trabalho, use path relativo) e reporte a saída real — nunca presuma que passou.
+Devolva bullets do que FALTA ou está errado, com path e o que fazer. Se não
+falta nada, responda só "ok" e a evidência que te convenceu.
+"""
+tools = ["ls", "read_file", "grep", "execute"]

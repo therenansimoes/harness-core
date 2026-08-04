@@ -3,15 +3,16 @@
 É a verificação global da SPEC em forma de comando — preflight de todos os
 backends, genoma que carrega e fingerprinta, telemetria de terceiro desligada,
 msgpack estrito, `data/` gravável, `config/*.toml` que parseiam, catálogo
-válido. Zero chamada de LLM, zero rede: um check que custa dinheiro não é
-diagnóstico, é run.
+válido. Zero chamada de LLM: um check que custa dinheiro não é diagnóstico, é
+run. A única rede é a sonda em loopback do runtime local (`GET /v1/models` no
+LM Studio), que não gasta token.
 
 Duas severidades, e a diferença importa. **FALHA** é coisa nossa quebrada — o
 genoma não carrega, o catálogo não parseia, o diretório de dados não aceita
 escrita: sem isso o harness não roda direito e o exit code diz isso. **aviso**
 é o mundo lá fora não estando pronto — backend sem credencial, servidor local
 desligado. Backend indisponível não é defeito do harness (o `mock` sempre está
-lá), e um doctor que sai 1 porque o Ollama não está no ar vira ruído que
+lá), e um doctor que sai 1 porque o LM Studio não está no ar vira ruído que
 ninguém lê.
 """
 
@@ -70,6 +71,7 @@ def checks(root: Path | str | None = None, data: Path | None = None) -> list[Che
         *_optional_toml(base),
         _lineage(data_dir),
         _executor(base),
+        _lmstudio(base),
         *_backends(),
     ]
 
@@ -297,6 +299,30 @@ def _executor(base: Path) -> Check:
     if not path.is_file():
         return Check("executor", WARN, f"{path} ausente — executor roda sem prompt base")
     return Check("executor", OK, f"{path} ({path.stat().st_size} bytes)")
+
+
+def _lmstudio(base: Path) -> Check:
+    """Runtime local: LM Studio é o único (Ollama cortado em 2026-08-04).
+
+    Mesma sonda do preflight do backend, no modelo do tier local mais barato —
+    é o modelo que a maioria dos runs vai usar. Servidor desligado é AVISO: o
+    mundo lá fora não estar pronto não é defeito do harness."""
+    # Import local: o backend puxa skills/roles e só é útil aqui.
+    from harness.backends.deepagents_backend import OPENAI_PREFIX, _lmstudio_preflight
+
+    path = base / CONFIG_SUBDIR / "models.toml"
+    try:
+        tiers = tomllib.loads(path.read_text(encoding="utf-8")).get("tier", [])
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        return Check("lmstudio", WARN, f"{path}: {exc}")
+    local = sorted(
+        (t for t in tiers if str(t.get("model", "")).startswith(OPENAI_PREFIX)),
+        key=lambda t: t.get("cost_rank", 0),
+    )
+    if not local:
+        return Check("lmstudio", OK, "nenhum tier usa modelo local")
+    pre = _lmstudio_preflight(str(local[0]["model"]))
+    return Check("lmstudio", OK if pre.ok else WARN, pre.reason)
 
 
 def _backends() -> list[Check]:

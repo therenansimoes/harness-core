@@ -147,11 +147,11 @@ def test_model_flag_reaches_ledger_and_backend(data_dir, monkeypatch):
 
     spy = Spy()
     monkeypatch.setattr(registry, "get_backend", lambda name: spy)
-    rc = cli.main(["run", "--unit", FIXTURE, "--backend", "mock", "--model", "ollama:x:1b"])
+    rc = cli.main(["run", "--unit", FIXTURE, "--backend", "mock", "--model", "openai:x-mlx"])
 
     assert rc == 0
-    assert spy.model == "ollama:x:1b"
-    assert store.history()[0].model == "ollama:x:1b"
+    assert spy.model == "openai:x-mlx"
+    assert store.history()[0].model == "openai:x-mlx"
 
 
 def test_cli_route_auto_flag(data_dir, config_dir, capsys):

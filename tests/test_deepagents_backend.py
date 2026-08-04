@@ -1,5 +1,6 @@
 import builtins
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -36,12 +37,56 @@ def test_execute_without_lib_is_blocked(no_deepagents, tmp_path):
     assert "deepagents" in json.loads(res.trace_path.read_text())["error"]
 
 
-def test_preflight_reports_ollama_down(monkeypatch):
+def test_preflight_reports_lmstudio_down(monkeypatch):
+    """Porta morta: o servidor não responde e a mensagem diz o que fazer."""
     monkeypatch.setattr(da, "_import_deepagents", lambda: None)
-    monkeypatch.setattr(da, "OLLAMA_URL", "http://localhost:1/api/tags")
-    pre = da.DeepagentsBackend(model="ollama:qwen3:4b").preflight()
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://localhost:1/v1")
+    pre = da.DeepagentsBackend(model="openai:qwen3.5-9b-mlx").preflight()
     assert pre.ok is False
-    assert "Ollama" in pre.reason
+    assert "LM Studio não respondeu" in pre.reason
+    assert "lms server start" in pre.reason
+
+
+def test_preflight_reports_model_not_served(monkeypatch):
+    """Servidor vivo, modelo ausente da lista: bloqueia dizendo qual carregar."""
+    monkeypatch.setattr(da, "_import_deepagents", lambda: None)
+    monkeypatch.setattr(da, "_lmstudio_models", lambda url: {"outro-mlx"})
+    pre = da.DeepagentsBackend(model="openai:qwen3.5-9b-mlx").preflight()
+    assert pre.ok is False
+    assert "não está baixado/servido" in pre.reason
+    assert "outro-mlx" in pre.reason
+
+
+def test_preflight_ok_when_model_is_served(monkeypatch):
+    monkeypatch.setattr(da, "_import_deepagents", lambda: None)
+    monkeypatch.setattr(da, "_lmstudio_models", lambda url: {"qwen3.5-9b-mlx"})
+    pre = da.DeepagentsBackend(model="openai:qwen3.5-9b-mlx").preflight()
+    assert pre.ok is True, pre.reason
+
+
+def test_bootstrap_aponta_o_cliente_openai_pro_lmstudio(monkeypatch):
+    """Preflight sonda loopback; sem estes defaults o chat ia pra nuvem e o run
+    morria em 401 DEPOIS de o preflight passar."""
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    da._bootstrap_env()
+    assert os.environ["OPENAI_BASE_URL"] == da.LMSTUDIO_BASE_URL
+    assert os.environ["OPENAI_API_KEY"]
+
+
+def test_bootstrap_nao_sobrescreve_env_explicito(monkeypatch):
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-de-verdade")
+    da._bootstrap_env()
+    assert os.environ["OPENAI_BASE_URL"] == "https://api.openai.com/v1"
+    assert os.environ["OPENAI_API_KEY"] == "sk-de-verdade"
+
+
+def test_lmstudio_base_url_vem_do_env(monkeypatch):
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:9999/v1/")
+    assert da._lmstudio_base_url() == "http://127.0.0.1:9999/v1"
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    assert da._lmstudio_base_url() == da.LMSTUDIO_BASE_URL
 
 
 def test_capabilities_are_declared():
@@ -58,22 +103,23 @@ def test_capabilities_are_declared():
 def test_pricing_file_has_only_free_local_models():
     pricing = da.load_pricing(Path("config"))
     assert pricing, "config/models.toml sem [pricing]"
-    # locais grátis: ollama:* e os modelos MLX servidos pelo LM Studio em loopback
+    # locais grátis: só os modelos MLX servidos pelo LM Studio em loopback
     local_openai = {
         "openai:qwen3.5-9b-optiq",
         "openai:qwen3.5-9b-mlx",
         "openai:bonsai-27b-mlx",
         "openai:google/gemma-4-e4b",
     }
-    assert all(k.startswith("ollama:") or k in local_openai for k in pricing)
+    assert all(k in local_openai for k in pricing)
     assert all(
         v.get("input_per_mtok") == 0.0 and v.get("output_per_mtok") == 0.0
         for v in pricing.values()
     )
 
 
-def test_cost_ollama_is_zero_even_off_table():
-    assert da.cost_usd("ollama:qwen3:4b", 1000, 1000, pricing={}) == 0.0
+def test_cost_off_table_local_is_none():
+    """Runtime local não ganha mais desconto implícito: fora da tabela = None."""
+    assert da.cost_usd("openai:qwen3.5-9b-mlx", 1000, 1000, pricing={}) is None
 
 
 def test_cost_unknown_model_is_none():
@@ -133,10 +179,13 @@ def test_allowlist_intersects_only_filesystem_tools():
     assert da._fs_allowlist(()) == []
 
 
-def test_middleware_replacement_actually_restricts_tools(tmp_path):
+def test_middleware_replacement_actually_restricts_tools(tmp_path, monkeypatch):
     """Pendência 1 do RESEARCH: `FilesystemMiddleware` via `middleware=` substitui."""
     pytest.importorskip("deepagents")
-    base = ExecRequest(prompt="x", workspace=tmp_path, model="ollama:qwen3:4b", max_turns=3)
+    # langchain-openai exige chave até para endpoint local; o LM Studio ignora o
+    # valor. Nenhuma chamada de rede acontece aqui — só a montagem do grafo.
+    monkeypatch.setenv("OPENAI_API_KEY", "lm-studio")
+    base = ExecRequest(prompt="x", workspace=tmp_path, model="openai:qwen3.5-9b-mlx", max_turns=3)
 
     default, _ = da._build_agent(base)
     assert {"write_file", "execute", "delete"} <= _agent_tool_names(default)
@@ -164,7 +213,7 @@ def test_backend_suporta_execucao(tmp_path, monkeypatch):
         return object()
 
     monkeypatch.setattr(deepagents, "create_deep_agent", spy)
-    da._build_agent(ExecRequest(prompt="x", workspace=tmp_path, model="ollama:qwen3:4b"))
+    da._build_agent(ExecRequest(prompt="x", workspace=tmp_path, model="openai:qwen3.5-9b-mlx"))
     assert supports_execution(capturado["backend"]) is True
 
 
@@ -191,7 +240,7 @@ def test_kind_no_request_injeta_skill_no_system_prompt(tmp_path, monkeypatch):
     monkeypatch.setattr(deepagents, "create_deep_agent", spy)
 
     ws = tmp_path / "ws"
-    base = ExecRequest(prompt="x", workspace=ws, model="ollama:qwen3:4b", kind="code")
+    base = ExecRequest(prompt="x", workspace=ws, model="openai:qwen3.5-9b-mlx", kind="code")
     da._build_agent(base)
     assert "MARCADOR-DA-SKILL" in capturado["system_prompt"]
 
@@ -216,22 +265,164 @@ def test_system_prompt_separa_shell_de_filesystem_virtual(tmp_path, monkeypatch)
         return object()
 
     monkeypatch.setattr(deepagents, "create_deep_agent", spy)
-    da._build_agent(ExecRequest(prompt="x", workspace=tmp_path, model="ollama:qwen3:4b"))
+    da._build_agent(ExecRequest(prompt="x", workspace=tmp_path, model="openai:qwen3.5-9b-mlx"))
     prompt = capturado["system_prompt"]
     assert "RELATIVO" in prompt  # `execute` é shell real com cwd no workspace
     assert "números de linha" in prompt  # read_file numera, o arquivo não
     assert "write_file" in prompt  # saída do loop de edit_file que não casa
 
 
+def test_manual_das_tools_entra_no_system_prompt(tmp_path, monkeypatch):
+    """Cada modelo usa tool do seu jeito: sem o manual (o que faz, assinatura,
+    exemplo, pegadinha) o run "explica" a mudança e nada vira arquivo."""
+    pytest.importorskip("deepagents")
+    import deepagents
+
+    capturado: dict[str, str] = {}
+
+    def spy(*a, **kw):
+        capturado["system_prompt"] = kw["system_prompt"]
+        return object()
+
+    monkeypatch.setattr(deepagents, "create_deep_agent", spy)
+    da._build_agent(ExecRequest(prompt="x", workspace=tmp_path, model="openai:qwen3.5-9b-mlx"))
+    prompt = capturado["system_prompt"]
+    assert "Manual das tools" in prompt
+    for tool in ("ls", "read_file", "write_file", "edit_file", "glob", "grep", "execute", "delete", "task"):
+        assert f"## {tool}" in prompt
+
+
+def test_papeis_de_subagent_vao_como_subagents_e_manual(tmp_path, monkeypatch):
+    """Papel é dado (config/agents.toml): a spec chega em `subagents=` e o
+    modelo ganha uma linha por papel no prompt — sem isso a tool `task` existe
+    com o `general-purpose` default e nenhuma pista de quando usar."""
+    pytest.importorskip("deepagents")
+    import deepagents
+
+    capturado: dict[str, object] = {}
+
+    def spy(*a, **kw):
+        capturado.update(kw)
+        return object()
+
+    monkeypatch.setattr(deepagents, "create_deep_agent", spy)
+    da._build_agent(ExecRequest(prompt="x", workspace=tmp_path, model="openai:qwen3.5-9b-mlx"))
+    nomes = [s["name"] for s in capturado["subagents"]]
+    assert nomes == ["planner", "reviewer"]
+    assert all("system_prompt" in s for s in capturado["subagents"])
+    assert "task(subagent_type='planner')" in capturado["system_prompt"]
+
+
+def test_sem_papel_nao_passa_subagents(tmp_path, monkeypatch):
+    """Fail-open: agents.toml ausente/torto => chamada idêntica à de antes."""
+    pytest.importorskip("deepagents")
+    import deepagents
+
+    capturado: dict[str, object] = {}
+
+    def spy(*a, **kw):
+        capturado.update(kw)
+        return object()
+
+    monkeypatch.setattr(deepagents, "create_deep_agent", spy)
+    monkeypatch.setattr(da, "load_roles", lambda **kw: [])
+    da._build_agent(ExecRequest(prompt="x", workspace=tmp_path, model="openai:qwen3.5-9b-mlx"))
+    assert "subagents" not in capturado
+    assert "subagent_type" not in capturado["system_prompt"]
+
+
+def test_manual_por_modelo_ganha_do_geral_com_fallback(tmp_path, monkeypatch):
+    """Variação por modelo: prompts/tools/<provider>_<modelo>.md, senão
+    prompts/tools/<provider>.md, senão o geral; nenhum => "" (fail-open)."""
+    monkeypatch.setattr(da, "TOOLS_PROMPT_DIR", tmp_path / "tools")
+    monkeypatch.setattr(da, "TOOLS_PROMPT_PATH", tmp_path / "tools.md")
+    (tmp_path / "tools").mkdir()
+    assert da._tools_prompt("openai:qwen3.5-9b-mlx") == ""
+    (tmp_path / "tools.md").write_text("GERAL", encoding="utf-8")
+    assert da._tools_prompt("openai:qwen3.5-9b-mlx") == "GERAL"
+    (tmp_path / "tools" / "openai.md").write_text("PROVIDER", encoding="utf-8")
+    assert da._tools_prompt("openai:qwen3.5-9b-mlx") == "PROVIDER"
+    (tmp_path / "tools" / "openai_qwen3.5-9b-mlx.md").write_text("MODELO", encoding="utf-8")
+    assert da._tools_prompt("openai:qwen3.5-9b-mlx") == "MODELO"
+    assert da._tools_prompt(None) == "GERAL"
+
+
+def test_shell_do_agente_e_o_cercado(tmp_path, monkeypatch):
+    """O backend de shell tem que ser o SafeShellBackend: `virtual_mode` não
+    cobre `execute`, então sem a cerca o loop autônomo alcança a máquina."""
+    pytest.importorskip("deepagents")
+    import deepagents
+
+    from harness.backends.safe_shell import SafeShellBackend
+
+    capturado: dict[str, object] = {}
+
+    def spy(*a, **kw):
+        capturado["backend"] = kw["backend"]
+        return object()
+
+    monkeypatch.setattr(deepagents, "create_deep_agent", spy)
+    da._build_agent(ExecRequest(prompt="x", workspace=tmp_path, model="openai:qwen3.5-9b-mlx"))
+    assert isinstance(capturado["backend"], SafeShellBackend)
+
+
 def test_model_instance_tem_temperature_baixa():
     """Fix do thinking/temperature: instância, não string crua (com fail-open)."""
     pytest.importorskip("langchain")
-    for model in ("ollama:qwen3:4b", "anthropic:claude-sonnet-4-5"):
+    for model in ("openai:qwen3.5-9b-mlx", "anthropic:claude-sonnet-4-5"):
         got = da._model_for(model)
         if isinstance(got, str):
             continue  # provider sem credencial local: fallback pra string crua
         assert got.temperature == da.MODEL_TEMPERATURE
     assert da._model_for(None) is None
+
+
+def test_thinking_canal_por_provider():
+    """No openai:* (LM Studio) o thinking já vem ligado do servidor, e o
+    `extra_body` fica só para vLLM/llama.cpp compatíveis."""
+    assert da._thinking_kwargs("openai:qwen3.5-9b-mlx") == {
+        "extra_body": da.THINKING_EXTRA_BODY
+    }
+    assert da._thinking_kwargs("anthropic:claude-sonnet-4-5") == {}
+
+
+def test_model_for_passa_o_kwarg_do_provider(monkeypatch):
+    """Roteamento sem rede: o kwarg certo chega no init_chat_model."""
+    pytest.importorskip("langchain")
+    import langchain.chat_models as lcm
+
+    visto: list[dict] = []
+    monkeypatch.setattr(
+        lcm, "init_chat_model", lambda m, **kw: visto.append(kw) or f"model:{m}"
+    )
+    assert da._model_for("openai:qwen3.5-9b-mlx") == "model:openai:qwen3.5-9b-mlx"
+    assert visto[-1] == {
+        "temperature": da.MODEL_TEMPERATURE,
+        "extra_body": da.THINKING_EXTRA_BODY,
+    }
+    da._model_for("anthropic:claude-sonnet-4-5")
+    assert visto[-1] == {"temperature": da.MODEL_TEMPERATURE}
+
+
+def test_model_for_cai_pra_temperature_se_provider_rejeita_kwarg(monkeypatch):
+    """Provider que não conhece `reasoning` não pode derrubar o backend."""
+    pytest.importorskip("langchain")
+    import langchain.chat_models as lcm
+
+    visto: list[dict] = []
+
+    def fake(m, **kw):
+        visto.append(kw)
+        if "extra_body" in kw:
+            raise TypeError("unexpected keyword 'extra_body'")
+        return f"model:{m}"
+
+    monkeypatch.setattr(lcm, "init_chat_model", fake)
+    assert da._model_for("openai:qwen3.5-9b-mlx") == "model:openai:qwen3.5-9b-mlx"
+    assert visto == [
+        {"temperature": da.MODEL_TEMPERATURE, "extra_body": da.THINKING_EXTRA_BODY},
+        {"temperature": da.MODEL_TEMPERATURE},
+    ]
 
 
 # --- stalled e trace parcial ------------------------------------------------
@@ -312,18 +503,20 @@ def test_timeout_materializa_trace_parcial(tmp_path, monkeypatch):
     assert sum(1 for r in linhas if r.get("type") == "ai") == 1
 
 
-# --- ollama de verdade -----------------------------------------------------
+# --- LM Studio de verdade ---------------------------------------------------
 
 
-@pytest.mark.ollama
-def test_e2e_tiny_fix_with_ollama(tmp_path):
+@pytest.mark.lmstudio
+def test_e2e_tiny_fix_with_lmstudio(tmp_path):
     from harness import cli
 
-    model = "ollama:qwen2.5:3b"
+    model = "openai:qwen3.5-9b-mlx"
     unit = cli.load_unit(FIXTURE)
     cli.seed_workspace(unit, tmp_path)
     backend = da.DeepagentsBackend(model=model)
-    assert backend.preflight().ok, backend.preflight().reason
+    pre = backend.preflight()
+    if not pre.ok:
+        pytest.skip(pre.reason)  # servidor local ausente não é falha de teste
 
     res = backend.execute(
         ExecRequest(

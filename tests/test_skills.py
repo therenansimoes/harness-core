@@ -60,6 +60,42 @@ def test_select_by_kind_and_empty_kinds_match_all(tmp_path):
     assert [s.name for s in select_skills(None, root)] == ["geral"]
 
 
+# --- ranking por relevância ------------------------------------------------
+
+
+def _four_skills(root: Path) -> None:
+    _write(root, "a_html.md", 'name = "html-edit"\nkinds = ["code"]\ndescription = "d"', "Editar template HTML: mexa no markup do arquivo index.")
+    _write(root, "b_ledger.md", 'name = "ledger-sqlite"\nkinds = ["code"]\ndescription = "d"', "Migração de schema sqlite, transação e índice no banco.")
+    _write(root, "c_markup.md", 'name = "markup-css"\nkinds = []\ndescription = "markup e css do template"', "Classe utilitária no css.")
+    _write(root, "d_graph.md", 'name = "langgraph-idioms"\nkinds = ["code"]\ndescription = "d"', "Nó do grafo, checkpoint e reducer de estado.")
+
+
+def test_select_ranks_by_query_overlap_and_caps(tmp_path):
+    """Só as relevantes ao prompt entram, mais pontuada primeiro. Global sem
+    overlap (nenhuma aqui) não passaria de graça — a que entra pontuou."""
+    root = tmp_path / "skills"
+    _four_skills(root)
+
+    got = select_skills("code", root, query="editar o markup HTML do template index")
+    assert [s.name for s in got] == ["html-edit", "markup-css"]
+
+
+def test_select_without_query_keeps_kind_order_under_limit(tmp_path):
+    root = tmp_path / "skills"
+    _four_skills(root)
+
+    assert [s.name for s in select_skills("code", root)] == ["html-edit", "ledger-sqlite"]
+    # query sem token utilizável (< 3 chars) = sem query, não zera a seleção
+    assert len(select_skills("code", root, query="x")) == 2
+    assert [s.name for s in select_skills("code", root, query="css", limit=1)] == ["markup-css"]
+
+
+def test_select_kind_without_skills_is_empty(tmp_path):
+    root = tmp_path / "skills"
+    _write(root, "code.md", 'name = "so-code"\nkinds = ["code"]\ndescription = "d"', "corpo")
+    assert select_skills("infra", root, query="qualquer coisa de infra") == []
+
+
 # --- render ----------------------------------------------------------------
 
 
@@ -83,7 +119,9 @@ def test_render_prompt_empty_for_no_skills():
 def test_seed_skills_parse_and_route():
     names = {s.name for s in load_skills(REPO_SKILLS)}
     assert {"python-fixes", "config-calibration"} <= names
-    assert "python-fixes" in {s.name for s in select_skills("code", REPO_SKILLS)}
+    # com o teto de 2, "roteia" agora quer dizer "ganha o ranking da tarefa"
+    bug = "Corrigir bug em Python com diff mínimo e rodar o verify"
+    assert "python-fixes" in {s.name for s in select_skills("code", REPO_SKILLS, query=bug)}
     assert "config-calibration" in {s.name for s in select_skills("config", REPO_SKILLS)}
 
 
@@ -97,7 +135,8 @@ def test_default_root_finds_repo_skills_from_foreign_cwd(monkeypatch, tmp_path):
     assert not (tmp_path / "skills").exists()
     names = {s.name for s in load_skills()}
     assert {"python-fixes", "config-calibration"} <= names
-    assert "python-fixes" in {s.name for s in select_skills("code")}
+    query = "Corrigir bug em Python com diff mínimo e rodar o verify"
+    assert "python-fixes" in {s.name for s in select_skills("code", query=query)}
 
 
 def test_default_root_honours_harness_root(monkeypatch, tmp_path):
@@ -125,8 +164,9 @@ def test_backend_injects_skills_and_mcp_tools(monkeypatch, tmp_path):
 
     seen: dict = {}
 
-    def fake_select(kind, root=None):
+    def fake_select(kind, root=None, **kw):
         seen["kind"] = kind
+        seen.update(kw)
         return [Skill("python-fixes", ("code",), "d", "Diff mínimo sempre.", Path("x.md"))]
 
     sentinel_tool = object()
@@ -138,6 +178,7 @@ def test_backend_injects_skills_and_mcp_tools(monkeypatch, tmp_path):
     da._build_agent(req)
 
     assert seen["kind"] is None  # ExecRequest sem kind => None, não explode
+    assert seen["query"] == "x"  # prompt da unidade vai pro ranking
     prompt = captured["system_prompt"]
     assert "## Skills" in prompt
     assert "### python-fixes\nDiff mínimo sempre." in prompt
@@ -154,7 +195,7 @@ def test_backend_without_skills_or_tools_keeps_base_prompt(monkeypatch, tmp_path
     monkeypatch.setattr(
         deepagents, "create_deep_agent", lambda *a, **kw: captured.update(kw) or object()
     )
-    monkeypatch.setattr(da, "select_skills", lambda kind, root=None: [])
+    monkeypatch.setattr(da, "select_skills", lambda kind, root=None, **kw: [])
     monkeypatch.setattr(da, "load_mcp_tools", lambda *a, **k: [])
 
     da._build_agent(ExecRequest(prompt="x", workspace=tmp_path, max_turns=2))
@@ -182,12 +223,18 @@ def test_backend_injects_real_skills_from_foreign_cwd_and_records_usage(monkeypa
     monkeypatch.setattr(da, "load_mcp_tools", lambda *a, **k: [])
 
     req = ExecRequest(
-        prompt="x", workspace=tmp_path / "ws", max_turns=2, run_id="run-skill-1", kind="code"
+        # o prompt é a query do ranking: sem ele, quem entra é ordem de arquivo
+        prompt="Corrigir bug em Python com diff mínimo e rodar o verify",
+        workspace=tmp_path / "ws",
+        max_turns=2,
+        run_id="run-skill-1",
+        kind="code",
     )
     da._build_agent(req)
 
     assert "### python-fixes" in captured["system_prompt"]
     assert "### config-calibration" not in captured["system_prompt"]  # kind errado
+    assert captured["system_prompt"].count("### ") <= 2  # teto: 9B não lê 4 skills
     rows = attribution.lift("python-fixes")
     assert rows["with"] == (0, 0)  # sem linha em `runs`: só o usage foi gravado
     with attribution._connect() as conn:

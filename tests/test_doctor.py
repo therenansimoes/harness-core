@@ -6,7 +6,7 @@ determinístico por contrato.
 
 A assimetria testada aqui é o ponto do comando: FALHA (coisa nossa quebrada)
 derruba o exit code; aviso (backend indisponível, catálogo vazio) não. Doctor
-que sai 1 porque o Ollama está desligado vira ruído que ninguém lê.
+que sai 1 porque o LM Studio está desligado vira ruído que ninguém lê.
 """
 
 import shutil

@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +33,8 @@ TABLE = "projects"
 QUEUE_DONE = "done"
 QUEUE_STUCK = "stuck"
 UNIT_FILE = "unit.toml"
+MILESTONES_FILE = "MILESTONES.toml"
+MILESTONE_TABLE = "milestone"
 
 
 @dataclass(frozen=True)
@@ -120,6 +123,81 @@ def queue_counts(proj: Project) -> tuple[int, int, int]:
         and (p / UNIT_FILE).is_file()
     )
     return (fila, _bucket(q / QUEUE_DONE), _bucket(q / QUEUE_STUCK))
+
+
+# --- marcos (agrupamento declarado de unidades) --------------------------------
+
+
+def milestones_path(proj: Project) -> Path:
+    """`projects/<nome>/MILESTONES.toml`: irmão da fila, para o arquivo andar
+    junto das unidades que ele agrupa."""
+    base = proj.queue_dir.parent if proj.queue_dir else Path("projects") / proj.name
+    return base / MILESTONES_FILE
+
+
+def milestones(proj: Project) -> list[dict]:
+    """Marcos declarados: `[[milestone]] name = "..." units = ["u1", "u2"]`.
+
+    Marco é opcional e puro dado — nada aqui pode derrubar `harness status`.
+    Ausente, ilegível ou sem `[[milestone]]` => `[]`; entrada sem `name` ou sem
+    `units` usável é ignorada com aviso, porque marco que some calado é pior
+    que marco recusado.
+    """
+    path = milestones_path(proj)
+    if not path.is_file():
+        return []
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        print(f"milestones: {path} inválido, ignorando — {exc}", file=sys.stderr)
+        return []
+
+    raw = data.get(MILESTONE_TABLE)
+    if not isinstance(raw, list):
+        if raw is not None:
+            print(
+                f"milestones: {path} sem [[{MILESTONE_TABLE}]], ignorando",
+                file=sys.stderr,
+            )
+        return []
+
+    out: list[dict] = []
+    for i, entry in enumerate(raw):
+        name = str(entry.get("name", "")).strip() if isinstance(entry, dict) else ""
+        units = entry.get("units") if isinstance(entry, dict) else None
+        if not name:
+            print(f"milestones: [[{MILESTONE_TABLE}]] #{i + 1} sem 'name', ignorado "
+                  f"({path})", file=sys.stderr)
+            continue
+        if not isinstance(units, list):
+            print(f"milestones: {name!r} sem lista 'units', ignorado ({path})",
+                  file=sys.stderr)
+            continue
+        ids = [str(u).strip() for u in units if str(u).strip()]
+        if not ids:
+            print(f"milestones: {name!r} com 'units' vazio, ignorado ({path})",
+                  file=sys.stderr)
+            continue
+        out.append({"name": name, "units": ids})
+    return out
+
+
+def milestone_progress(proj: Project) -> list[tuple[str, int, int]]:
+    """`(nome, feitas, total)` por marco. Feita = unidade em `queue/done/`
+    (match por basename do diretório) — a unidade parada em `stuck/` ou ainda
+    na fila conta como não feita, que é o ponto do marco."""
+    marcos = milestones(proj)
+    if not marcos:
+        return []
+    done = set()
+    if proj.queue_dir:
+        d = proj.queue_dir / QUEUE_DONE
+        if d.is_dir():
+            done = {p.name for p in d.iterdir() if p.is_dir()}
+    return [
+        (m["name"], sum(1 for u in m["units"] if u in done), len(m["units"]))
+        for m in marcos
+    ]
 
 
 # --- entrega em branch --------------------------------------------------------

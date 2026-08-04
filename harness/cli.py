@@ -1062,8 +1062,10 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    """Uma linha por projeto: fila/done/stuck + gasto total do ledger."""
-    from harness.projects import load_projects, queue_counts
+    """Uma linha por projeto: fila/done/stuck + gasto total do ledger. Projeto
+    com `MILESTONES.toml` ganha uma linha indentada por marco — dado opcional,
+    quem não declara marco vê a saída de antes."""
+    from harness.projects import load_projects, milestone_progress, queue_counts
 
     projs = load_projects()
     if not projs:
@@ -1082,6 +1084,8 @@ def cmd_status(args: argparse.Namespace) -> int:
             f"{name}: fila={fila} done={done} stuck={stuck} "
             f"runs={len(rows)} usd={usd:.2f}"
         )
+        for marco, feitas, total in milestone_progress(projs[name]):
+            print(f"  {'✔' if feitas == total else '○'} {marco} ({feitas}/{total})")
     return 0
 
 

@@ -11,7 +11,7 @@ SHIPPED = REPO / "config" / "genome.toml"
 # Árvore mínima com um arquivo de cada grupo do genoma.
 TREE = {
     "config/genome.toml": None,  # cópia do shipped
-    "config/models.toml": "tier0 = 'ollama'\n",
+    "config/models.toml": "tier0 = 'lmstudio'\n",
     "harness/ruler/wilson.py": "def wilson_interval(): ...\n",
     "harness/routing/router.py": "def select(): ...\n",
     "harness/cli.py": "def main(): ...\n",

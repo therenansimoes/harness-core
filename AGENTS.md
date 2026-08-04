@@ -75,7 +75,8 @@ uv run harness lineage --file --db --limit 20                     # mutation tre
 uv run harness report --since 24                                  # what the loop did
 ```
 
-Cheap real E2E: `--backend deepagents --model ollama:qwen2.5:3b`. Project work
+Cheap real E2E: `--backend deepagents --model openai:qwen3.5-9b-mlx` (LM Studio
+on :1234 — `lms server start && lms load qwen3.5-9b-mlx`). Project work
 goes through `harness queue --project <name>` (use `--no-move` for a dry run),
 never through `harness run` alone — `run` is inline and does not enter a
 worktree, so it cannot deliver a branch.

@@ -7,11 +7,34 @@ Formato compartilhado: primeira linha '---', linhas TOML (name/kinds/description
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
 _PACKAGE_SKILLS = Path(__file__).resolve().parents[2] / "skills"
+
+# Ranking: contexto é o recurso mais caro do executor pequeno. Mandar todas as
+# skills do kind (4 skills / 5.5KB num run medido, metade irrelevante pra tarefa)
+# custa mais do que a guidance vale. Teto padrão de 2.
+SELECT_LIMIT = 2
+
+_TOKEN = re.compile(r"\w{3,}", re.UNICODE)
+
+# Palavras que aparecem em quase toda skill/prompt: se contassem, o score viraria
+# ruído e o ranking, ordem alfabética.
+_STOPWORDS = frozenset(
+    """
+    para com sem por que uma que dos das nos nas ele ela isso este esta esse essa
+    aqui não nao sim mais menos como quando onde qual todo toda todos todas ser
+    seu sua the and for with that this from into you your are was not but any all
+    use using when where what which
+    """.split()
+)
+
+
+def _tokens(text: str) -> set[str]:
+    return {t for t in _TOKEN.findall(text.lower()) if t not in _STOPWORDS}
 
 
 def default_root() -> Path:
@@ -54,9 +77,33 @@ def load_skills(root: Path | None = None) -> list[Skill]:
     return out
 
 
-def select_skills(kind: str | None, root: Path | None = None) -> list[Skill]:
-    """`kinds` vazio = vale para todo kind; kind None só casa com esses."""
-    return [s for s in load_skills(root) if not s.kinds or kind in s.kinds]
+def select_skills(
+    kind: str | None,
+    root: Path | None = None,
+    *,
+    query: str | None = None,
+    limit: int = SELECT_LIMIT,
+) -> list[Skill]:
+    """`kinds` vazio = vale para todo kind; kind None só casa com esses.
+
+    Depois do filtro por kind vem o ranking por relevância à unidade: score =
+    tokens em comum entre `query` (o prompt da unidade) e `description + corpo`
+    da skill. Barato e determinístico — sem embedding, sem chamada de modelo.
+    Empate mantém a ordem de `load_skills` (path, i.e. alfabética).
+
+    Skill sem nenhum token em comum sai fora QUANDO alguma outra pontuou; se
+    ninguém pontuou (ou não veio query utilizável) cai no comportamento por kind
+    puro, cortado no mesmo teto. Skill global (`kinds = []`) compete no mesmo
+    ranking: não passa de graça só por não ter restrição de kind.
+    """
+    matched = [s for s in load_skills(root) if not s.kinds or kind in s.kinds]
+    wanted = _tokens(query) if query else set()
+    if wanted:
+        scored = [(len(wanted & _tokens(f"{s.description}\n{s.body}")), s) for s in matched]
+        if any(score for score, _ in scored):
+            scored = [(score, s) for score, s in scored if score]
+            matched = [s for _, s in sorted(scored, key=lambda pair: -pair[0])]
+    return matched[: max(limit, 0)]
 
 
 def render_prompt(skills: list[Skill]) -> str:

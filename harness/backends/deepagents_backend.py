@@ -17,6 +17,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable, ClassVar, Sequence
 
+from harness.backends.agent_roles import load_roles, roles_manual
 from harness.skills import render_prompt, select_skills
 from harness.types import Capabilities, ExecRequest, ExecResult, ExitReason, Preflight
 
@@ -25,9 +26,13 @@ try:
 except Exception:  # módulo chega em PR paralelo; sem ele, sem tools extras
     load_mcp_tools = lambda *a, **k: []  # noqa: E731
 
-OLLAMA_PREFIX = "ollama:"
-OLLAMA_URL = "http://localhost:11434/api/tags"
-OLLAMA_TIMEOUT_S = 2.0
+# LM Studio é o ÚNICO runtime local (Ollama cortado em 2026-08-04): MLX na porta
+# 1234 atrás de um endpoint OpenAI-compatível, por isso o prefixo `openai:`.
+OPENAI_PREFIX = "openai:"
+LMSTUDIO_BASE_URL = "http://localhost:1234/v1"
+LMSTUDIO_BASE_URL_ENV = "OPENAI_BASE_URL"
+LMSTUDIO_KEY_ENV = "OPENAI_API_KEY"
+LMSTUDIO_TIMEOUT_S = 3.0
 
 CONFIG_DIR_ENV = "HARNESS_CONFIG_DIR"
 MODELS_FILE = "models.toml"
@@ -42,6 +47,11 @@ _INSTALL_HINT = "deepagents não instalado — pip install harness-core[deepagen
 # Contrato com o prompt-builder: se este arquivo existir, seu conteúdo é
 # prependado às instructions do agente; ausente => comportamento atual.
 EXECUTOR_PROMPT_PATH = Path("prompts/executor.md")
+# Manual das tools (o que cada uma faz, assinatura, exemplo e pegadinha). Cada
+# modelo usa tool de um jeito; prompts/tools/<provider>_<modelo>.md e
+# prompts/tools/<provider>.md ganham do geral quando existem.
+TOOLS_PROMPT_PATH = Path("prompts/tools.md")
+TOOLS_PROMPT_DIR = Path("prompts/tools")
 
 
 class DeepagentsBackend:
@@ -72,8 +82,8 @@ class DeepagentsBackend:
             _import_deepagents()
         except ImportError as exc:
             return Preflight(ok=False, reason=f"{_INSTALL_HINT} ({exc})")
-        if model and model.startswith(OLLAMA_PREFIX):
-            return _ollama_preflight(model)
+        if model and model.startswith(OPENAI_PREFIX):
+            return _lmstudio_preflight(model)
         return Preflight(ok=True, reason="deepagents importável")
 
     def execute(self, req: ExecRequest) -> ExecResult:
@@ -151,6 +161,14 @@ def _bootstrap_env() -> None:
     os.environ.setdefault("LANGGRAPH_STRICT_MSGPACK", "true")
     os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
     os.environ.setdefault("LANGSMITH_TRACING", "false")
+    # `openai:*` aqui é LM Studio, não a nuvem: sem estes defaults o
+    # langchain-openai aponta para api.openai.com e o run morre em 401 DEPOIS do
+    # preflight passar (o preflight sonda loopback). Os dois têm que concordar
+    # por construção. `setdefault`: env explícito continua ganhando, e é assim
+    # que se aponta para a nuvem de propósito (OPENAI_BASE_URL + chave real).
+    os.environ.setdefault(LMSTUDIO_BASE_URL_ENV, LMSTUDIO_BASE_URL)
+    # O LM Studio ignora o valor, mas o cliente exige que exista.
+    os.environ.setdefault(LMSTUDIO_KEY_ENV, "lm-studio")
 
 
 def _import_deepagents():
@@ -159,22 +177,49 @@ def _import_deepagents():
     return deepagents
 
 
-# --------------------------------------------------------------------------- ollama
+# --------------------------------------------------------------------------- LM Studio
 
 
-def _ollama_preflight(model: str) -> Preflight:
-    tag = model[len(OLLAMA_PREFIX) :]
+def _lmstudio_base_url() -> str:
+    return (os.environ.get(LMSTUDIO_BASE_URL_ENV) or LMSTUDIO_BASE_URL).rstrip("/")
+
+
+def _lmstudio_models(url: str) -> set[str]:
+    """Ids servidos agora. Levanta OSError/ValueError se o servidor não fala."""
+    req = urllib.request.Request(url)
+    # Endpoint compatível atrás de auth (LM Studio ignora, cloud exige).
+    key = os.environ.get(LMSTUDIO_KEY_ENV, "")
+    if key:
+        req.add_header("Authorization", f"Bearer {key}")
+    with urllib.request.urlopen(req, timeout=LMSTUDIO_TIMEOUT_S) as resp:
+        payload = json.loads(resp.read())
+    return {str(m.get("id", "")) for m in payload.get("data", [])}
+
+
+def _lmstudio_preflight(model: str) -> Preflight:
+    """Servidor vivo E modelo servido. Sonda `GET /v1/models`, zero token gasto."""
+    wanted = model[len(OPENAI_PREFIX) :]
+    url = f"{_lmstudio_base_url()}/models"
     try:
-        with urllib.request.urlopen(OLLAMA_URL, timeout=OLLAMA_TIMEOUT_S) as resp:
-            payload = json.loads(resp.read())
+        served = _lmstudio_models(url)
     except (urllib.error.URLError, OSError, ValueError) as exc:
-        return Preflight(ok=False, reason=f"servidor Ollama não respondeu em {OLLAMA_URL} ({exc})")
-    names = {m.get("name", "") for m in payload.get("models", [])}
-    names |= {n.removesuffix(":latest") for n in names}
-    if tag not in names:
-        listed = ", ".join(sorted(names)) or "nenhum"
-        return Preflight(ok=False, reason=f"modelo {tag!r} ausente no Ollama (tem: {listed})")
-    return Preflight(ok=True, reason=f"ollama ok, modelo {tag} presente")
+        return Preflight(
+            ok=False,
+            reason=(
+                f"LM Studio não respondeu em {url} após {LMSTUDIO_TIMEOUT_S}s ({exc}) — "
+                "abra o app e rode `lms server start`"
+            ),
+        )
+    if wanted not in served:
+        listed = ", ".join(sorted(served)) or "nenhum"
+        return Preflight(
+            ok=False,
+            reason=(
+                f"modelo {wanted!r} não está baixado/servido pelo LM Studio "
+                f"(tem: {listed}) — `lms load {wanted}`"
+            ),
+        )
+    return Preflight(ok=True, reason=f"LM Studio ok em {url}, modelo {wanted} servido")
 
 
 # --------------------------------------------------------------------------- agente
@@ -182,7 +227,6 @@ def _ollama_preflight(model: str) -> Preflight:
 
 def _build_agent(req: ExecRequest):
     from deepagents import create_deep_agent
-    from deepagents.backends.local_shell import LocalShellBackend
     from langchain.agents.middleware import ModelCallLimitMiddleware
     from langchain_core.callbacks import UsageMetadataCallbackHandler
 
@@ -195,7 +239,12 @@ def _build_agent(req: ExecRequest):
     # verify_cmd, mesmo com a tool registrada no grafo.
     # O shell é real, mas o root/cwd é o workspace do run (worktree efêmero) e
     # virtual_mode=True continua bloqueando path traversal nas tools de arquivo.
-    fs = LocalShellBackend(root_dir=str(req.workspace), virtual_mode=True)
+    # O shell entra pela SafeShellBackend: `virtual_mode` NÃO cobre `execute`
+    # (a doc do deepagents é explícita), então a cerca (denylist + workspace +
+    # timeout) é o que impede o loop autônomo de mexer na máquina.
+    from harness.backends.safe_shell import SafeShellBackend
+
+    fs = SafeShellBackend(root_dir=str(req.workspace), virtual_mode=True)
 
     middleware: list[Any] = []
     allowed = _fs_allowlist(req.tools)
@@ -231,7 +280,10 @@ def _build_agent(req: ExecRequest):
     )
     # `kind` já é campo do ExecRequest (preenchido pelo router no run_graph e
     # pela unit no cli); getattr segura request serializado de genoma antigo.
-    skills = select_skills(getattr(req, "kind", None))
+    # `query=` faz o ranking por relevância à unidade e o teto corta o resto:
+    # mandar todas as skills do kind enchia o contexto do executor pequeno com
+    # guidance que não tem nada a ver com a tarefa.
+    skills = select_skills(getattr(req, "kind", None), query=req.prompt)
     skills_block = render_prompt(skills)
     if skills_block:
         system_prompt = f"{system_prompt}\n\n{skills_block}"
@@ -241,9 +293,23 @@ def _build_agent(req: ExecRequest):
     if recall_block:
         system_prompt = f"{system_prompt}\n\n{recall_block}"
 
+    # Manual das tools depois das pontes: modelo pequeno não descobre sozinho
+    # que tool é o único caminho para virar arquivo, nem as pegadinhas de cada
+    # uma. Sem isso o run termina "explicando" a mudança e nada é escrito.
+    tools_block = _tools_prompt(req.model)
+    if tools_block:
+        system_prompt = f"{system_prompt}\n\n{tools_block}"
+
     base_prompt = _executor_prompt()
     if base_prompt:
         system_prompt = f"{base_prompt}\n\n{system_prompt}"
+
+    # Papéis vêm de config/agents.toml (dado, não código): [] devolve o
+    # comportamento de antes — só o `general-purpose` default da tool `task`.
+    roles = load_roles(backend=fs, allowed=allowed)
+    manual = roles_manual(roles)
+    if manual:
+        system_prompt = f"{system_prompt}\n\n{manual}"
 
     extra_tools = list(load_mcp_tools())  # contrato: [] em QUALQUER falha
     agent = create_deep_agent(
@@ -252,6 +318,7 @@ def _build_agent(req: ExecRequest):
         middleware=middleware,
         system_prompt=system_prompt,
         **({"tools": extra_tools} if extra_tools else {}),
+        **({"subagents": roles} if roles else {}),
     )
     return agent, usage_cb
 
@@ -262,30 +329,46 @@ MODEL_TEMPERATURE = 0.2
 THINKING_EXTRA_BODY = {"chat_template_kwargs": {"enable_thinking": True}}
 
 
+def _thinking_kwargs(model: str) -> dict[str, Any]:
+    """Canal de thinking do provider — medido, não suposto (2026-08).
+
+    (O ramo `ollama:*`/`reasoning=True` saiu com o runtime, cortado 2026-08-04.)
+
+    `openai:*` (LM Studio) — não há nada para pedir. Sondagem contra o servidor
+    vivo (qwen3.5-9b-mlx em /v1) com e sem `chat_template_kwargs.enable_thinking`
+    volta `reasoning_content` preenchido nas duas: o thinking já é o default do
+    servidor e a flag não muda o comportamento. Mandamos ela mesmo assim porque
+    vLLM/llama.cpp atrás de um endpoint openai-compatível só ligam por aí, e o
+    LM Studio a ignora sem erro. Limite conhecido, não contornável daqui:
+    langchain-openai 1.4.1 declara na própria docstring que NÃO extrai
+    `reasoning_content` de endpoints compatíveis — o modelo raciocina, mas o
+    trace não aparece no `AIMessage`.
+
+    `anthropic:*` e o resto — default do provider, como antes."""
+    if model.startswith(OPENAI_PREFIX):
+        return {"extra_body": THINKING_EXTRA_BODY}
+    return {}
+
+
 def _model_for(model: str | None):
     """Instância de chat model com temperature baixa e thinking ligado.
 
     `create_deep_agent` aceita string OU BaseChatModel; a string usa o default
-    do provider (temperature 1, thinking off nos templates duplos). Nem todo
-    provider aceita `extra_body`, então qualquer falha na construção volta para
-    a string crua — o comportamento de antes."""
+    do provider (temperature 1, thinking off nos templates duplos). O canal de
+    thinking varia por provider (ver `_thinking_kwargs`), e provider que rejeita
+    o kwarg cai para só-temperature e depois para a string crua — o
+    comportamento de antes."""
     if not model:
         return model
-    try:
-        from langchain.chat_models import init_chat_model
-
-        return init_chat_model(
-            model,
-            temperature=MODEL_TEMPERATURE,
-            extra_body=THINKING_EXTRA_BODY,
-        )
-    except Exception:
+    from_provider = _thinking_kwargs(model)
+    for kwargs in (from_provider, {}) if from_provider else ({},):
         try:
             from langchain.chat_models import init_chat_model
 
-            return init_chat_model(model, temperature=MODEL_TEMPERATURE)
+            return init_chat_model(model, temperature=MODEL_TEMPERATURE, **kwargs)
         except Exception:
-            return model
+            continue
+    return model
 
 
 def _record_skill_usage(req: ExecRequest, skills: list[Any]) -> None:
@@ -326,6 +409,41 @@ def _executor_prompt() -> str:
     except OSError:
         pass
     return ""
+
+
+def _tools_prompt(model: str | None) -> str:
+    """Manual das tools para este modelo, ou "" se nenhum arquivo existir.
+
+    Variação por modelo com fallback: "openai:qwen3.5-9b-mlx" tenta
+    prompts/tools/openai_qwen3.5-9b-mlx.md, prompts/tools/openai.md e por fim
+    prompts/tools.md. Fail-open igual ao executor.md — genoma sem o arquivo
+    volta ao comportamento de antes."""
+    for path in _tools_prompt_candidates(model):
+        try:
+            if path.is_file():
+                return path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+    return ""
+
+
+def _tools_prompt_candidates(model: str | None) -> list[Path]:
+    candidates: list[Path] = []
+    if model:
+        provider, _, name = model.partition(":")
+        slug = _slug(f"{provider}_{name}") if name else ""
+        if slug:
+            candidates.append(TOOLS_PROMPT_DIR / f"{slug}.md")
+        if provider:
+            candidates.append(TOOLS_PROMPT_DIR / f"{_slug(provider)}.md")
+    candidates.append(TOOLS_PROMPT_PATH)
+    return candidates
+
+
+def _slug(raw: str) -> str:
+    """Nome de modelo em nome de arquivo (o "/" de "openai:org/modelo" e o ":"
+    de "qwen3.5-9b-mlx" não podem virar diretório nem escapar de prompts/)."""
+    return "".join(c if c.isalnum() or c in "._-" else "_" for c in raw).strip("_")
 
 
 def _fs_allowlist(tools: tuple[str, ...]) -> list[str]:
@@ -484,7 +602,9 @@ def cost_usd(
     table = load_pricing() if pricing is None else pricing
     entry = table.get(model or "")
     if entry is None:
-        return 0.0 if model and model.startswith(OLLAMA_PREFIX) else None
+        # Fora da tabela = sem preço conhecido, ponto. Os locais do LM Studio já
+        # estão em [pricing] a 0.0 (o atalho `ollama:*`-vale-0 saiu com o runtime cortado).
+        return None
     return (
         tokens_in * float(entry.get("input_per_mtok", 0.0))
         + tokens_out * float(entry.get("output_per_mtok", 0.0))

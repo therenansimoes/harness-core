@@ -24,7 +24,6 @@ dev = ["pytest>=8.0"]
 deepagents = [
     "deepagents==0.7.1",
     "langchain==1.3.14",
-    "langchain-ollama==1.1.0",
     "langchain-openai>=1.4.1",
 ]
 
@@ -51,8 +50,8 @@ packages = ["harness"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 norecursedirs = ["legacy", ".venv", "projects", "benchmarks", "data"]
-addopts = "-m 'not ollama and not claude_cli'"
+addopts = "-m 'not lmstudio and not claude_cli'"
 markers = [
-    "ollama: exige servidor Ollama local rodando (excluído por padrão)",
+    "lmstudio: exige o servidor do LM Studio no ar (MLX, porta 1234; excluído por padrão)",
     "claude_cli: gasta dinheiro — exige o Claude Code CLI instalado e autenticado (excluído por padrão)",
 ]
