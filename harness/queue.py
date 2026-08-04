@@ -30,6 +30,7 @@ import tomllib
 from pathlib import Path
 
 from harness.graph.run_graph import run_unit
+from harness.improve import zpd
 from harness.ledger import store
 from harness.projects import (
     QUEUE_DONE,
@@ -122,6 +123,7 @@ def run_queue(
     integrate_accepted: bool = True,
     check_regression: bool = True,
     projects_path: Path | None = None,
+    use_zpd: bool = False,
 ) -> int:
     """Roda a fila do projeto até acabar, travar ou estourar o deadline.
 
@@ -133,6 +135,11 @@ def run_queue(
 
     `check_regression=False` desliga a re-rodada dos verifies de `done/` depois
     da integração — só para quando o custo do verify passou a não ser barato.
+
+    `use_zpd=True` põe na frente a unidade com nota histórica na zona de
+    desenvolvimento proximal (`improve/zpd`). DESLIGADO por default e por bom
+    motivo: nesta fila a ordem de nome É a dependência, e reordenar quebra o
+    projeto. Só faz sentido em fila de prática, onde as unidades independem.
     """
     proj = get_project(project, projects_path)
     queue = proj.queue_dir
@@ -141,7 +148,11 @@ def run_queue(
         return 1
     data = store.data_dir()
     t0 = time.time()
-    for unit_dir in pending(queue):
+    fila = pending(queue)
+    if use_zpd:
+        fila = zpd.order(fila)
+        print(f"zpd: ordem {[p.name for p in fila]}")
+    for unit_dir in fila:
         gasto = time.time() - t0
         if gasto > deadline_s:
             print(f"deadline {deadline_s:.0f}s estourado em {gasto:.0f}s — para aqui")

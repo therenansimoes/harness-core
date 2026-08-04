@@ -37,7 +37,7 @@ import tomllib
 import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from harness.backends import procs, registry
 from harness.genome import tamper
@@ -109,6 +109,12 @@ UI_VERIFY_DIST = "dist"
 UI_VERIFY_EXPECT = ("css",)
 UI_VERIFY_EXIT = 65   # veredito derrubado pela TELA, não pelo `verify_cmd`
 
+# Gate de delta: quantas tentativas sem ganho de score toleram antes de chamar
+# gente. Uma é ruído do executor (mesma nota por caminho diferente); duas é
+# platô — a terceira tentativa custaria um turno pelo mesmo lugar.
+DELTA_STAGNATIONS = 2
+DELTA_REASON = "sem_gradiente_de_score"
+
 
 # --- política calibrável ------------------------------------------------------
 
@@ -125,6 +131,9 @@ class GraphPolicy:
     tamper: bool = True
     ui_verify: bool = False
     ui_verify_dist: str = UI_VERIFY_DIST
+    # delta_gate: retry só continua enquanto a régua graduada MEXE. Ligado por
+    # default — o objetivo é economizar turno; `false` volta ao retry cego.
+    delta_gate: bool = True
 
 
 def _policy_int(raw: Any, default: int) -> int:
@@ -172,6 +181,7 @@ def load_policy(path: Path | None = None) -> GraphPolicy:
         tamper=_policy_bool(nodes.get("tamper"), base.tamper),
         ui_verify=_policy_bool(nodes.get("ui_verify"), base.ui_verify),
         ui_verify_dist=_policy_str(data.get("ui_verify_dist"), base.ui_verify_dist),
+        delta_gate=_policy_bool(nodes.get("delta_gate"), base.delta_gate),
     )
 
 
@@ -210,6 +220,36 @@ def _gov_cost(run_id: str, db: Path, attempt: int, gov=None) -> str:
         except (TypeError, ValueError):
             continue
     return check_cost(spent, gov)
+
+
+def _score_series(run_id: str, db: Path, attempt: int) -> list[float]:
+    """Scores graduados das tentativas 0..attempt, na ordem, do ledger.
+
+    Do LEDGER e não do estado pelo mesmo motivo do `_gov_cost`: a nota da
+    tentativa anterior tem que sobreviver ao resume noutro processo — o estado
+    só carrega o veredito corrente (`_retry` limpa o resto de propósito).
+    Payload sem `score` (gravado antes da régua graduada existir) não entra:
+    fingir 1.0 aqui inventaria um gradiente que ninguém mediu.
+    """
+    out: list[float] = []
+    for a in range(max(0, int(attempt)) + 1):
+        ev = store.get_node(run_id, "verify", db, attempt=a) or {}
+        if "score" not in ev:
+            continue
+        try:
+            out.append(float(ev["score"]))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _stagnations(scores: Sequence[float]) -> int:
+    """Quantas tentativas seguidas não subiram a nota (`<=` conta como parada).
+
+    Empate é estagnação de propósito: mesma nota por caminho diferente é a
+    assinatura de quem está batendo na mesma parede.
+    """
+    return sum(1 for prev, now in zip(scores, scores[1:]) if now <= prev)
 
 
 def _cfg(config, key: str, default: Any = None) -> Any:
@@ -835,13 +875,48 @@ def _gate(state: RunState, config=None) -> dict:
     if action == "retry" and _gov_cost(state["run_id"], _db(config), attempt) == CUTOFF:
         action = "escalate_human"
         reason = f"{reason}; governor:custo_estourado"
+    # Gate de delta: tentativa que não move a régua graduada não ganha outra.
+    # Exige `[checks]` — sem eles o score é 1.0 fixo e "não subiu" não é notícia,
+    # então a unidade binária segue com o retry cego de sempre, bit a bit.
+    delta: dict[str, Any] = {}
+    if action == "retry" and policy.delta_gate and state["unit"].checks:
+        scores = _score_series(state["run_id"], _db(config), attempt)
+        if _stagnations(scores) >= DELTA_STAGNATIONS:
+            action = "escalate_human"
+            reason = f"{reason}; {DELTA_REASON}"
+            # Os dois scores viajam no evento porque é o que basta para quem lê a
+            # parada: "a nota não passou de X" é a evidência do motivo. O
+            # `escalate_reason` é o vocabulário fechado do `esc.REASONS` (o texto
+            # `sem_gradiente_de_score` é detalhe do gate, não motivo novo).
+            delta = {
+                "score_prev": scores[-2],
+                "score_now": scores[-1],
+                "stagnations": _stagnations(scores),
+                "escalate_reason": _delta_escalate_reason(),
+            }
     decision = Decision(action, reason)  # tipo do estado, não o do ruler
 
     return {
         "tamper": violations,
         "decision": decision,
-        "events": [_event("gate", action=decision.action, reason=decision.reason)],
+        "events": [
+            _event("gate", action=decision.action, reason=decision.reason, **delta)
+        ],
     }
+
+
+def _delta_escalate_reason() -> str:
+    """`esc.NO_GRADIENT` — o motivo do vocabulário fechado mais próximo daqui.
+
+    Import tardio como o do `prior_decisions` no `_prompt`: o vocabulário é do
+    lado da escalação, e um genoma sem o módulo não pode perder o gate por isso.
+    """
+    try:
+        from harness.improve.escalate import NO_GRADIENT
+
+        return NO_GRADIENT
+    except Exception:
+        return "no_gradient"
 
 
 def _accept(state: RunState, config=None) -> dict:

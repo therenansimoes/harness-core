@@ -51,6 +51,10 @@ class Project:
     # lockfile, antes do executor. Sem `setup_cmd` a detecção automática decide.
     setup_cmd: str | None = None
     setup_timeout: int = SETUP_TIMEOUT
+    # Env do projeto (`.env` do repo real, formato `NOME=valor`): entra no env
+    # dos subprocessos do run. Path relativo ao repo do projeto — o worktree do
+    # run é outro diretório, e o arquivo de segredo não é versionado.
+    env_file: str | None = None
 
 
 def projects_path() -> Path:
@@ -74,6 +78,7 @@ def load_projects(path: Path | None = None) -> dict[str, Project]:
             queue_dir=Path(raw["queue_dir"]) if raw.get("queue_dir") else None,
             setup_cmd=raw.get("setup_cmd"),
             setup_timeout=int(raw.get("setup_timeout", SETUP_TIMEOUT)),
+            env_file=raw.get("env_file"),
         )
     return out
 
@@ -96,6 +101,7 @@ def init_project(
     queue_dir: Path | str | None = None,
     setup_cmd: str | None = None,
     setup_timeout: int = SETUP_TIMEOUT,
+    env_file: str | None = None,
     path: Path | None = None,
 ) -> Project:
     """Registra (ou atualiza) um projeto. Idempotente: re-init sobrescreve a
@@ -114,6 +120,9 @@ def init_project(
         queue_dir=qdir.expanduser().resolve(),
         setup_cmd=setup_cmd,
         setup_timeout=setup_timeout,
+        # Relativo mesmo quando vier absoluto dentro do repo: o env do projeto
+        # tem de resolver a partir do worktree do run também.
+        env_file=_rel_env_file(env_file, repo),
     )
     target = path or projects_path()
     projs = load_projects(target)
@@ -121,6 +130,68 @@ def init_project(
     _write(projs, target)
     proj.queue_dir.mkdir(parents=True, exist_ok=True)
     return proj
+
+
+def _rel_env_file(env_file: str | Path | None, repo: Path) -> str | None:
+    if not env_file:
+        return None
+    p = Path(env_file).expanduser()
+    if p.is_absolute():
+        try:
+            return str(p.resolve().relative_to(repo))
+        except ValueError:
+            # Fora do repo: guarda absoluto, quem lê resolve como está.
+            return str(p)
+    return str(p)
+
+
+def env_file_path(proj: Project, ws: Path | str | None = None) -> Path | None:
+    """Onde o env do projeto mora. `ws` dado, resolve a partir dele (o worktree
+    do run tem o mesmo layout do repo); sem `ws`, a partir do repo real."""
+    if not proj.env_file:
+        return None
+    p = Path(proj.env_file).expanduser()
+    if p.is_absolute():
+        return p
+    base = Path(ws) if ws is not None else proj.repo
+    return base / p
+
+
+def load_env_file(path: Path | str | None) -> dict[str, str]:
+    """`NOME=valor` por linha. `#` comenta, linha sem `=` é ignorada, aspas do
+    valor caem. Arquivo ausente ou ilegível => `{}`: env de projeto é opcional
+    e não pode derrubar o run."""
+    if path is None:
+        return {}
+    p = Path(path)
+    if not p.is_file():
+        return {}
+    try:
+        texto = p.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        print(f"env_file: {p} ilegível, ignorando — {exc}", file=sys.stderr)
+        return {}
+    out: dict[str, str] = {}
+    for linha in texto.splitlines():
+        linha = linha.strip()
+        if not linha or linha.startswith("#") or "=" not in linha:
+            continue
+        if linha.startswith("export "):
+            linha = linha[len("export "):].lstrip()
+        nome, _, valor = linha.partition("=")
+        nome = nome.strip()
+        if not nome:
+            continue
+        valor = valor.strip()
+        if len(valor) >= 2 and valor[0] == valor[-1] and valor[0] in "\"'":
+            valor = valor[1:-1]
+        out[nome] = valor
+    return out
+
+
+def project_env(proj: Project, ws: Path | str | None = None) -> dict[str, str]:
+    """Env declarado pelo projeto, pronto para entrar no subprocess."""
+    return load_env_file(env_file_path(proj, ws))
 
 
 def queue_counts(proj: Project) -> tuple[int, int, int]:
@@ -381,6 +452,8 @@ def _write(projs: dict[str, Project], path: Path) -> None:
             lines.append(f"setup_cmd = {json.dumps(pr.setup_cmd)}")
         if pr.setup_timeout != SETUP_TIMEOUT:
             lines.append(f"setup_timeout = {pr.setup_timeout}")
+        if pr.env_file:
+            lines.append(f"env_file = {json.dumps(pr.env_file)}")
         lines.append("")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines), encoding="utf-8")

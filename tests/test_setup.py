@@ -1,5 +1,6 @@
 """Fase de setup: cache por lockfile, stamp só no sucesso, flock por projeto."""
 
+import os
 import subprocess
 import threading
 from pathlib import Path
@@ -177,3 +178,113 @@ def test_provision_de_projeto_grava_sec_setup(tmp_path, config_dir, data_dir):
     assert ev["setup_skipped"] is False
     assert ev["setup_failed"] is False
     assert final["decision"].action == "accept"
+
+
+# --- pin do python do projeto --------------------------------------------------
+
+
+def _fake_uv(bin_dir: Path, monkeypatch, instaladas: str) -> Path:
+    """`uv` de mentira no PATH: `python find <v>` só acha o que está em
+    `instaladas`, `python pin <v>` grava o que foi pedido num arquivo de prova."""
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    prova = bin_dir / "pinned.txt"
+    uv = bin_dir / "uv"
+    uv.write_text(
+        "#!/bin/sh\n"
+        f'case "$1 $2" in\n'
+        '  "python find")\n'
+        f'    case " {instaladas} " in *" $3 "*) echo /fake/bin/python$3; exit 0;; esac\n'
+        "    echo 'No interpreter found' >&2; exit 1;;\n"
+        '  "python pin")\n'
+        f'    echo "$3" > {prova}; echo "Pinned to $3"; exit 0;;\n'
+        "esac\n"
+        "exit 2\n",
+        encoding="utf-8",
+    )
+    uv.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    return prova
+
+
+def test_pin_usa_a_versao_do_python_version(tmp_path, monkeypatch):
+    ws = _ws(tmp_path, "ws")
+    (ws / ".python-version").write_text("3.11.9\n", encoding="utf-8")
+    prova = _fake_uv(tmp_path / "bin", monkeypatch, instaladas="3.11.9")
+
+    ok, detalhe = setup.pin_python(ws)
+
+    assert ok is True
+    assert prova.read_text(encoding="utf-8").strip() == "3.11.9"
+    assert "3.11.9" in detalhe
+
+
+def test_versao_nao_instalada_falha_com_instrucao(tmp_path, data_dir, monkeypatch):
+    ws = _ws(tmp_path, "ws")
+    (ws / ".python-version").write_text("3.13.1\n", encoding="utf-8")
+    prova = _fake_uv(tmp_path / "bin", monkeypatch, instaladas="3.11.9")
+
+    res = setup.ensure(ws, _proj("toy", "touch NAO_DEVERIA_RODAR.txt"))
+
+    assert res["ok"] is False
+    assert not (ws / "NAO_DEVERIA_RODAR.txt").exists()  # nem chega no setup_cmd
+    assert not prova.exists()  # e NÃO baixa toolchain
+    log = (ws / ".harness" / "setup.log").read_text(encoding="utf-8")
+    assert "uv python install 3.13.1" in log
+    assert "NÃO baixa" in log
+
+
+def test_sem_python_version_o_pin_e_noop(tmp_path, monkeypatch):
+    ws = _ws(tmp_path, "ws")
+    prova = _fake_uv(tmp_path / "bin", monkeypatch, instaladas="3.11.9")
+    assert setup.pin_python(ws) == (True, "")
+    assert not prova.exists()
+
+
+def test_python_version_vazio_ou_comentado_e_ignorado(tmp_path, monkeypatch):
+    ws = _ws(tmp_path, "ws")
+    (ws / ".python-version").write_text("# nada aqui\n\n", encoding="utf-8")
+    _fake_uv(tmp_path / "bin", monkeypatch, instaladas="3.11.9")
+    ok, detalhe = setup.pin_python(ws)
+    assert ok is True and "vazio" in detalhe
+
+
+def test_uv_ausente_nao_derruba_o_setup(tmp_path, monkeypatch):
+    ws = _ws(tmp_path, "ws")
+    (ws / ".python-version").write_text("3.11.9\n", encoding="utf-8")
+    monkeypatch.setenv("PATH", str(tmp_path / "vazio"))  # sem uv no PATH
+    ok, detalhe = setup.pin_python(ws)
+    assert ok is True and "uv ausente" in detalhe
+
+
+# --- redação e env do projeto no setup ----------------------------------------
+
+
+def test_setup_log_redige_segredo(tmp_path, data_dir):
+    ws = _ws(tmp_path, "ws")
+    res = setup.ensure(ws, _proj("toy", "echo 'authToken=sk-vazando123456789'; exit 1"))
+    assert res["ok"] is False
+    log = (ws / ".harness" / "setup.log").read_text(encoding="utf-8")
+    assert "sk-vazando123456789" not in log
+    assert "***" in log
+
+
+def test_ponteiro_do_env_e_gravado_e_o_setup_ve_a_var(tmp_path, data_dir):
+    ws = _ws(tmp_path, "ws")
+    envf = tmp_path / "projeto.env"
+    envf.write_text("PRIVATE_INDEX=https://interno/simple\n", encoding="utf-8")
+    proj = Project(name="toy", repo=tmp_path, setup_cmd='echo "idx=$PRIVATE_INDEX"',
+                   setup_timeout=30, env_file=str(envf))
+
+    res = setup.ensure(ws, proj)
+
+    assert res["ok"] is True
+    ptr = ws / ".harness" / "env_file"
+    assert ptr.read_text(encoding="utf-8") == str(envf)
+    log = (ws / ".harness" / "setup.log").read_text(encoding="utf-8")
+    assert "idx=https://interno/simple" in log
+
+
+def test_projeto_sem_env_file_nao_deixa_ponteiro(tmp_path, data_dir):
+    ws = _ws(tmp_path, "ws")
+    setup.ensure(ws, _proj("toy", "true"))
+    assert not (ws / ".harness" / "env_file").exists()

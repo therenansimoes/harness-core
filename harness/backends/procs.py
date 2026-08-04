@@ -144,12 +144,22 @@ def alloc_port() -> int:
 # --------------------------------------------------------------------------- #
 
 
+def _project_env(workspace: Path, env_file: str | Path | None) -> dict[str, str]:
+    """Env declarado pelo projeto do workspace (`DATABASE_URL` e afins). Perde
+    do `os.environ` do processo: var exportada na mão manda."""
+    from harness.backends.flow_tools import ws_env_file
+    from harness.projects import load_env_file
+
+    return load_env_file(env_file if env_file is not None else ws_env_file(workspace))
+
+
 def start(
     ws: str | Path,
     command: str,
     port: int | None = None,
     wait_path: str = "/",
     timeout: int = DEFAULT_TIMEOUT,
+    env_file: str | Path | None = None,
 ) -> dict:
     """Sobe `command` em background e espera a porta responder.
 
@@ -183,7 +193,7 @@ def start(
         proc = subprocess.Popen(
             argv,
             cwd=str(workspace),
-            env={**os.environ, "PORT": str(port)},
+            env={**_project_env(workspace, env_file), **os.environ, "PORT": str(port)},
             stdout=log,
             stderr=log,
             # Sessão nova: `npm run dev` gera filho, e matar só o pai deixa o
@@ -242,10 +252,15 @@ def _pgid_of(pid: int) -> int:
 
 
 def _tail(log_path: Path, lines: int = CRASH_LOG_LINES) -> str:
+    """Últimas linhas do log, redigidas: o tail vai para o modelo e para o
+    relatório do run, e boot de servidor ecoa env (`DATABASE_URL`, tokens)."""
+    from harness.redact import redact
+
     try:
-        return "\n".join(log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:])
+        texto = log_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
+    return redact("\n".join(texto.splitlines()[-lines:]))
 
 
 def _responde(port: int, path: str) -> bool:

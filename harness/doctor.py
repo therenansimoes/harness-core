@@ -71,6 +71,7 @@ def checks(root: Path | str | None = None, data: Path | None = None) -> list[Che
         *_optional_toml(base),
         _lineage(data_dir),
         _procs(data_dir),
+        _cache(data_dir),
         _executor(base),
         _lmstudio(base),
         *_backends(),
@@ -319,6 +320,25 @@ def _procs(data_dir: Path) -> Check:
             "procs", WARN, f"{orfaos} processo(s) órfão(s) — `harness procs --reap` limpa"
         )
     return Check("procs", OK, f"0 processos órfãos (registrados de runs vivos: {vivos})")
+
+
+def _cache(data_dir: Path) -> Check:
+    """Cache compartilhado de dependência (uv/npm) contra o teto.
+
+    AVISO, nunca FALHA: cache grande não impede nada de rodar, só come disco —
+    `harness cache-gc` resolve, e a decisão de podar é de quem lê.
+    """
+    from harness.workspace import cache_gc
+
+    usado, arquivos = cache_gc.usage(data_dir)
+    teto = int(cache_gc.DEFAULT_MAX_GB * cache_gc.GB)
+    tamanho = f"{cache_gc.human(usado)} em {arquivos} arquivo(s)"
+    if usado > teto:
+        return Check(
+            "cache", WARN,
+            f"{tamanho} > teto {cache_gc.human(teto)} — `harness cache-gc` poda",
+        )
+    return Check("cache", OK, f"{tamanho} (teto {cache_gc.human(teto)})")
 
 
 def _executor(base: Path) -> Check:

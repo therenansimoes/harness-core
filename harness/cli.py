@@ -35,6 +35,7 @@ from harness.ruler.gate import Decision, gate
 from harness.ruler.kpi import collect, load_kpis
 from harness.ruler.verify import VERIFY_CHECK_NAME, log_tail, run_log_dir, run_verify
 from harness.ruler.wilson import MIN_N, Arm, decide_ab, wilson_interval
+from harness.workspace import cache_gc
 from harness.types import Check, ExecRequest, ExecResult, RunRow, Selection, UnitSpec
 from harness.uiverify import ASSET_KINDS, DEFAULT_MIN_KB, SHOT_NAME
 from harness.workspace.provision import dispose, provision
@@ -894,6 +895,34 @@ def cmd_skills(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_cache_gc(args: argparse.Namespace) -> int:
+    """Poda o cache compartilhado de dependência até caber no teto.
+
+    LRU com trava: o que foi tocado nas últimas 24h fica, mesmo estourando o
+    teto — pode ser cache de run em voo. `--dry-run` só mostra o uso.
+    """
+    usado, arquivos = cache_gc.usage()
+    teto = int(args.max_gb * cache_gc.GB)
+    if args.dry_run:
+        estado = "acima do teto" if usado > teto else "ok"
+        print(
+            f"cache {cache_gc.human(usado)} em {arquivos} arquivo(s) "
+            f"(teto {cache_gc.human(teto)}): {estado}"
+        )
+        return 0
+    r = cache_gc.gc(max_gb=args.max_gb)
+    print(
+        f"cache {cache_gc.human(r['before'])} -> {cache_gc.human(r['after'])} "
+        f"(teto {cache_gc.human(r['max_bytes'])}): {r['removed']} arquivo(s) removido(s), "
+        f"{cache_gc.human(r['freed'])} liberado(s), {r['skipped_recent']} preservado(s) "
+        "por uso recente (<24h)"
+    )
+    if r["after"] > r["max_bytes"]:
+        # Não é falha: o que sobrou é cache quente, e derrubar run vivo é pior.
+        print("ainda acima do teto — o restante é uso recente", file=sys.stderr)
+    return 0
+
+
 def cmd_procs(args: argparse.Namespace) -> int:
     """Lista servidores registrados nos workspaces; `--reap` mata os órfãos.
 
@@ -1292,6 +1321,7 @@ def cmd_init(args: argparse.Namespace) -> int:
             queue_dir=args.queue_dir,
             setup_cmd=args.setup_cmd,
             setup_timeout=args.setup_timeout,
+            env_file=args.env_file,
         )
     except ValueError as exc:
         print(exc, file=sys.stderr)
@@ -1342,6 +1372,7 @@ def cmd_queue(args: argparse.Namespace) -> int:
             move=args.move,
             integrate_accepted=args.integrate,
             check_regression=args.regression,
+            use_zpd=args.zpd,
         )
     except ValueError as exc:
         print(exc, file=sys.stderr)
@@ -1449,6 +1480,10 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--setup-timeout", type=int, default=SETUP_TIMEOUT,
                       dest="setup_timeout",
                       help=f"teto em segundos do setup (default {SETUP_TIMEOUT})")
+    init.add_argument("--env-file", default=None, dest="env_file",
+                      help="env do projeto (ex.: .env), path RELATIVO ao repo; entra "
+                           "no env dos subprocessos do run. Valor de segredo é "
+                           "redigido dos logs")
     init.set_defaults(func=cmd_init, parser=init)
 
     status = sub.add_parser(
@@ -1483,6 +1518,13 @@ def build_parser() -> argparse.ArgumentParser:
                        help="re-roda o verify das unidades de done/ no repo depois "
                             "de cada integração (default: ligado). --no-regression "
                             "deixa conflito semântico passar silencioso")
+    queue.add_argument("--zpd", action="store_true",
+                       help="começa pela unidade com nota histórica na zona de "
+                            "desenvolvimento proximal (0.4-0.8) em vez da ordem de "
+                            "nome (default: desligado). Em fila de PROJETO a ordem "
+                            "de nome é a dependência e reordenar quebra a fila; use "
+                            "só em fila de prática/benchmark, onde as unidades são "
+                            "independentes")
     queue.set_defaults(func=cmd_queue, parser=queue)
 
     backends = sub.add_parser("backends", help="lista backends registrados + preflight")
@@ -1642,6 +1684,16 @@ def build_parser() -> argparse.ArgumentParser:
                            help="mata os processos cujo run já morreu (órfãos); "
                                 "run vivo nunca é tocado")
     procs_cmd.set_defaults(func=cmd_procs)
+
+    cache = sub.add_parser(
+        "cache-gc", help="poda o cache de dependência (uv/npm) até caber no teto"
+    )
+    cache.add_argument("--max-gb", type=float, default=cache_gc.DEFAULT_MAX_GB,
+                       dest="max_gb",
+                       help=f"teto em GB (default {cache_gc.DEFAULT_MAX_GB:g})")
+    cache.add_argument("--dry-run", action="store_true",
+                       help="só reporta o uso atual, não remove nada")
+    cache.set_defaults(func=cmd_cache_gc)
 
     add_cmd = sub.add_parser(
         "add", help="autora uma unit a partir de uma tarefa em linguagem natural"

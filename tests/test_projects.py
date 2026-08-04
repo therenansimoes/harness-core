@@ -1,5 +1,6 @@
 """Projetos reais: init -> worktree do repo -> branch de entrega no accept."""
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -12,12 +13,15 @@ from harness.projects import (
     QUEUE_DONE,
     QUEUE_STUCK,
     IntegrateError,
+    env_file_path,
     get_project,
     init_project,
     integrate,
+    load_env_file,
     load_projects,
     milestone_progress,
     milestones,
+    project_env,
 )
 from harness.routing import CONFIG_DIR_ENV
 
@@ -316,3 +320,103 @@ def test_status_mostra_marcos_e_toml_torto_só_avisa(
     cap = capsys.readouterr()
     assert cap.out.strip().splitlines() == [out[0]]
     assert "milestones:" in cap.err and "inválido" in cap.err
+
+
+# --- env do projeto (env_file) -------------------------------------------------
+
+
+def test_env_file_persiste_relativo_ao_repo(tmp_path, config_dir):
+    repo = _toy_repo(tmp_path)
+    (repo / ".env").write_text("API_TOKEN=abcdef123456\n", encoding="utf-8")
+
+    # Absoluto dentro do repo vira relativo: o worktree do run é outro
+    # diretório e tem de resolver o mesmo arquivo.
+    proj = init_project(repo, "toy", queue_dir=tmp_path / "fila",
+                        env_file=str(repo / ".env"))
+    assert proj.env_file == ".env"
+    assert load_projects()["toy"].env_file == ".env"
+    toml = (config_dir / "projects.toml").read_text(encoding="utf-8")
+    assert 'env_file = ".env"' in toml
+
+
+def test_env_file_ausente_nao_aparece_no_toml(tmp_path, config_dir):
+    repo = _toy_repo(tmp_path)
+    init_project(repo, "toy", queue_dir=tmp_path / "fila")
+    toml = (config_dir / "projects.toml").read_text(encoding="utf-8")
+    assert "env_file =" not in toml  # a chave; o path do tmp_path pode conter o nome
+    assert load_projects()["toy"].env_file is None
+
+
+def test_load_env_file_formatos(tmp_path):
+    f = tmp_path / ".env"
+    f.write_text(
+        "# comentário\n"
+        "\n"
+        "API_TOKEN=abc123\n"
+        'DB_URL="postgres://u:p@host/db"\n'
+        "QUOTED='single'\n"
+        "export EXPORTADA=sim\n"
+        "SEM_IGUAL\n"
+        "  ESPACO = folgado \n",
+        encoding="utf-8",
+    )
+    assert load_env_file(f) == {
+        "API_TOKEN": "abc123",
+        "DB_URL": "postgres://u:p@host/db",
+        "QUOTED": "single",
+        "EXPORTADA": "sim",
+        "ESPACO": "folgado",
+    }
+
+
+def test_load_env_file_ausente_e_vazio(tmp_path):
+    assert load_env_file(tmp_path / "nao-existe") == {}
+    assert load_env_file(None) == {}
+
+
+def test_project_env_resolve_do_workspace(tmp_path, config_dir):
+    repo = _toy_repo(tmp_path)
+    (repo / ".env").write_text("API_TOKEN=do-repo\n", encoding="utf-8")
+    proj = init_project(repo, "toy", queue_dir=tmp_path / "fila", env_file=".env")
+
+    ws = tmp_path / "wsenv"
+    ws.mkdir()
+    (ws / ".env").write_text("API_TOKEN=do-ws\n", encoding="utf-8")
+
+    assert project_env(proj) == {"API_TOKEN": "do-repo"}
+    assert project_env(proj, ws) == {"API_TOKEN": "do-ws"}
+    assert env_file_path(proj, ws) == ws / ".env"
+
+
+def test_cli_init_aceita_env_file(tmp_path, config_dir, capsys):
+    repo = _toy_repo(tmp_path)
+    rc = cli.main(["init", str(repo), "--name", "toy", "--env-file", ".env",
+                   "--queue-dir", str(tmp_path / "fila")])
+    capsys.readouterr()
+    assert rc == 0
+    assert load_projects()["toy"].env_file == ".env"
+
+
+def test_env_do_projeto_chega_no_subprocess_e_perde_do_processo(tmp_path):
+    from harness.backends.flow_tools import _env, ws_env_file
+
+    ws = tmp_path / "wsptr"
+    (ws / ".harness").mkdir(parents=True)
+    envf = tmp_path / "projeto.env"
+    envf.write_text("DB_URL=postgres://local\nHOME=nao-sobrescreve\n", encoding="utf-8")
+    (ws / ".harness" / "env_file").write_text(str(envf), encoding="utf-8")
+
+    assert ws_env_file(ws) == envf
+    env = _env(ws)
+    assert env["DB_URL"] == "postgres://local"
+    # Var já no processo ganha do arquivo: export na mão é intencional.
+    assert env["HOME"] == os.environ["HOME"]
+
+
+def test_sem_ponteiro_o_env_fica_como_antes(tmp_path):
+    from harness.backends.flow_tools import _env, ws_env_file
+
+    ws = tmp_path / "wssem"
+    ws.mkdir()
+    assert ws_env_file(ws) is None
+    assert "DB_URL" not in _env(ws)

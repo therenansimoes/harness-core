@@ -42,6 +42,8 @@ MAX_LINT_LINHAS = 10
 
 TESTS_LOG = ".harness/tests.log"
 INSTALL_AUDIT = ".harness/install-audit.log"
+# Ponteiro para o env do projeto, escrito no provisionamento do workspace.
+ENV_FILE_PTR = ".harness/env_file"
 PROCS_JSON = ".harness/procs.json"
 
 LOCKFILES = {
@@ -76,15 +78,38 @@ def _data_dir() -> Path:
     return Path(os.environ.get("HARNESS_DATA_DIR", "data"))
 
 
-def _env(workspace: Path) -> dict[str, str]:
+def ws_env_file(workspace: Path) -> Path | None:
+    """Env de projeto do workspace, se houver: `<ws>/.harness/env_file` guarda o
+    path (absoluto) escrito no provisionamento. Ponteiro em arquivo porque a
+    tool só conhece o ws — não há vínculo ws→projeto em memória aqui."""
+    ptr = Path(workspace) / ENV_FILE_PTR
+    if not ptr.is_file():
+        return None
+    try:
+        alvo = ptr.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    return Path(alvo) if alvo else None
+
+
+def _env(workspace: Path, env_file: Path | str | None = None) -> dict[str, str]:
     """Env do subprocess: venv do workspace no PATH, cache no data dir.
 
     O cache compartilhado é de propósito — baixar o mesmo tarball a cada run é
     o gasto mais bobo do loop. Vai por VARIÁVEL, nunca por flag: `--cache-dir`
     está na `GLOBAL_FLAGS` da cerca e o comando seria recusado.
+
+    `env_file` (default: o ponteiro do ws) traz o env do projeto. O env do
+    processo ganha do arquivo: quem exportou a var na mão está sobrescrevendo
+    de propósito, e um `.env` esquecido não pode mudar o run silenciosamente.
     """
+    from harness.projects import load_env_file
+
     venv = workspace / ".venv"
     env = dict(os.environ)
+    do_projeto = load_env_file(env_file if env_file is not None else ws_env_file(workspace))
+    for nome, valor in do_projeto.items():
+        env.setdefault(nome, valor)
     cache = _data_dir() / "cache"
     for nome, sub in (("UV_CACHE_DIR", "uv"), ("npm_config_cache", "npm")):
         destino = cache / sub
@@ -248,6 +273,8 @@ def _pacotes_node(workspace: Path) -> list[str]:
 
 def _audita_install(workspace: Path, antes: list[str], depois: list[str], rotulo: str) -> None:
     """Delta de pacotes em append-only: um run que instalou deixa rastro."""
+    from harness.redact import redact
+
     try:
         log = workspace / INSTALL_AUDIT
         log.parent.mkdir(parents=True, exist_ok=True)
@@ -256,9 +283,10 @@ def _audita_install(workspace: Path, antes: list[str], depois: list[str], rotulo
         with log.open("a", encoding="utf-8") as fh:
             fh.write(f"{ts}\t{rotulo}\tantes={len(antes)}\tdepois={len(depois)}\n")
             for pacote in sorted(depois_set - antes_set):
-                fh.write(f"{ts}\t{rotulo}\t+{pacote}\n")
+                # Nome de pacote pode carregar URL com token (`pkg @ git+https://…`).
+                fh.write(redact(f"{ts}\t{rotulo}\t+{pacote}\n"))
             for pacote in sorted(antes_set - depois_set):
-                fh.write(f"{ts}\t{rotulo}\t-{pacote}\n")
+                fh.write(redact(f"{ts}\t{rotulo}\t-{pacote}\n"))
     except OSError as exc:  # auditoria é diagnóstico, não pode derrubar a tool
         warn(f"install audit falhou: {exc}")
 
@@ -483,11 +511,16 @@ def _msg_jest(seguintes: list[str]) -> str:
 
 
 def _grava_log(workspace: Path, relativo: str, texto: str) -> str:
-    """Grava o log completo e devolve o path COMO O MODELO O VÊ (fs virtual)."""
+    """Grava o log completo e devolve o path COMO O MODELO O VÊ (fs virtual).
+
+    Passa pela redação: log de teste é a evidência que humano e modelo leem, e
+    teste que ecoa `Authorization:` não pode virar segredo em disco."""
+    from harness.redact import redact
+
     destino = workspace / relativo
     try:
         destino.parent.mkdir(parents=True, exist_ok=True)
-        destino.write_text(texto, encoding="utf-8")
+        destino.write_text(redact(texto), encoding="utf-8")
     except OSError as exc:
         warn(f"log {relativo} falhou: {exc}")
         return "(log indisponível)"
