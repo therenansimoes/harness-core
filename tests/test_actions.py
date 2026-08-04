@@ -64,10 +64,11 @@ def test_acoes_registradas():
         "prompt",
         "workflow",
         "skill_prune",
+        "procedural",
     ):
         assert name in found, name
         assert found[name].name == name
-    assert len(found) == 13, sorted(found)
+    assert len(found) == 14, sorted(found)
 
 
 def test_registro_sobrevive_modulo_opcional_ausente():

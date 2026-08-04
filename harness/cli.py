@@ -24,6 +24,8 @@ from pathlib import Path
 
 from harness.ab import ArmSpec, run_ab
 from harness.backends import registry
+from harness.improve.counterfactual import DEFAULT_LIMIT as WHATIF_LIMIT
+from harness.improve.counterfactual import MOCK_BACKEND
 from harness.improve.replay import DEFAULT_LIMIT
 from harness.ledger import store
 from harness.projects import SETUP_TIMEOUT
@@ -789,6 +791,21 @@ def cmd_replay(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_whatif(args: argparse.Namespace) -> int:
+    """Replay contrafactual: a config de hoje teria salvado os fracassos?
+
+    Sai 0 sempre que o relatório sai, inclusive com zero salvos e inclusive com
+    o ledger sem fracasso nenhum: "a config de hoje não salva nada disso" é
+    resultado da medição, não erro da CLI.
+    """
+    from harness.improve.counterfactual import run_whatif
+
+    run_whatif(
+        kind=args.kind, limit=args.limit, backend=args.backend, model=args.model
+    )
+    return 0
+
+
 def cmd_lineage(args: argparse.Namespace) -> int:
     """Árvore genealógica das mutações de código, com veredito do ledger.
 
@@ -1500,6 +1517,19 @@ def build_parser() -> argparse.ArgumentParser:
                         help=f"teto de linhas lidas do ledger, nos DOIS modos "
                              f"(default {DEFAULT_LIMIT})")
     replay.set_defaults(func=cmd_replay, parser=replay)
+
+    whatif = sub.add_parser(
+        "whatif", help="re-roda os fracassos do ledger com a config de hoje"
+    )
+    whatif.add_argument("--kind", default=None, metavar="K",
+                        help="só fracassos deste kind (default: todos)")
+    whatif.add_argument("--limit", type=int, default=WHATIF_LIMIT, metavar="N",
+                        help=f"quantas unidades re-rodar (default {WHATIF_LIMIT})")
+    whatif.add_argument("--backend", default=MOCK_BACKEND, metavar="B",
+                        help=f"executor do replay (default {MOCK_BACKEND})")
+    whatif.add_argument("--model", default=None, metavar="M",
+                        help="modelo do backend")
+    whatif.set_defaults(func=cmd_whatif)
 
     lineage = sub.add_parser(
         "lineage", help="árvore genealógica das mutações de código"
