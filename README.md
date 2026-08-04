@@ -78,7 +78,8 @@ verify — that is how the gate proves itself without spending on APIs.)
 `$HARNESS_DATA_DIR` (default `data/`, gitignored): `runs.sqlite` (ledger),
 `checkpoints.sqlite`, `ws/` (per-run worktrees), `logs/<run_id>/` (verify logs,
 kept outside the workspace so a retry cannot read them as source), `inbox/`
-(event triggers), `lineage.jsonl`, `frontier.jsonl`, `archive.sqlite`.
+(event triggers), `dreams/` (episodic consolidation reports), `lineage.jsonl`,
+`frontier.jsonl`, `node_approvals.jsonl`, `archive.sqlite`.
 
 Other commands:
 
@@ -90,17 +91,19 @@ $ uv run harness bench provision --n 10
 provision n=10 p50=0.069s p95=0.072s
 
 $ uv run harness doctor
-… doctor checks=17 falhas=0 avisos=0
+… doctor checks=18 falhas=0 avisos=0
 ```
 
 ## Architecture
 
 ```
 harness/
-  cli.py        21 subcommands (table below)
+  cli.py        22 subcommands (table below)
   types.py      UnitSpec ExecRequest ExecResult Selection Verdict RunRow MutationRow
   backends/     base(Protocol) registry(entry point) mock deepagents claude_code auth/
   graph/        run_graph (one run)  autopilot_graph (one improvement cycle)  topology
+                by_kind (a whole topology per kind)  reflect (retry's skeptic)
+                custom (named workflows)  plugin_nodes (approved plugin nodes)
   ruler/        wilson kpi verify note pareto gate    <- who measures and who decides
   genome/       genome tamper                          <- what may change
   routing/      kinds (WHAT it is)  router (HOW MUCH it may cost)
@@ -108,6 +111,7 @@ harness/
   workspace/    provision (git worktree + cache symlink), sealing
   improve/      target policy mutate escalate research codegen meta synthesize
                 exam coevolve redteam workflow_action replay lineage
+                dream (episodic consolidation) node_action topology_evolve
   evolve/       population (PBT) + fitness (gate-scored) + archive (MAP-Elites)
   skills/       load/select/render + attribution (per-skill lift)
   memory/       episodic (FTS5 case-based recall of past failures)
@@ -118,6 +122,7 @@ harness/
 skills/*.md     distilled skills (TOML frontmatter + markdown), loop-mutable
 prompts/        executor.md, the evolvable base prompt of the executor
 plugins/        the only loop-mutable CODE zone, judged by the sealed exam
+                nodes/ is the slot for graph nodes, approved one sha256 at a time
 config/*.toml   models kinds tools catalog genome graph mcp topology ruler
                 governor projects + workflows/  <- the loop-calibrable zone
 benchmarks/     held_in (evaluation units) quarantine (candidates) sealed (the exam)
@@ -131,10 +136,19 @@ process mid-`execute` and re-invoking the same thread finishes the run without
 executing twice (`tests/test_resume.py` does that with a real `kill -9`). The
 nodes are immutable in the genome, but the wiring is data: `config/topology.toml`
 declares nodes/edges validated fail-closed against the whitelist in
-`harness/graph/topology.py` (including the pass-through `reflect` node), and any
-failure falls back to the built-in topology with one line on stderr. Named
-variants live in `config/workflows/*.toml` (shipped: `hotfix`, `deep`) and are
-loop-mutable through the `workflow` action.
+`harness/graph/topology.py`, and any failure falls back to the built-in topology
+with one line on stderr. A `[kinds.<kind>]` section declares a *whole other*
+topology for units of that kind (`harness/graph/by_kind.py`): never a partial
+merge — the section replaces the graph or does not exist — and fail-open only at
+the edge, where anything malformed becomes one stderr line and the default
+graph. Named variants live in `config/workflows/*.toml` (shipped: `hotfix`,
+`deep`) and are loop-mutable through the `workflow` action.
+
+`reflect` is the checker half of the retry path (`harness/graph/reflect.py`):
+deterministic, $0, no LLM. It reads what the ruler charged and the attempt did
+not deliver, and writes a **structural** hint (files, KPI specs, exit reason)
+into the next attempt's prompt. The verifier's log text never enters that hint —
+a small model needs a file list, not the prose of its own failure.
 
 `provision` freezes the baseline (KPI specs and BEFORE values plus the genome
 tamper fingerprint, frozen defaults — a run does not redefine its own ruler),
@@ -203,7 +217,7 @@ stops and waits for a human instead of improvising.
 | `ab` | Wilson verdict between two arms |
 | `init` | register a real git repo as a project (writes `config/projects.toml`) |
 | `status` | per project: queue/done/stuck plus total ledger spend |
-| `queue` | drain a project's queue through the graph, one unit at a time (accept → `queue/done/`, stuck → `queue/stuck/`) |
+| `queue` | drain a project's queue through the graph, one unit at a time (accept → `queue/done/`, stuck → `queue/stuck/`; accepted branches are merged into the default branch, `--no-integrate` opts out) |
 | `backends` | list registered backends plus preflight |
 | `improve` | improvement cycle: mutate config and test it in A/B |
 | `replay` | attribute a historical delta to a mutation |
@@ -212,13 +226,14 @@ stops and waits for a human instead of improvising.
 | `ui-verify` | UI verify: serve the dist, check loadable assets, look at the screenshot |
 | `export` | pack skills plus routing prior into a `.tgz` bundle |
 | `import` | bring skills plus prior in from another project's bundle |
-| `doctor` | local diagnosis: backends, genome, config, data, tracing (17 checks) |
+| `doctor` | local diagnosis: backends, genome, config, data, tracing, plugin nodes (18 checks) |
 | `skills` | list loaded skills (name, kinds, description; `--lift` adds attribution) |
 | `actions` | list registry actions plus their KEEP/DISCARD tally from the ledger |
 | `add` | author a unit from a natural-language task (`--ui` appends a `ui-verify` step) |
 | `seal` | promote a quarantine exam into `benchmarks/sealed` (human act, `--yes`) |
 | `frontier` | list quarantine exams the current harness still fails |
 | `evolve` | PBT over configs: score each individual at the gate, archive the elites |
+| `webhook` | open the loopback HTTP port that drops events into the inbox (fail-closed) |
 | `bench` | measure the cost of a harness operation |
 
 ## Backends
@@ -263,7 +278,7 @@ The full cycle in one paragraph: the **policy** (`improve/policy.py`, a
 Wilson+UCB bandit over each action's historical KEEP rate, keyed on
 `(kind, action)`, deterministic with an rng seeded by `thread_id:cycle`, and
 consuming the governor's explore budget and bench) picks which of the registry's
-9 actions to try → the action runs `propose` → `apply` goes through a
+12 actions to try → the action runs `propose` → `apply` goes through a
 fail-closed **genome check** and, when the change touches the judge, through
 `meta_check` (which demands a green **sealed exam** plus a human ack) → the
 change is judged by an alternating **A/B** (Wilson) or by the sealed exam →
@@ -280,10 +295,26 @@ The registered actions (`uv run harness actions`):
 | `synthesize` | turns failed runs into quarantine exams | A/B |
 | `redteam` | attacks its own skills/prompt, files counter-examples in quarantine | A/B |
 | `topology` | node/edge wiring in `config/topology.toml` | A/B |
+| `topology_kind` | structural operators over one kind's `[kinds.<kind>]` graph | A/B |
 | `workflow` | named workflows in `config/workflows/*.toml` | A/B |
+| `dream` | consolidates episodic memory: merges recurrences, archives orphans | A/B |
+| `node` | a new graph node under `plugins/nodes/` | sealed exam + `HARNESS_NODE_ACK=1` |
 | `evolve` | knobs in `config/models.toml` via population mutation | A/B |
 | `skill_prune` | moves low-lift skills to `skills/attic/` (never deletes) | A/B |
 | `prompt` | `prompts/executor.md` (PromptBreeder-lite, 4 deterministic operators) | A/B |
+
+Two of those actions change the shape of the loop rather than a knob.
+`topology_kind` mutates the graph of a single kind through structural operators
+(`insert_node`, `remove_node`, `rewire_edge`, `split_parallel`) checked against
+the grammar in `improve/topology_grammar.py`, so a bad rewrite is rejected before
+the A/B ever runs: `split_parallel` in particular only produces a closed diamond
+of **events-only** nodes, which today means it waits for the first approved
+plugin node — a branch that writes state does not get to run in parallel.
+`dream` is the offline half: no LLM, no network, it reads the episodic index,
+fuses the recurrent traces into at most one candidate skill per session, soft-
+archives the one-off episodes that aged out, and writes the report to
+`data/dreams/`. `scripts/evolve.sh` calls `should_dream` before `improve`, so the
+loop only sleeps when there is sleep debt.
 
 Config mutations are not invented from scratch: they come from a declared
 catalog (`config/catalog.toml`). Each `[[rule]]` is a falsifiable hypothesis
@@ -304,7 +335,9 @@ Beyond the per-mutation loop there are three longer arcs:
   discoverable units, or any exception, means False). `improve/coevolve.py`
   (POET-style) screens `benchmarks/quarantine/` and reports the *frontier* —
   the candidates today's harness still fails — into `data/frontier.jsonl`;
-  `harness frontier` prints it. Sealing a candidate stays a human act
+  `harness frontier` prints it (currently 5 real exams carved out of a workshop
+  project: `u1_esqueleto`, `u3_busca`, `u4_dark_mode`, `u5_grafico_svg`,
+  `u6_sobre_e_validacao`). Sealing a candidate stays a human act
   (`harness seal <name> --yes`).
 - **Population evolution.** `harness evolve` runs PBT over config individuals
   where fitness is the gate's own verdict (`RunRow.ok`, the same thing the A/B
@@ -313,8 +346,11 @@ Beyond the per-mutation loop there are three longer arcs:
 - **Memory and transfer.** `harness/memory/episodic.py` keeps an FTS5 index of
   past failure traces in the ledger DB; the deepagents backend recalls the top
   matches for the unit's kind and prepends them to the system prompt (fully
-  fail-open: no FTS5 build means a silent no-op). `harness export` / `harness
-  import` move skills plus the routing prior between projects as a `.tgz`.
+  fail-open: no FTS5 build means a silent no-op). `HARNESS_EPISODIC=0` is the
+  kill switch, read on every call — the sealed exam and the frontier screening
+  run with memory off, so a recalled episode cannot flatter the judge.
+  `harness export` / `harness import` move skills plus the routing prior between
+  projects as a `.tgz`.
 
 ## Real projects
 
@@ -329,6 +365,10 @@ a time, each in its own git worktree on an ephemeral branch. The queue is
 progressive: a unit that does not accept **stops** the loop, because the next one
 depends on it. Accepted work is delivered as branch `harness/<unit_id>` for human
 review and the unit moves to `queue/done/`; a stuck unit moves to `queue/stuck/`.
+The accepted branch is then merged into the repo's default branch, because the
+queue is progressive and the next unit has to see the previous one;
+`--no-integrate` turns that off and each unit starts from `HEAD` blind to its
+predecessor.
 `harness status` counts those buckets plus total spend per project. `--no-move`
 is a dry run (it executes and touches nothing in the queue), and
 `scripts/queue_run.py` is now a thin env-var wrapper over the same driver
@@ -357,8 +397,8 @@ overrides the token so a deployment need not write the secret to a file.
 
 ## What is proven and what is not
 
-`726 passed, 2 deselected` on `uv run --extra deepagents pytest -q`;
-`uv run harness doctor` reports 17 checks, 0 failures, 0 warnings; the loop has
+`805 passed, 2 deselected` on `uv run --extra deepagents pytest -q`;
+`uv run harness doctor` reports 18 checks, 0 failures, 0 warnings; the loop has
 been run end to end against a local LM Studio/MLX model at $0. No benchmark
 numbers are claimed here, because none have been measured on a public suite.
 

@@ -11,7 +11,7 @@ be broken or unfinished. It is not a changelog and not a roadmap.
 
 The `harness/` package (vendor-agnostic core) on LangGraph runs units of work
 through a graph (`plan → route → provision → execute → verify → measure → gate →
-record`), measures KPIs against a frozen baseline, and evolves itself through 9
+record`), measures KPIs against a frozen baseline, and evolves itself through 12
 registered actions inside the genome's mutable zones, judged by a ruler it
 cannot touch. Source of truth for runs: `data/runs.sqlite` (TSV is an export).
 The legacy tree in `legacy/` is frozen read-only reference, excluded from pytest
@@ -22,8 +22,11 @@ the public repo carries only fixtures and synthetic benchmarks.
 
 Measured on this machine, on the current tree:
 
-- `uv run --extra deepagents pytest -q` → **726 passed, 2 deselected** (21s).
-- `uv run harness doctor` → **17 checks, 0 failures, 0 warnings**.
+- `uv run --extra deepagents pytest -q` → **805 passed, 2 deselected** (27s).
+- `uv run harness doctor` → **18 checks, 0 failures, 0 warnings**.
+- `uv run harness actions` → **12 registered actions**.
+- `uv run harness frontier` → **5 open exams** (quarantine candidates the
+  current harness fails).
 - `uv run harness bench provision --n 10` → p50 ~0.07–0.09s (git worktree,
   versus 50–200s for the legacy copy-based provisioner).
 - Real kill-9 resume test passes (`tests/test_resume.py`).
@@ -45,6 +48,15 @@ command and output pasted next to it.
   `config/workflows/{hotfix,deep}.toml`, validated fail-closed against the
   `NODE_IMPLS` whitelist; any failure falls back to the built-in topology with
   one stderr line.
+- **Topology per kind**: an optional `[kinds.<kind>]` section in
+  `config/topology.toml` replaces the *whole* graph for units of that kind
+  (`harness/graph/by_kind.py`). Never a partial merge (section with only `nodes`
+  or only `edges` is a fail-closed `TopologyError`); fail-open only at
+  `build_for_unit`, which degrades to the default graph with one stderr line.
+- **reflect**: the checker of the retry path (`harness/graph/reflect.py`),
+  deterministic and $0. The hint it injects into the next attempt is
+  **structural** by design — file list, KPI specs, exit reason — and never
+  carries the verifier's log text.
 - **ruler**: wilson, kpi, verify (exit code is the verdict; log written to
   `$HARNESS_DATA_DIR/logs/<run_id>/`, outside the workspace), note, gate.
   Knobs in `config/ruler.toml`, each falling back to a frozen default.
@@ -55,9 +67,18 @@ command and output pasted next to it.
 - **governor**: run/cycle deadlines, `cost_cap_usd`, `turn_taper`, explore
   budget and action bench with expiry. Pure functions, injected clock,
   fail-open per field; mutating it requires the meta-exam.
-- **autopilot + 9 actions** (`research`, `codegen`, `synthesize`, `redteam`,
-  `topology`, `workflow`, `evolve`, `skill_prune`, `prompt`), all writing
-  atomically and only after the genome check.
+- **autopilot + 12 actions** (`research`, `codegen`, `synthesize`, `redteam`,
+  `topology`, `topology_kind`, `workflow`, `evolve`, `skill_prune`, `prompt`,
+  `dream`, `node`), all writing atomically and only after the genome check.
+- **structural operators for `topology_kind`** (`insert_node`, `remove_node`,
+  `rewire_edge`, `split_parallel`), checked against
+  `improve/topology_grammar.py` before the A/B: `split_parallel` only emits a
+  closed diamond whose branches are events-only nodes, so a branch that writes
+  state never runs in parallel.
+- **dream**: offline consolidation of episodic memory (no LLM, no network) —
+  fuses recurrent traces into at most one candidate skill, soft-archives aged-out
+  orphans, writes the report to `data/dreams/`. `scripts/evolve.sh` gates it on
+  `should_dream`, so the loop only sleeps when there is sleep debt.
 - **bandit policy** over KEEP rate keyed on `(kind, action)`, deterministic,
   consuming the governor's explore budget and bench list.
 - **sealed exam**: `improve/exam.py` discovers `benchmarks/sealed/*/unit.toml`
@@ -72,33 +93,46 @@ command and output pasted next to it.
 - **lineage**: `data/lineage.jsonl` plus `harness lineage`, tolerant to a
   malformed line, orphan becomes root, enriched with verdicts from `mutations`.
 - **real projects**: `harness init` / `add` / `queue` / `status` against actual
-  git repos, one worktree and one branch per unit.
+  git repos, one worktree and one branch per unit; `harness queue --integrate`
+  (on by default) merges each accepted delivery into the default branch so the
+  next unit of the progressive queue sees it.
 - **triggers**: JSON inbox with `done/`/`bad/` quarantine, ledger and inbox
   pollers, and a fail-closed HTTP webhook (403 without a token, per-IP rate
   limit, body ceiling).
 - **report**: `harness report` joins runs, mutations, skill usage and lineage
   into markdown; every section is fail-open and degrades to "(no data)".
-- **doctor**: 17 checks including the evolution surfaces (skills, topology,
-  actions, ruler, mcp, lineage, executor).
+- **doctor**: 18 checks including the evolution surfaces (skills, topology,
+  actions, ruler, mcp, lineage, executor, plugin nodes).
+- **episodic memory**: FTS5 index over failure traces, namespaced on the
+  **global** `HARNESS_DATA_DIR` (not the experiment's db), recalled by the
+  deepagents backend per kind, soft archiving in a companion table, and
+  `HARNESS_EPISODIC=0` as a kill switch read on every call. The sealed exam and
+  the frontier screening run inside `episodic.disabled()`, so a recalled episode
+  cannot flatter the judge.
 
 ## Experimental (works, thin evidence, expect the shape to change)
 
 - **Pareto gate** (`ruler/pareto.py`): shipped `enabled = false`. Turning it on
   makes a Wilson KEEP that regressed cost or wall time INCONCLUSIVE. Not yet
   exercised by a long run, so the tolerances (10%/10%) are guesses.
-- **coevolve / frontier** (POET): the frontier screening runs candidates with
-  the mock backend by default, so "the harness fails this" currently means "the
-  mock path fails this". Useful as a curriculum signal, not as a difficulty
-  measurement.
+- **coevolve / frontier** (POET): the quarantine now holds 5 real exams carved
+  out of a workshop project (`u1_esqueleto`, `u3_busca`, `u4_dark_mode`,
+  `u5_grafico_svg`, `u6_sobre_e_validacao`) and all 5 are on the frontier. But
+  the screening runs candidates with the mock backend by default, so "the harness
+  fails this" currently means "the mock path fails this". Useful as a curriculum
+  signal, not as a difficulty measurement.
 - **redteam**: counter-examples land in quarantine as candidate exams. Whether
   the model actually finds real instruction bugs (rather than restating the
   skill) has not been measured across enough cycles to tell.
 - **evolve (PBT + MAP-Elites)**: fitness is the real gate verdict, and the
   archive works, but the population sizes that have actually been run are tiny
   (pop 4, 1 generation). No claim about convergence.
-- **episodic memory**: recall is wired into the deepagents system prompt and
-  writes happen on failure in `run_graph`. Fail-open everywhere, but see the
-  divergence gap below.
+- **plugin nodes** (`harness/graph/plugin_nodes.py` + the `node` action): a
+  module under `plugins/nodes/` becomes a graph node only after the AST guard,
+  the sealed exam, an explicit `HARNESS_NODE_ACK=1`, and an exact sha256 recorded
+  in `data/node_approvals.jsonl`. The machinery and the `doctor` check are in;
+  `HARNESS_PLUGIN_NODES` is the kill switch. No node has been approved yet, so
+  the path is proven by tests, not by use.
 - **ui-verify**: asset and screenshot-size checks are deterministic and cheap;
   `--ask` (a model looking at the screenshot) is opt-in, costs ~$0.01 per call,
   and has no accuracy measurement behind it.
@@ -109,13 +143,19 @@ command and output pasted next to it.
 
 ## Known gaps
 
-- **Episodic write/recall DB divergence in A/B.** `run_graph` records failures
-  into the run's ledger DB, while the deepagents backend recalls from the
-  default `$HARNESS_DATA_DIR` DB. When an A/B fans out into a temporary
-  `data_dir`, the write and the read hit different databases, so recall silently
-  returns nothing for that arm. It never returns *wrong* memories — it returns
-  none — but any measurement of "does memory help" inside an A/B is currently
-  measuring the empty case.
+- **`u4_dark_mode` is an open model frontier, not a harness bug.** The local
+  model does not land it; the unit is well formed and its verify is
+  deterministic. It stays in quarantine as the honest marker of where the
+  current executor ends, and closing it means a better model or a better skill,
+  not a change to the ruler.
+- **`split_parallel` has never produced a live diamond.** The operator and the
+  grammar are done, but a closed diamond requires events-only branches, and the
+  only source of those is an approved plugin node — of which there are zero. The
+  operator is exercised by tests only.
+- **The frontier screening still runs on `mock`.** Same root cause as the sealed
+  exam gap below: the 5 quarantine exams are real, but "the harness fails this"
+  is measured through the mock path, so the frontier ranks candidates by
+  plumbing, not by difficulty.
 - **`harness run --max-turns` does not apply in project mode.** A unit with
   `project =` is routed through the graph, which takes its turn ceiling from
   `config/graph.toml` plus the governor. The CLI prints a warning on stderr
