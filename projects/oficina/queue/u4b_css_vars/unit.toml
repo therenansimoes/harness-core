@@ -1,0 +1,54 @@
+# Painel da Oficina — unidade autorada à mão; verify_cmd escrito ANTES do run.
+# Fatia 2/3 do antigo u4_dark_mode (em queue/retired/): só style.css — os dois
+# temas declarados e o body consumindo var(--bg)/var(--fg), sem hex sobrando.
+id = "u4b_css_vars"
+kind = "code"
+project = "oficina"
+prompt = "Leia prompt.md no diretório de trabalho e cumpra o que está lá à risca. Trabalhe no diretório de trabalho atual (é o repo do site); todos os arquivos do site ficam em dist/."
+verify_cmd = '''
+set -ex
+python3 - <<'PY'
+import os, re, sys
+if not os.path.isfile('dist/style.css'):
+    sys.exit('falta dist/style.css — esta unidade edita a folha de estilo do site')
+css = re.sub(r'/\*.*?\*/', '', open('dist/style.css', encoding='utf-8').read(), flags=re.S)
+erros = []
+if not re.search(r':root\s*\{[^}]*--bg\s*:', css, re.S):
+    erros.append('style.css sem :root definindo --bg')
+if not re.search(r':root\s*\{[^}]*--fg\s*:', css, re.S):
+    erros.append('style.css sem :root definindo --fg')
+escuro = re.search(r'\[\s*data-theme\s*=\s*["\']?dark["\']?\s*\][^{]*\{([^}]*)\}', css, re.S)
+if not escuro:
+    erros.append('style.css sem a regra [data-theme="dark"] { ... }')
+else:
+    if '--bg' not in escuro.group(1):
+        erros.append('[data-theme="dark"] nao redefine --bg')
+    if '--fg' not in escuro.group(1):
+        erros.append('[data-theme="dark"] nao redefine --fg')
+for nome in ('--bg', '--fg'):
+    n = len(re.findall(re.escape(nome) + r'\s*:', css))
+    if n < 2:
+        erros.append(f'{nome} definido {n}x em style.css; precisa dos DOIS temas (claro e escuro)')
+regras = re.findall(r'([^{}]+)\{([^{}]*)\}', css)
+corpo = ';'.join(d for s, d in regras if re.search(r'(^|[\s,>+~])body\b', s))
+if not corpo.strip():
+    erros.append('style.css sem nenhuma regra para body')
+else:
+    if 'var(--bg)' not in corpo:
+        erros.append('body nao usa var(--bg) — o fundo continua fixo')
+    if 'var(--fg)' not in corpo:
+        erros.append('body nao usa var(--fg) — a cor do texto continua fixa')
+    for decl in corpo.split(';'):
+        if ':' not in decl:
+            continue
+        prop, val = decl.split(':', 1)
+        if prop.strip().lower() in ('color', 'background', 'background-color') and 'var(--' not in val:
+            erros.append(f'body ainda tem cor fixa: {decl.strip()} — troque por var(--bg)/var(--fg)')
+if erros:
+    sys.exit('\n'.join(erros))
+print('u4b ok: dois temas em style.css e body consumindo as variaveis')
+PY
+grep -q ':root' dist/style.css
+grep -q 'data-theme' dist/style.css
+grep -q 'var(--' dist/style.css
+'''

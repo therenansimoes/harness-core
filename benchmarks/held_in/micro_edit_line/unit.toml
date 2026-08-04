@@ -1,0 +1,33 @@
+id = "micro_edit_line"
+kind = "code"
+# Micro-unidade com seed: `config.py` já vem no workspace (seed_workspace copia
+# tudo menos o unit.toml), então o modelo só edita — não precisa criar.
+requires_real_backend = true
+prompt = "Leia prompt.md no diretório de trabalho e cumpra o que está lá à risca. O arquivo a editar (`config.py`) já está no diretório de trabalho atual."
+verify_cmd = '''
+set -ex
+test -f config.py || { echo "FALHA: config.py nao existe mais no diretorio de trabalho"; exit 1; }
+python3 - <<'PY'
+import ast
+import re
+
+src = open('config.py', encoding='utf-8').read()
+ast.parse(src)   # o arquivo tem que continuar sendo Python valido
+
+assert re.search(r'^TIMEOUT_SEGUNDOS\s*=\s*90\s*$', src, re.M), \
+    'FALHA: config.py nao tem a linha TIMEOUT_SEGUNDOS = 90'
+assert not re.search(r'TIMEOUT_SEGUNDOS\s*=\s*30', src), \
+    'FALHA: config.py ainda tem TIMEOUT_SEGUNDOS = 30 (a linha nao foi trocada)'
+
+linhas = [l for l in src.splitlines() if l.strip()]
+tent = [l for l in linhas if l.startswith('MAX_TENTATIVAS')]
+assert tent and tent[0].split('=')[1].strip() == '3', \
+    f'FALHA: MAX_TENTATIVAS foi alterado, tinha que continuar 3: {tent}'
+fila = [l for l in linhas if l.startswith('FILA')]
+assert fila and 'padrao' in fila[0], \
+    f'FALHA: FILA foi alterado, tinha que continuar padrao: {fila}'
+assert len(linhas) == 4, \
+    f'FALHA: config.py tem {len(linhas)} linhas nao vazias, esperado 4 (nada a mais, nada a menos): {linhas}'
+print('micro_edit_line ok')
+PY
+'''

@@ -1,0 +1,35 @@
+# Painel da Oficina — unidade autorada à mão; verify_cmd escrito ANTES do run.
+# Fatia 1/3 do antigo u4_dark_mode (em queue/retired/): só o botão e o arquivo
+# tema.js vazio em toda página — nada de CSS e nada de JS de comportamento.
+id = "u4a_botao_tema"
+kind = "code"
+project = "oficina"
+prompt = "Leia prompt.md no diretório de trabalho e cumpra o que está lá à risca. Trabalhe no diretório de trabalho atual (é o repo do site); todos os arquivos do site ficam em dist/."
+verify_cmd = '''
+set -ex
+python3 - <<'PY'
+import glob, os, re, sys
+BOTAO = re.compile(r'<button\b[^>]*id=["\']tema["\']', re.I)
+SCRIPT = re.compile(r'<script\b[^>]*src=["\']tema\.js["\']', re.I)
+BLOCO = re.compile(r'<(header|nav)\b.*?</\1>', re.I | re.S)
+pages = sorted(glob.glob('dist/*.html'))
+erros = []
+if len(pages) < 2:
+    erros.append(f'esperado ao menos 2 paginas em dist/, achei {len(pages)}: {pages}')
+if not os.path.isfile('dist/tema.js'):
+    erros.append('falta dist/tema.js — crie o arquivo (pode ter só um comentario)')
+for p in pages:
+    h = open(p, encoding='utf-8').read()
+    if not BOTAO.search(h):
+        erros.append(f'{p}: sem <button id="tema"> na pagina')
+    elif not any(BOTAO.search(m.group(0)) for m in BLOCO.finditer(h)):
+        erros.append(f'{p}: o botao id="tema" existe mas esta fora de <header> e de <nav>')
+    if not SCRIPT.search(h):
+        erros.append(f'{p}: sem <script src="tema.js"></script>')
+if erros:
+    sys.exit('\n'.join(erros))
+print('u4a ok:', len(pages), 'paginas com botao de tema e tema.js carregado')
+PY
+grep -q 'id="tema"' dist/index.html
+grep -q 'tema\.js' dist/index.html
+'''

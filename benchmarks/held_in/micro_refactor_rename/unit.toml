@@ -1,0 +1,31 @@
+id = "micro_refactor_rename"
+kind = "refactor"
+# Micro-unidade de refactor: 3 arquivos de seed, um rename e dois call sites.
+# O grep do nome velho olha só os .py do seed — prompt.md também cita o nome
+# antigo, e varrer o diretório inteiro reprovaria a solução correta.
+requires_real_backend = true
+prompt = "Leia prompt.md no diretório de trabalho e cumpra o que está lá à risca. Os arquivos a editar (`util.py`, `pedido.py`, `relatorio.py`) já estão no diretório de trabalho atual."
+verify_cmd = '''
+set -ex
+for f in util.py pedido.py relatorio.py; do
+  test -f "$f" || { echo "FALHA: $f nao existe mais no diretorio de trabalho"; exit 1; }
+done
+if grep -n 'calcula_total' util.py pedido.py relatorio.py; then
+  echo "FALHA: o nome antigo calcula_total ainda aparece nas linhas acima"
+  exit 1
+fi
+grep -q 'def soma_total' util.py || { echo "FALHA: util.py nao tem 'def soma_total'"; exit 1; }
+python3 - <<'PY'
+import pedido
+import relatorio
+import util
+
+assert hasattr(util, 'soma_total'), 'FALHA: util.py nao expoe soma_total'
+assert not hasattr(util, 'calcula_total'), 'FALHA: util.py ainda expoe calcula_total'
+assert pedido.total_pedido([1, 2, 3]) == 6, \
+    f'FALHA: pedido.total_pedido([1,2,3]) devolveu {pedido.total_pedido([1, 2, 3])!r}, esperado 6'
+assert relatorio.linha_relatorio([1, 2, 3]) == 'total=6', \
+    f'FALHA: relatorio.linha_relatorio([1,2,3]) devolveu {relatorio.linha_relatorio([1, 2, 3])!r}, esperado "total=6"'
+print('micro_refactor_rename ok')
+PY
+'''

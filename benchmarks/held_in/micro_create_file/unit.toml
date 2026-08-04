@@ -1,0 +1,19 @@
+id = "micro_create_file"
+kind = "code"
+# Micro-unidade: um 9B local resolve em 1-3 min e o verify fecha em segundos.
+# O mock só escreve mock_output.txt, então sob exame mock isto seria falha
+# garantida — fora do relatório, igual task_oss_b2b.
+requires_real_backend = true
+prompt = "Leia prompt.md no diretório de trabalho e cumpra o que está lá à risca. Trabalhe no diretório de trabalho atual."
+verify_cmd = '''
+set -ex
+test -f saudacao.txt || { echo "FALHA: saudacao.txt nao existe no diretorio de trabalho"; exit 1; }
+grep -Fxq 'projeto: harness-core' saudacao.txt || { echo "FALHA: saudacao.txt nao tem a linha exata: projeto: harness-core"; exit 1; }
+grep -Fxq 'versao: 1' saudacao.txt || { echo "FALHA: saudacao.txt nao tem a linha exata: versao: 1"; exit 1; }
+grep -Fxq 'autor: oficina' saudacao.txt || { echo "FALHA: saudacao.txt nao tem a linha exata: autor: oficina"; exit 1; }
+python3 - <<'PY'
+linhas = [l for l in open('saudacao.txt', encoding='utf-8').read().splitlines() if l.strip()]
+assert len(linhas) == 3, f'FALHA: saudacao.txt tem {len(linhas)} linhas nao vazias, esperado exatamente 3: {linhas}'
+print('micro_create_file ok')
+PY
+'''

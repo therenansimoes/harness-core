@@ -1,0 +1,9 @@
+{
+  "itens": [
+    {"nome": "parafuso", "qtd": 10, "ativo": true},
+    {"nome": "porca", "qtd": 4, "ativo": false},
+    {"nome": "arruela", "qtd": 7, "ativo": true},
+    {"nome": "prego", "qtd": 2, "ativo": false},
+    {"nome": "bucha", "qtd": 5, "ativo": true}
+  ]
+}

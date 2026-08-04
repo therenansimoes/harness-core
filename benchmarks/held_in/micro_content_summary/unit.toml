@@ -1,0 +1,23 @@
+id = "micro_content_summary"
+kind = "content"
+# Micro-unidade de conteúdo: 3 bullets a partir de fixtures/texto.md. Os fatos
+# obrigatórios são todos ASCII de propósito — grep de fato com acento depende de
+# locale e reprovaria resumo correto.
+requires_real_backend = true
+prompt = "Leia prompt.md no diretório de trabalho e cumpra o que está lá à risca. O texto de origem já está em fixtures/texto.md, dentro do diretório de trabalho atual."
+verify_cmd = '''
+set -ex
+test -f resumo.md || { echo "FALHA: resumo.md nao existe na raiz do diretorio de trabalho"; exit 1; }
+grep -Fq '1998' resumo.md || { echo "FALHA: resumo.md nao cita o ano de fundacao (1998)"; exit 1; }
+grep -Fq '320' resumo.md || { echo "FALHA: resumo.md nao cita os 320 clientes"; exit 1; }
+grep -Fq 'Mogi' resumo.md || { echo "FALHA: resumo.md nao cita a cidade (Mogi das Cruzes)"; exit 1; }
+python3 - <<'PY'
+linhas = [l.strip() for l in open('resumo.md', encoding='utf-8').read().splitlines() if l.strip()]
+bullets = [l for l in linhas if l.startswith('- ') or l.startswith('* ')]
+assert len(bullets) == 3, \
+    f'FALHA: resumo.md tem {len(bullets)} bullets, esperado exatamente 3: {bullets}'
+assert len(linhas) == 3, \
+    f'FALHA: resumo.md tem {len(linhas)} linhas nao vazias, esperado so os 3 bullets (sem titulo, sem texto solto): {linhas}'
+print('micro_content_summary ok')
+PY
+'''

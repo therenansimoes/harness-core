@@ -1,0 +1,33 @@
+id = "micro_two_files"
+kind = "code"
+# Micro-unidade: dois arquivos, o segundo importa o primeiro. O verify roda o
+# script de verdade — referência quebrada não passa por leitura de texto.
+requires_real_backend = true
+prompt = "Leia prompt.md no diretório de trabalho e cumpra o que está lá à risca. Trabalhe no diretório de trabalho atual."
+verify_cmd = '''
+set -ex
+test -f dados.py || { echo "FALHA: dados.py nao existe no diretorio de trabalho"; exit 1; }
+test -f usa_dados.py || { echo "FALHA: usa_dados.py nao existe no diretorio de trabalho"; exit 1; }
+python3 - <<'PY'
+import re
+import subprocess
+import sys
+
+src = open('usa_dados.py', encoding='utf-8').read()
+assert re.search(r'(^|\n)\s*(import\s+dados|from\s+dados\s+import)', src), \
+    'FALHA: usa_dados.py nao importa o modulo dados (esperado "from dados import NOMES" ou "import dados")'
+
+import dados
+
+assert hasattr(dados, 'NOMES'), 'FALHA: dados.py nao define a lista NOMES'
+assert list(dados.NOMES) == ['ana', 'bruno', 'carla'], \
+    f'FALHA: dados.NOMES = {dados.NOMES!r}, esperado ["ana", "bruno", "carla"] nessa ordem'
+
+p = subprocess.run([sys.executable, 'usa_dados.py'], capture_output=True, text=True)
+assert p.returncode == 0, \
+    f'FALHA: usa_dados.py saiu com codigo {p.returncode}. stderr: {p.stderr.strip()}'
+saida = p.stdout.strip()
+assert saida == '3', f'FALHA: usa_dados.py imprimiu {saida!r}, esperado exatamente 3'
+print('micro_two_files ok')
+PY
+'''

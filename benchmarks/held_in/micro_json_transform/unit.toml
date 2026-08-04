@@ -1,0 +1,23 @@
+id = "micro_json_transform"
+kind = "code"
+# Micro-unidade: lê fixtures/in.json (vem no seed do workspace) e escreve
+# out.json na raiz. Transformação de uma linha, verify determinístico.
+requires_real_backend = true
+prompt = "Leia prompt.md no diretório de trabalho e cumpra o que está lá à risca. O arquivo de entrada já está em fixtures/in.json, dentro do diretório de trabalho atual."
+verify_cmd = '''
+set -ex
+test -f out.json || { echo "FALHA: out.json nao existe na raiz do diretorio de trabalho"; exit 1; }
+python3 - <<'PY'
+import json
+
+d = json.load(open('out.json', encoding='utf-8'))
+assert isinstance(d, dict), f'FALHA: out.json tem que ser um objeto JSON, veio {type(d).__name__}'
+for k in ('ativos', 'total_qtd'):
+    assert k in d, f'FALHA: out.json nao tem a chave {k!r}. Chaves presentes: {sorted(d)}'
+assert d['ativos'] == ['parafuso', 'arruela', 'bucha'], \
+    f'FALHA: ativos = {d["ativos"]!r}, esperado ["parafuso", "arruela", "bucha"] na ordem de in.json'
+assert d['total_qtd'] == 22, \
+    f'FALHA: total_qtd = {d["total_qtd"]!r}, esperado 22 (10 + 7 + 5, so os ativos)'
+print('micro_json_transform ok')
+PY
+'''
