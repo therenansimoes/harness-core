@@ -58,6 +58,14 @@ FORBIDDEN_NAMES = frozenset({"eval", "exec", "__import__"})
 _REGISTERED: dict[str, str] = {}
 
 
+def registered() -> frozenset[str]:
+    """Nomes que ESTE processo registrou. Quem precisa saber "este nó é de
+    plugin?" (ex.: a gramática da topologia, pra decidir o que pode rodar em
+    paralelo) pergunta aqui em vez de deduzir de `NODE_IMPLS`: a dedução
+    depende da ordem de import, o registro não."""
+    return frozenset(_REGISTERED)
+
+
 def disabled() -> bool:
     return os.environ.get(KILL_SWITCH, "").strip().lower() in KILL_VALUES
 

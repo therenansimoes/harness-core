@@ -29,7 +29,9 @@ from harness.improve import topology_grammar as gram
 
 ACTION = "topology_kind"
 
-OPERATORS: frozenset[str] = frozenset({"insert_node", "remove_node", "rewire_edge"})
+OPERATORS: frozenset[str] = frozenset(
+    {"insert_node", "remove_node", "rewire_edge", "split_parallel"}
+)
 
 
 def _load_full(root: Path | str | None, spec_path: Path | str | None) -> dict:
@@ -123,10 +125,34 @@ def _rewire_edge(
     return nodes, new_pairs, f"rewire:{src}->{dst_new} (era {dst_old})"
 
 
+def _split_parallel(
+    nodes: list[str], pairs: list[tuple[str, str]], rng: Random
+) -> tuple[list[str], list[tuple[str, str]], str] | None:
+    """Diamante: src→dst vira src→{n1,n2}→dst. O par sai de
+    `EVENTS_ONLY_SAFE` — só nó cujo contrato é escrever exclusivamente `events`
+    pode rodar concorrente, porque é a única chave do RunState com reducer.
+    Menos de dois disponíveis (o caso do repo hoje, sem plugin aprovado) é
+    None, não um diamante degenerado com o mesmo nó nos dois ramos."""
+    available = sorted(gram.EVENTS_ONLY_SAFE() - set(nodes))
+    slots = _splice_candidates(pairs)
+    if len(available) < 2 or not slots:
+        return None
+    n1, n2 = sorted(rng.sample(available, 2))
+    idx = rng.choice(slots)
+    src, dst = pairs[idx]
+    new_pairs = (
+        pairs[:idx]
+        + [(src, n1), (src, n2), (n1, dst), (n2, dst)]
+        + pairs[idx + 1 :]
+    )
+    return nodes + [n1, n2], new_pairs, f"split:{n1}|{n2}@{src}->{dst}"
+
+
 _APPLY = {
     "insert_node": _insert_node,
     "remove_node": _remove_node,
     "rewire_edge": _rewire_edge,
+    "split_parallel": _split_parallel,
 }
 
 

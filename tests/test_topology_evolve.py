@@ -15,7 +15,7 @@ from random import Random
 
 import pytest
 
-from harness.graph import by_kind, topology
+from harness.graph import by_kind, plugin_nodes, run_graph, topology
 from harness.improve import actions as adapters
 from harness.improve import topology_evolve as tev
 from harness.improve import topology_grammar as gram
@@ -32,6 +32,31 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setenv("HARNESS_CONFIG_DIR", str(tmp_path / "config"))
     monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
     return tmp_path
+
+
+@pytest.fixture
+def fake_plugins():
+    """Dois nós de plugin já registrados. O repo real não tem plugin aprovado,
+    então sem isso `split_parallel` é sempre None e o diamante nunca existe.
+    Entram nos DOIS registros (whitelist do runtime + registro de plugin) e
+    saem no finally: NODE_IMPLS é global e vazar daqui contamina outro teste."""
+    names = ("probe_alpha", "probe_beta")
+
+    def make(name):
+        def _node(state, config=None) -> dict:
+            return {"events": [run_graph._event(name)]}
+
+        return _node
+
+    for n in names:
+        topology.NODE_IMPLS[n] = make(n)
+        plugin_nodes._REGISTERED[n] = "fake"
+    try:
+        yield names
+    finally:
+        for n in names:
+            topology.NODE_IMPLS.pop(n, None)
+            plugin_nodes._REGISTERED.pop(n, None)
 
 
 def topo_path(sandbox: Path) -> Path:
@@ -127,6 +152,54 @@ def test_insert_node_materializa_secao_do_kind(sandbox):
     assert "reflect" not in spec["nodes"]
     assert "reflect" in spec["kinds"]["content"]["nodes"]
     assert gram.check(by_kind.resolve_spec(spec, "content")) == []
+
+
+def test_split_parallel_gera_diamante_legal_que_compila(sandbox, fake_plugins):
+    proposal = tev.propose("code", "split_parallel", Random(5), root=sandbox)
+    assert proposal is not None
+    section = by_kind.resolve_spec(tomllib.loads(proposal.new_text), "code")
+    assert gram.check(section) == []
+    edges = [tuple(e) for e in section["edges"]]
+    entradas = {s for s, d in edges if d in fake_plugins}
+    saidas = {d for s, d in edges if s in fake_plugins}
+    assert len(entradas) == 1 and len(saidas) == 1  # um src, um merge
+    assert topology.compile_spec(section) is not None
+
+
+def test_fan_out_ilegal_rejeitado(sandbox, fake_plugins):
+    spec = topology.load_spec(topo_path(sandbox))
+    base = [tuple(e) for e in spec["edges"] if list(e) != ["verify", "measure"]]
+    n1, n2 = fake_plugins
+
+    # ramo que escreve estado (measure) junto de um events-only
+    sujo = {
+        "nodes": list(spec["nodes"]) + [n1],
+        "edges": [list(e) for e in base + [("verify", n1), ("verify", "measure"), (n1, "measure")]],
+    }
+    assert any("fora de events-only" in r for r in gram.check(sujo))
+
+    # dois events-only, mas cada um num destino: diamante aberto
+    aberto = {
+        "nodes": list(spec["nodes"]) + [n1, n2],
+        "edges": [
+            list(e)
+            for e in base
+            + [("verify", n1), ("verify", n2), (n1, "measure"), (n2, "gate")]
+        ],
+    }
+    assert any("não convergem" in r for r in gram.check(aberto))
+
+
+def test_fuzz_split_parallel_e_none_ou_legal(sandbox, fake_plugins):
+    vistas = 0
+    for seed in range(200):
+        for kind in KINDS:
+            p = tev.propose(kind, "split_parallel", Random(seed), root=sandbox)
+            if p is None:
+                continue
+            vistas += 1
+            assert gram.check(by_kind.resolve_spec(tomllib.loads(p.new_text), kind)) == []
+    assert vistas > 0
 
 
 def test_operador_desconhecido_levanta(sandbox):

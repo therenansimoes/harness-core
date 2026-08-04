@@ -28,6 +28,17 @@ RECORRENTES = [
 ]
 ORFAO = "TimeoutError: backend nunca respondeu ao handshake"
 
+
+def _traceback(erro: str, linha: int = 3) -> str:
+    """Traceback Python de verdade: o boilerplate é idêntico em toda falha de
+    assert, e é exatamente ele que fundia lições diferentes numa assinatura só."""
+    return (
+        "Traceback (most recent call last):\n"
+        f'  File "<stdin>", line {linha}, in <module>\n'
+        "    assert cond, msg\n"
+        f"{erro}"
+    )
+
 NOW = datetime(2026, 8, 3, 12, 0, 0, tzinfo=timezone.utc)
 
 
@@ -71,6 +82,25 @@ def test_recorrentes_viram_licao_e_skill(db, tmp_path):
     assert report.name == "20260803T120000Z.md"
     assert report.read_text(encoding="utf-8") == proposal.dream_report
     assert record.archived == 0  # não havia órfão: nada foi escondido
+
+
+def test_boilerplate_de_traceback_nao_funde_asserts_diferentes():
+    """Dois asserts diferentes com o MESMO boilerplate => duas assinaturas."""
+    persiste = _traceback("AssertionError: tema nao persiste apos reload", linha=3)
+    botao = _traceback("AssertionError: botao de tema nao alterna o atributo", linha=17)
+
+    sig_persiste = dream.signature(persiste)
+    sig_botao = dream.signature(botao)
+    assert sig_persiste != sig_botao
+    # A assinatura é do erro real, não do frame: nenhuma palavra de traceback.
+    for sig in (sig_persiste, sig_botao):
+        assert not (set(sig.split()) & dream._SIG_STOPWORDS), sig
+    assert sig_persiste.startswith("assertionerror tema")
+
+    # Mesmo assert com outros números continua colidindo (senão nada é recorrente).
+    outro = _traceback("AssertionError: tema nao persiste apos reload", linha=42)
+    assert dream.signature(outro) == sig_persiste
+    assert dream.signature(persiste) == sig_persiste  # determinístico
 
 
 def test_orfaos_arquivados_somem_do_recall(db, tmp_path):

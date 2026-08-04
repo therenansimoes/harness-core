@@ -1,0 +1,10 @@
+# Sintetizado de uma falha do harness — quarentena, não selado.
+# Origem: run oficina-u1_esqueleto-1785789100 (verify_failed).
+id = "u1_esqueleto"
+kind = "code"
+prompt = "Leia prompt.md no diret\u00f3rio de trabalho e cumpra o que est\u00e1 l\u00e1 \u00e0 risca. Trabalhe no diret\u00f3rio de trabalho atual (\u00e9 o repo do site); todos os arquivos do site ficam em dist/."
+verify_cmd = "set -ex\ngrep -q 'href=\"inventario.html\"' dist/index.html\ngrep -q 'href=\"projetos.html\"' dist/index.html\ngrep -q 'href=\"sobre.html\"' dist/index.html\npython3 - <<'PY'\nimport os, re\nh = open('dist/index.html', encoding='utf-8').read()\nn = os.path.getsize('dist/index.html')\nassert n > 1024, f'dist/index.html tem {n} bytes, precisa de mais de 1024'\nm = re.search(r'<title>(.*?)</title>', h, re.S | re.I)\nassert m and m.group(1).strip(), 'dist/index.html sem <title> preenchido'\nassert 'Painel da Oficina' in h, 'index.html sem o texto \"Painel da Oficina\"'\nassert re.search(r'<header\\b', h, re.I), 'index.html sem <header>'\nassert re.search(r'<nav\\b', h, re.I), 'index.html sem <nav>'\nassert re.search(r'charset\\s*=\\s*[\"\\']?utf-8', h, re.I), 'index.html sem charset utf-8'\ncss = re.search(r'<style\\b', h, re.I) or os.path.isfile('dist/style.css')\nassert css, 'sem CSS: nem <style> inline nem dist/style.css'\nprint('u1 ok:', n, 'bytes')\nPY\n"
+
+[origin]
+run_id = "oficina-u1_esqueleto-1785789100"
+exit_reason = "verify_failed"

@@ -1,0 +1,10 @@
+# Sintetizado de uma falha do harness — quarentena, não selado.
+# Origem: run oficina-u4_dark_mode-1785801644 (max_turns).
+id = "u4_dark_mode"
+kind = "code"
+prompt = "Leia prompt.md no diret\u00f3rio de trabalho e cumpra o que est\u00e1 l\u00e1 \u00e0 risca. Trabalhe no diret\u00f3rio de trabalho atual (\u00e9 o repo do site); todos os arquivos do site ficam em dist/."
+verify_cmd = "python3 - <<'PY'\nimport glob, re\npaths = sorted(glob.glob('dist/*.html') + glob.glob('dist/*.js') + glob.glob('dist/*.css'))\nblob = '\\n'.join(open(p, encoding='utf-8').read() for p in paths)\ncss = open('dist/style.css', encoding='utf-8').read()\nassert 'localStorage' in blob, 'tema nao persiste: nenhum localStorage nos arquivos de dist/'\nassert '--bg' in css and '--fg' in css, 'style.css sem as variaveis --bg e --fg'\nassert 'var(--bg)' in css and 'var(--fg)' in css, 'style.css nao consome var(--bg)/var(--fg)'\nassert 'data-theme' in blob or 'prefers-color-scheme' in blob, \\\n    'sem seletor de tema: nem data-theme nem prefers-color-scheme'\ndefs = len(re.findall(r'--bg\\s*:', css))\nassert defs >= 2, f'--bg definido {defs}x em style.css; precisa dos DOIS temas (claro e escuro)'\nassert re.search(r'id=[\"\\']tema[\"\\']', blob), 'sem o botao id=\"tema\"'\njs = open('dist/app.js', encoding='utf-8').read()\nassert 'tema' in js and 'localStorage' in js, 'app.js nao trata o toggle de tema com localStorage'\nassert re.search(r'setAttribute|dataset', js), 'app.js nao aplica o tema no documento'\nhtmls = [p for p in glob.glob('dist/*.html')]\nfaltando = [p for p in htmls if not re.search(r'id=[\"\\']tema[\"\\']', open(p, encoding='utf-8').read())]\nassert not faltando, f'paginas sem o botao de tema: {faltando}'\nprint('u4 ok:', len(htmls), 'paginas com toggle')\nPY\n"
+
+[origin]
+run_id = "oficina-u4_dark_mode-1785801644"
+exit_reason = "max_turns"

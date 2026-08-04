@@ -1,0 +1,10 @@
+# Sintetizado de uma falha do harness — quarentena, não selado.
+# Origem: run oficina-u3_busca-1785796733 (max_turns).
+id = "u3_busca"
+kind = "code"
+prompt = "Leia prompt.md no diret\u00f3rio de trabalho e cumpra o que est\u00e1 l\u00e1 \u00e0 risca. Trabalhe no diret\u00f3rio de trabalho atual (\u00e9 o repo do site); todos os arquivos do site ficam em dist/."
+verify_cmd = "set -ex\ngrep -q 'id=\"busca\"' dist/inventario.html\ngrep -q 'addEventListener' dist/app.js\npython3 - <<'PY'\nimport re\njs = open('dist/app.js', encoding='utf-8').read()\nh = open('dist/inventario.html', encoding='utf-8').read()\nassert 'busca' in js, 'app.js nao referencia o id \"busca\"'\nassert re.search(r'getElementById|querySelector', js), 'app.js nao seleciona nada no DOM'\nassert 'toLowerCase' in js, 'filtro nao e case-insensitive (falta toLowerCase)'\nassert 'style.display' in js or 'classList' in js, \\\n    'app.js nao esconde/mostra linhas (falta style.display ou classList)'\nassert re.search(r'tbody|<tr|querySelectorAll', js), 'app.js nao percorre as linhas da tabela'\nassert re.search(r'src\\s*=\\s*[\"\\']app\\.js[\"\\']', h), 'inventario.html nao carrega app.js'\nassert re.search(r'<input\\b[^>]*id=[\"\\']busca[\"\\']', h, re.I), 'sem <input id=\"busca\">'\nprint('u3 ok')\nPY\n"
+
+[origin]
+run_id = "oficina-u3_busca-1785796733"
+exit_reason = "max_turns"

@@ -73,6 +73,32 @@ SAMPLE_CHARS = 400
 _SIG_TOKEN = re.compile(r"[a-z_]{3,}")
 _WS = re.compile(r"\s+")
 
+# Boilerplate do traceback Python. É idêntico em TODA falha de assert, então
+# assinar por cima dele funde lições que não têm nada em comum — foi o primeiro
+# sono deste repo fundindo localStorage, botão de tema e uma terceira unidade
+# sob uma assinatura só.
+_TB_NOISE = re.compile(
+    r"""^(?:
+        traceback\ \(most\ recent\ call\ last\)
+      | file\ ".*",\ line\ \d+
+      | line\ \d+,\ in\ .*
+      | during\ handling\ of\ the\ above\ exception
+      | the\ above\ exception\ was\ the\ direct\ cause
+      | [~\ ]*\^+[~\ ]*$
+    )""",
+    re.VERBOSE,
+)
+
+# Cinto e suspensório: mesmo que uma linha de frame escape do filtro acima, as
+# palavras dela não entram na assinatura.
+_SIG_STOPWORDS = frozenset(
+    ("traceback", "most", "recent", "call", "last", "file", "stdin", "line", "module")
+)
+
+# Assinatura de uma palavra só (`AssertionError` pelado) volta a fundir tudo:
+# nesse caso a linha significativa anterior entra para desempatar.
+_SIG_MIN_TOKENS = 2
+
 
 class DreamError(Exception):
     """Consolidação inválida — nada foi arquivado nem escrito."""
@@ -132,15 +158,40 @@ class DreamRecord:
     written_at: str
 
 
+def _significant_lines(trace: str) -> list[str]:
+    """As linhas da trace que dizem algo: sem vazias e sem frame de traceback."""
+    out = []
+    for raw in (trace or "").splitlines():
+        line = raw.strip()
+        if line and not _TB_NOISE.match(line.lower()):
+            out.append(line)
+    return out
+
+
+def _tokens(text: str) -> list[str]:
+    """Dedup preservando ordem: `AssertionError` repetido 20 vezes na trace não
+    pode consumir a assinatura inteira."""
+    found = (t for t in _SIG_TOKEN.findall(text.lower()) if t not in _SIG_STOPWORDS)
+    return list(dict.fromkeys(found))
+
+
 def signature(trace: str) -> str:
     """Assinatura textual do episódio: a mesma falha com outro número de linha,
     outro path e outro timestamp tem que colidir aqui, senão nada é recorrente.
 
-    Dedup preservando ordem antes do corte: `AssertionError` repetido 20 vezes
-    na trace não pode consumir a assinatura inteira.
+    Assina sobre a ÚLTIMA linha significativa — em traceback Python é a do erro
+    real (`AssertionError: tema nao persiste`), e é a única parte que distingue
+    duas falhas. As anteriores só entram quando a última não dá token suficiente.
     """
-    tokens = _SIG_TOKEN.findall((trace or "").lower())
-    return " ".join(list(dict.fromkeys(tokens))[:SIG_TOKENS])
+    lines = _significant_lines(trace)
+    tokens = _tokens(lines[-1]) if lines else []
+    if len(tokens) < _SIG_MIN_TOKENS and len(lines) > 1:
+        for extra in _tokens(" ".join(reversed(lines[:-1]))):
+            if extra not in tokens:
+                tokens.append(extra)
+    if not tokens:  # trace só de boilerplate: melhor a assinatura antiga que nada
+        tokens = _tokens(trace or "")
+    return " ".join(tokens[:SIG_TOKENS])
 
 
 def _sample(trace: str) -> str:
