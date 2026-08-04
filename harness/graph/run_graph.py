@@ -29,6 +29,7 @@ attempt: é o único nó que precisa recalcular a cada passagem, senão o braço
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import time
@@ -348,6 +349,27 @@ def _copy_unit_files(src: Path, dst: Path) -> None:
 # anotação o núcleo não precisa nomear um tipo de vendor.
 
 
+# Gate do plano: barato de propósito — regex e tamanho, zero chamada de LLM. O
+# nó `plan` roda FORA do executor (não tem agente para perguntar), então ele só
+# carimba o flag e o `_prompt` transforma isso em uma ordem no prompt.
+PLAN_PROMPT_CHARS = 400
+PLAN_TRIGGERS = re.compile(
+    r"\b(refator\w*|refactor\w*|implement\w*|reescrev\w*|migr\w*)\b|"
+    r"\b(cada|todos|todas)\s+(os|as)\s+arquivos?\b|"
+    r"\barquivos\b",
+    re.IGNORECASE,
+)
+PLAN_ORDER = (
+    "ANTES DE TUDO: chame task(subagent_type='planner') e transcreva o plano "
+    "com write_todos."
+)
+
+
+def _needs_plan(prompt: str) -> bool:
+    """Tarefa grande o bastante para valer um plano antes da primeira edição."""
+    return len(prompt) > PLAN_PROMPT_CHARS or PLAN_TRIGGERS.search(prompt) is not None
+
+
 def _plan(state: RunState, config=None) -> dict:
     """Valida a unidade e fixa a identidade do run."""
     unit = state["unit"]
@@ -359,11 +381,13 @@ def _plan(state: RunState, config=None) -> dict:
 
     run_id = state.get("run_id") or uuid.uuid4().hex[:12]
     # `started_ts` é wall clock de propósito: o resume acontece noutro processo.
+    needs_plan = _needs_plan(unit.prompt)
     store.record_node(run_id, "plan", {"started_ts": time.time()}, _db(config))
     return {
         "run_id": run_id,
         "attempt": state.get("attempt", 0),
-        "events": [_event("plan", run_id=run_id, unit=unit.id)],
+        "needs_plan": needs_plan,
+        "events": [_event("plan", run_id=run_id, unit=unit.id, needs_plan=needs_plan)],
     }
 
 
@@ -462,14 +486,20 @@ def _prompt(state: RunState) -> str:
 
     Import lazy do reflect para não amarrar run_graph a um módulo que a
     topologia pode nem usar; sem hint (default) a string é a de sempre.
+
+    A ordem do plano vai PRIMEIRO (`needs_plan` carimbado no nó `plan`): o
+    executor pequeno obedece a primeira linha do prompt, não a última.
     """
+    base = state["unit"].prompt
+    if state.get("needs_plan"):
+        base = f"{PLAN_ORDER}\n\n{base}"
     hint = str(state.get("reflect_hint") or "").strip()
     if not hint:
-        return state["unit"].prompt
+        return base
 
     from harness.graph.reflect import HINT_HEADER
 
-    return f"{state['unit'].prompt}\n\n{HINT_HEADER}\n{hint}"
+    return f"{base}\n\n{HINT_HEADER}\n{hint}"
 
 
 def _execute(state: RunState, config=None) -> dict:

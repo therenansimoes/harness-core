@@ -183,7 +183,8 @@ def test_backend_injects_skills_and_mcp_tools(monkeypatch, tmp_path):
     assert "## Skills" in prompt
     assert "### python-fixes\nDiff mínimo sempre." in prompt
     assert "diretório de trabalho" in prompt  # base preservada
-    assert captured["tools"] == [sentinel_tool]
+    # MCP entra junto das file/web tools das ondas de tool engineering
+    assert sentinel_tool in captured["tools"]
 
 
 def test_backend_without_skills_or_tools_keeps_base_prompt(monkeypatch, tmp_path):
@@ -201,7 +202,10 @@ def test_backend_without_skills_or_tools_keeps_base_prompt(monkeypatch, tmp_path
     da._build_agent(ExecRequest(prompt="x", workspace=tmp_path, max_turns=2))
 
     assert "## Skills" not in captured["system_prompt"]
-    assert "tools" not in captured  # lista vazia não é passada adiante
+    # sem MCP ainda entram as file/web tools; o que este teste garante é que
+    # nenhum sentinel de MCP vazou e que o prompt base ficou intacto
+    mcp_names = [getattr(t, "name", "") for t in captured.get("tools", [])]
+    assert "sentinel" not in mcp_names
 
 
 def test_backend_injects_real_skills_from_foreign_cwd_and_records_usage(monkeypatch, tmp_path):

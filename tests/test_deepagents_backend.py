@@ -328,7 +328,9 @@ def test_sem_papel_nao_passa_subagents(tmp_path, monkeypatch):
     monkeypatch.setattr(da, "load_roles", lambda **kw: [])
     da._build_agent(ExecRequest(prompt="x", workspace=tmp_path, model="openai:qwen3.5-9b-mlx"))
     assert "subagents" not in capturado
-    assert "subagent_type" not in capturado["system_prompt"]
+    # O marcador é a PRIMEIRA linha do manual de papéis: `subagent_type` sozinho
+    # não serve mais de proxy — o protocolo do executor.md também nomeia a tool.
+    assert "Você pode delegar micro tarefas" not in capturado["system_prompt"]
 
 
 def test_manual_por_modelo_ganha_do_geral_com_fallback(tmp_path, monkeypatch):

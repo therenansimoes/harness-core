@@ -133,7 +133,9 @@ class DeepagentsBackend:
             return _failure(req, "error", f"{type(exc).__name__}: {exc}", messages=partial)
 
         messages = state.get("messages", [])
-        _write_trace(req.trace_path, messages)
+        # `todos` é estado do TodoListMiddleware, não mensagem: sem esta linha o
+        # plano que o agente seguiu não sobra em nenhum lugar depois do run.
+        _write_trace(req.trace_path, messages, todos=state.get("todos"))
         after = _snapshot(req.workspace, exclude=req.trace_path)
         changed = _diff(before, after)
         turns = _turns(messages)
@@ -224,10 +226,24 @@ def _lmstudio_preflight(model: str) -> Preflight:
 
 # --------------------------------------------------------------------------- agente
 
+# Bloco do TodoListMiddleware. Curto de propósito: o default da lib é longo e em
+# inglês, e o que o executor precisa saber cabe em cinco linhas.
+TODO_PROMPT = (
+    "## `write_todos`\n\n"
+    "Tarefa que toca mais de um arquivo, ou que pede refactor/implementar: "
+    "chame `write_todos` com o plano ANTES de editar qualquer coisa.\n"
+    "No máximo 7 itens, cada um com o path do arquivo envolvido.\n"
+    "Exatamente UM item em `in_progress` por vez; marque `completed` na hora que "
+    "terminar o item, nunca em lote no fim.\n"
+    "A chamada substitui a lista inteira: reenvie todos os itens, com o status "
+    "atualizado de cada um.\n"
+    "Tarefa de um passo só não precisa de lista — faça e reporte."
+)
+
 
 def _build_agent(req: ExecRequest):
     from deepagents import create_deep_agent
-    from langchain.agents.middleware import ModelCallLimitMiddleware
+    from langchain.agents.middleware import ModelCallLimitMiddleware, TodoListMiddleware
     from langchain_core.callbacks import UsageMetadataCallbackHandler
 
     req.workspace.mkdir(parents=True, exist_ok=True)
@@ -251,10 +267,15 @@ def _build_agent(req: ExecRequest):
     if allowed:
         # `tools=` do create_deep_agent é aditivo; a única forma de restringir é
         # substituir o FilesystemMiddleware (merge por `.name`).
-        from deepagents.middleware.filesystem import FilesystemMiddleware
+        from harness.backends.smart_fs import SmartFilesystemMiddleware
 
-        middleware.append(FilesystemMiddleware(backend=fs, tools=allowed))
+        middleware.append(SmartFilesystemMiddleware(backend=fs, tools=allowed))
     middleware.append(ModelCallLimitMiddleware(run_limit=req.max_turns, exit_behavior="end"))
+    # Planejamento como ESTADO, não como parágrafo perdido no meio da conversa:
+    # a lista vive em `state["todos"]` e o middleware reinjeta ela a cada turno.
+    # `system_prompt=` substitui o bloco default (inglês, ~40 linhas) — em pt-br
+    # e curto porque o executor é modelo pequeno e o contexto é disputado.
+    middleware.append(TodoListMiddleware(system_prompt=TODO_PROMPT))
 
     usage_cb = UsageMetadataCallbackHandler()
     # Convenção de workspace é responsabilidade do BACKEND, não da unit: o
@@ -312,6 +333,21 @@ def _build_agent(req: ExecRequest):
         system_prompt = f"{system_prompt}\n\n{manual}"
 
     extra_tools = list(load_mcp_tools())  # contrato: [] em QUALQUER falha
+    # Tools de engenharia (edição cirúrgica) e de web. Cada import é fail-open
+    # no mesmo padrão do resto do arquivo: dependência ausente/quebrada vira
+    # lista vazia, o run segue com o que tem.
+    try:
+        from harness.backends.file_tools import make_file_tools
+
+        extra_tools += list(make_file_tools(req.workspace))
+    except Exception:
+        pass
+    try:
+        from harness.backends.web_tools import load_web_tools
+
+        extra_tools += list(load_web_tools(req.workspace))
+    except Exception:
+        pass
     agent = create_deep_agent(
         model=_model_for(req.model),
         backend=fs,
@@ -664,12 +700,21 @@ def _failure(
     )
 
 
-def _write_trace(path: Path, messages: list[Any], error: str | None = None) -> None:
+def _write_trace(
+    path: Path, messages: list[Any], error: str | None = None, todos: Any = None
+) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as fh:
             if error:
                 fh.write(json.dumps({"error": error}, ensure_ascii=False) + "\n")
+            if todos:
+                # Linha própria, mesmo formato JSONL: `type` continua sendo a
+                # chave que distingue os registros para quem lê o trace.
+                fh.write(
+                    json.dumps({"type": "todos", "todos": _todo_records(todos)}, ensure_ascii=False)
+                    + "\n"
+                )
             for m in messages:
                 rec = {
                     "type": getattr(m, "type", "?"),
@@ -681,3 +726,18 @@ def _write_trace(path: Path, messages: list[Any], error: str | None = None) -> N
                 fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except OSError:  # trace é diagnóstico, não pode derrubar o run
         pass
+
+
+def _todo_records(todos: Any) -> list[dict[str, str]]:
+    """`state["todos"]` em linha de trace: só `content` e `status`, texto cortado.
+
+    Item é um dict (TodoItem do middleware), mas o estado vem do checkpointer e
+    pode ter vindo de versão antiga — `getattr`/`get` defensivo, sem levantar."""
+    out: list[dict[str, str]] = []
+    for t in todos or ():
+        if isinstance(t, dict):
+            content, status = t.get("content", ""), t.get("status", "")
+        else:
+            content, status = getattr(t, "content", ""), getattr(t, "status", "")
+        out.append({"content": str(content)[:500], "status": str(status)})
+    return out

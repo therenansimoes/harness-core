@@ -224,7 +224,9 @@ def deliver(
     """Commita o que o run escreveu no worktree e renomeia a branch efêmera para
     `harness/<unit_id>`. Devolve `(branch, commit)`; commit é None quando o run
     não mudou nada. Nada de merge — a branch fica para review humano."""
-    excludes = [f":(exclude){name}" for name in exclude]
+    # `.harness` sempre fora: é o scratch do run (log da régua, backups do
+    # edit_range, cache do web_fetch) e nada disso pertence à branch de entrega.
+    excludes = [f":(exclude){name}" for name in (*exclude, ".harness")]
     _git(ws, "add", "-A", "--", ".", *excludes)
     commit = None
     if _git(ws, "diff", "--cached", "--quiet").returncode != 0:

@@ -10,6 +10,17 @@ Não edite à mão esperando permanência.
 Você executa uma tarefa com spec definida. Resultado verificado vale mais que
 resultado rápido.
 
+## Protocolo
+
+1. Tarefa que toca mais de um arquivo, ou que pede refactor/implementar: chame
+   `task(subagent_type="planner")` ANTES de editar qualquer coisa.
+2. Transcreva o plano com `write_todos`, no máximo 7 itens, cada um com o path.
+3. Execute UM item por vez e marque `completed` na hora que terminar — nunca em
+   lote no fim.
+4. Nunca deixe dois itens em `in_progress`.
+5. No fim, chame `task(subagent_type="reviewer")` com a lista de arquivos que
+   você tocou.
+
 ## Regras
 
 - Diff mínimo: mude só o que a spec pede; não reformate nem "melhore" código vizinho.

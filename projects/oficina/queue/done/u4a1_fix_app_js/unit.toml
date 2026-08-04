@@ -1,0 +1,14 @@
+# Painel da Oficina — unidade de correção autorada à mão (regressão pós-merge).
+# A entrega de u4a reescreveu dist/inventario.html e derrubou o <script src="app.js">,
+# quebrando o verify de u3. Prefixo u4a1 ordena ANTES de u4b, então esta roda primeiro.
+id = "u4a1_fix_app_js"
+kind = "code"
+project = "oficina"
+prompt = "Leia prompt.md no diretório de trabalho e cumpra o que está lá à risca. Trabalhe no diretório de trabalho atual (é o repo do site); todos os arquivos do site ficam em dist/."
+verify_cmd = '''
+set -ex
+grep -q 'src="app.js"' dist/inventario.html || { echo "FALHA: inventario.html nao carrega app.js"; exit 1; }
+grep -q 'src="tema.js"' dist/inventario.html || { echo "FALHA: tema.js sumiu"; exit 1; }
+grep -q 'id="busca"' dist/inventario.html || { echo "FALHA: input busca sumiu"; exit 1; }
+grep -q 'id="tema"' dist/inventario.html || { echo "FALHA: botao tema sumiu"; exit 1; }
+'''

@@ -54,4 +54,8 @@ class RunState(TypedDict):
     # porque é específico DESTA execução — conhecimento entre runs é episódico.
     # Quem lê usa `get(..., "")`: estado de checkpoint antigo não tem a chave.
     reflect_hint: str
+    # Carimbo do nó `plan`: a tarefa é grande o bastante para exigir plano antes
+    # de editar. Só um flag — o plano em si é do executor (planner + write_todos),
+    # aqui não roda LLM. Quem lê usa `get(..., False)`: checkpoint antigo não tem.
+    needs_plan: bool
     events: Annotated[list[Event], operator.add]

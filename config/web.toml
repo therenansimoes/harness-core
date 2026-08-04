@@ -1,0 +1,35 @@
+# Cerca das tools de web (web_fetch, web_search, browse).
+#
+# Este arquivo é obrigatório: sem ele — ou com TOML quebrado — as tools de web
+# ficam DESABILITADAS e dizem o motivo. Fail-closed é de propósito: tool de rede
+# ligada por acidente é SSRF esperando acontecer.
+#
+# O que a cerca já garante, independente do que estiver aqui: só http/https, sem
+# user:senha@ na URL, e todo endereço resolvido precisa ser internet pública
+# (loopback, 10/8, 169.254.169.254 e afins são recusados, inclusive em redirect).
+
+[web]
+# web_fetch e web_search. false = nenhuma tool de web no executor.
+enabled = true
+
+# browse (Chrome headless, executa JS). Desligado por default: custa processo e
+# renderiza JS de terceiro. Exige allowlist não-vazia mesmo quando ligado.
+browse_enabled = false
+
+# Domínios liberados. VAZIO = qualquer host público serve para web_fetch/web_search
+# (a cerca de IP continua valendo), e NENHUM para browse. Casa subdomínio:
+# "python.org" cobre "docs.python.org".
+# allowlist = ["docs.python.org", "pypi.org"]
+allowlist = []
+
+# Domínios proibidos. Vence a allowlist sempre.
+# denylist = ["internal.example.com"]
+denylist = []
+
+# Portas além de 80/443. Cada porta aqui é uma porta que o modelo pode varrer.
+# extra_ports = [8080]
+extra_ports = []
+
+# SearxNG próprio como último elo da cadeia de busca (depois do DDG html e lite).
+# searx_url = "https://searx.example.com/search"
+searx_url = ""
