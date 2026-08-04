@@ -10,11 +10,12 @@ A self-evolving agent harness on LangGraph. The `harness/` package
 (vendor-agnostic core; default executor deepagents, optional `claude_code`
 backend) runs units of work through a graph (`plan → route → provision → execute
 → verify → measure → gate → record`), measures KPIs against a frozen baseline,
-and evolves itself through 9 registered actions (`research`, `codegen`,
-`synthesize`, `redteam`, `topology`, `workflow`, `evolve`, `skill_prune`,
-`prompt`) — always inside the genome's mutable zones, judged by a ruler it cannot
-touch. Ledger in `data/runs.sqlite`; `legacy/` is frozen read-only reference,
-outside pytest and outside the genome.
+and evolves itself through 14 registered actions (`research`, `procedural`,
+`decompose`, `codegen`, `synthesize`, `redteam`, `topology`, `topology_kind`,
+`workflow`, `evolve`, `skill_prune`, `prompt`, `dream`, `node`) — always inside
+the genome's mutable zones, judged by a ruler it cannot touch. Ledger in
+`data/runs.sqlite`; `legacy/` is frozen read-only reference, outside pytest and
+outside the genome.
 
 ## Genome zones — never edit without a human
 
@@ -63,12 +64,53 @@ The rule is not stylistic, it is about who pays for the mistake:
 When in doubt: does the failure mode let something be written or approved that
 otherwise would not be? Then fail-closed.
 
+## Kill switches
+
+Every optional surface has an env var that turns it off, read on **every call**
+so a rollback needs no restart and no data migration. Set to `0`:
+
+| var | turns off | what happens instead |
+|---|---|---|
+| `HARNESS_TRUST_BOUNDARY` | the `<untrusted_reference_data>` block | previous behaviour: one prompt channel, skill bodies in the system prompt |
+| `HARNESS_DECISIONS` | recall of past human decisions (`memory/decisions.py`) | escalation gets no prior-decision block |
+| `HARNESS_EPISODIC` | FTS5 recall of past failures | no recall; the sealed exam and frontier screening already run with it off |
+| `HARNESS_PLUGIN_NODES` | plugin nodes as graph nodes | the built-in topology only |
+
+`HARNESS_NODE_ACK=1` is the opposite kind of switch — an explicit human ack, so
+it defaults to off and setting it to `1` is a decision, not a rollback.
+
+## The executor's protocol
+
+If you are writing or reviewing executor-facing code, these are the invariants:
+
+- **Read before write.** A write is refused when the sha256 of the content the
+  model read no longer matches disk (`backends/smart_fs.py`); the refusal tells it
+  to read again. A rewrite under 70% of the current size is refused by the
+  shrink-guard. Do not add a bypass — "the model knows what it is doing" is the
+  exact assumption that truncates files.
+- **Instruction and data do not share a channel.** Anything the loop generated or
+  collected (skill body, failure trace, checker hint, recalled decision) goes
+  through `harness/trust_boundary.py`, never straight into the system prompt. New
+  sources of loop-generated text must go through it too.
+- **The network is fail-closed.** Web tools go through `backends/ssrf.py`: every
+  resolved address, every redirect hop, 80/443 unless opted in. No
+  `config/web.toml` means no web tool.
+- **Say you are stuck instead of spinning.** `declare_blocker` (typed) and the
+  loop guard (`stalled`) exist so a dead end is one honest red instead of a spent
+  turn budget. Prefer adding a blocker type over adding retries.
+- **Compaction is deterministic.** Old tool output is cleared by rule
+  (`ContextEditingMiddleware`), and `write_file`/`edit_file` are excluded.
+  `SummarizationMiddleware` is a deliberate no: a model that rewrites the run's
+  own history makes the ledger measure a summary. See `STATUS.md`.
+- **Secrets never reach a log.** `harness/redact.py` on every path that logs,
+  reports or writes a trace.
+
 ## Canonical commands
 
 ```sh
 uv sync --extra deepagents                                        # setup
-uv run --extra deepagents pytest -q                               # suite (green: 726 passed, 2 deselected)
-uv run harness doctor                                             # 17 sanity checks
+uv run --extra deepagents pytest -q                               # suite (green: 1274 passed, 1 skipped, 5 deselected)
+uv run harness doctor                                             # 21 sanity checks
 uv run harness run --unit tests/fixtures/echo --backend mock      # E2E, $0
 uv run harness actions                                            # actions + KEEP/DISCARD tally
 uv run harness lineage --file --db --limit 20                     # mutation tree + verdicts

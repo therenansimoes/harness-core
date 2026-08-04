@@ -95,16 +95,21 @@ $ uv run harness bench provision --n 10
 provision n=10 p50=0.069s p95=0.072s
 
 $ uv run harness doctor
-… doctor checks=18 falhas=0 avisos=0
+… doctor checks=21 falhas=0 avisos=0
 ```
 
 ## Architecture
 
 ```
 harness/
-  cli.py        22 subcommands (table below)
+  cli.py        27 subcommands (table below)
   types.py      UnitSpec ExecRequest ExecResult Selection Verdict RunRow MutationRow
   backends/     base(Protocol) registry(entry point) mock deepagents claude_code auth/
+                file_tools smart_fs web_tools ssrf flow_tools procs dom_tools
+                review_tools blocker_tools loop_guard safe_shell  <- the executor's tools
+  trust_boundary.py  instruction vs data in the prompt (untrusted_reference_data)
+  redact.py     secret redaction on every path that logs or reports
+  symbols.py repomap.py scaffold.py vision.py   <- code navigation, scaffolding, visual judge
   graph/        run_graph (one run)  autopilot_graph (one improvement cycle)  topology
                 by_kind (a whole topology per kind)  reflect (retry's skeptic)
                 custom (named workflows)  plugin_nodes (approved plugin nodes)
@@ -116,9 +121,11 @@ harness/
   improve/      target policy mutate escalate research codegen meta synthesize
                 exam coevolve redteam workflow_action replay lineage
                 dream (episodic consolidation) node_action topology_evolve
+                procedural (skills mined from tool traces) decompose zpd (curriculum)
   evolve/       population (PBT) + fitness (gate-scored) + archive (MAP-Elites)
   skills/       load/select/render + attribution (per-skill lift)
   memory/       episodic (FTS5 case-based recall of past failures)
+                decisions (FTS5 recall of what a human answered when the loop stopped)
   triggers/     inbox (JSON files) + webhook (HTTP, fail-closed) + watch (polling)
   projects.py   real git repos as targets; queue.py drives their queues
   report.py     self-report for humans (runs, mutations, skills, lineage)
@@ -221,19 +228,24 @@ stops and waits for a human instead of improvising.
 | `ab` | Wilson verdict between two arms |
 | `init` | register a real git repo as a project (writes `config/projects.toml`) |
 | `status` | per project: queue/done/stuck plus total ledger spend |
-| `queue` | drain a project's queue through the graph, one unit at a time (accept → `queue/done/`, stuck → `queue/stuck/`; accepted branches are merged into the default branch, `--no-integrate` opts out) |
+| `queue` | drain a project's queue through the graph, one unit at a time (accept → `queue/done/`, stuck → `queue/stuck/`; accepted branches are merged into the default branch, `--no-integrate` opts out; `--zpd` reorders by learning value, practice queues only) |
 | `backends` | list registered backends plus preflight |
 | `improve` | improvement cycle: mutate config and test it in A/B |
 | `replay` | attribute a historical delta to a mutation |
+| `whatif` | re-run the ledger's past failures against today's config — counterfactual, no mutation |
 | `lineage` | genealogy tree of code mutations with verdicts |
-| `report` | self-report of the loop (runs, mutations, skills, lineage) |
+| `report` | self-report of the loop (runs, mutations, skills, lineage, tokens) |
 | `ui-verify` | UI verify: serve the dist, check loadable assets, look at the screenshot |
+| `vision-judge` | UI subcheck: a local VLM scores the screenshot 0–10 (`--min-nota baseline`, `--ref` for a paired comparison); fail-open |
 | `export` | pack skills plus routing prior into a `.tgz` bundle |
 | `import` | bring skills plus prior in from another project's bundle |
-| `doctor` | local diagnosis: backends, genome, config, data, tracing, plugin nodes (18 checks) |
+| `doctor` | local diagnosis: backends, genome, config, data, tracing, plugin nodes (21 checks) |
 | `skills` | list loaded skills (name, kinds, description; `--lift` adds attribution) |
 | `actions` | list registry actions plus their KEEP/DISCARD tally from the ledger |
+| `procs` | list servers registered in the runs' workspaces (`start_server` writes `procs.json`) |
+| `cache-gc` | prune the dependency cache (uv/npm) down to its ceiling |
 | `add` | author a unit from a natural-language task (`--ui` appends a `ui-verify` step) |
+| `decompose` | break a large task into an ordered queue of atomic sub-units, each validated by `add`'s own parser |
 | `seal` | promote a quarantine exam into `benchmarks/sealed` (human act, `--yes`) |
 | `frontier` | list quarantine exams the current harness still fails |
 | `evolve` | PBT over configs: score each individual at the gate, archive the elites |
@@ -276,13 +288,90 @@ Auth follows the same pattern on the `harness.auth` entry point (`AuthAdapter`:
 `langchain-mcp-adapters`); their tools become the deepagents backend's `tools=`,
 and any failure degrades to an empty list.
 
+## The executor
+
+The backend hands the model **25 harness tools** in 11 families, and replaces
+deepagents' own filesystem tools with a guarded version (the `smart fs` row
+below, which is a middleware, not part of the 25). Each family carries its own
+fence, because a tool that can reach the network or the disk is the actual attack
+surface of the loop:
+
+| family | tools | fence |
+|---|---|---|
+| files | `file_outline` `edit_range` `insert_lines` `append_file` | path resolved under the workspace, atomic write, backup per edit, syntax validation before commit |
+| smart fs | replaces deepagents' `read_file`/`write_file`/`edit_file` | **read-before-write**: the write is refused unless the sha256 of what the model read still matches disk, plus a **shrink-guard** that refuses a rewrite under 70% of the current size |
+| web | `web_fetch` `web_search` | `backends/ssrf.py`, fail-closed: only public internet, checked on the **resolved addresses** (all of them) and re-checked on **every redirect hop**; ports 80/443 unless opted in; no `config/web.toml` means no web at all |
+| flows | `install_deps` `run_tests` `run_lint` `local_screenshot` `detect_stack` | stack detected from lockfiles, argv0 fenced, timeouts, output filtered |
+| servers | `start_server` `local_probe` `stop_server` | port allocated per run, registered in the workspace's `procs.json`, probes are loopback-only, `kill_all` on teardown (`harness procs` lists them) |
+| view | `view_render` | screenshot plus an optional **local** VLM judge that returns a 0–10 score; no vision model configured means `unavailable`, never a failure |
+| dom | `inspect_dom` `a11y_audit` | reads the rendered tree, writes nothing |
+| review | `diff_review` | the model reads its own diff before declaring it done |
+| symbols | `find_symbol` `find_references` `signature_of` | deterministic index, no LLM |
+| repo map | `repo_map` | PageRank over the import graph, so the map is ranked rather than alphabetical |
+| scaffold | `scaffold` `asset_gen` | templates only, inside the workspace |
+| blocker | `declare_blocker` | typed blocker (`backends/blocker_tools.TYPES`) — the run exits with `exit_reason = "blocker"` and *says why* instead of burning turns |
+
+deepagents' `write_todos` stays available through `TodoListMiddleware`, so a long
+unit keeps a plan the harness can read back.
+
+Six middlewares wrap the loop, in order: `SmartFilesystemMiddleware` (the read
+gate above), `ModelCallLimitMiddleware` (the turn ceiling, tapered by the
+governor), `TodoListMiddleware`, `ContextEditingMiddleware` (**deterministic
+compaction** — it clears old tool output by rule, never by summarising, and never
+touches `write_file`/`edit_file`), `LoopGuardMiddleware` (identical tool calls in
+a row become `exit_reason = "stalled"` rather than a full turn budget spent
+spinning) and `ToolRetryMiddleware` (transient tool errors only). Each import is
+fail-open: a middleware missing from the installed langchain version drops out
+with one stderr line.
+
+Beyond `done`/`max_turns`/`timeout`, a run can now end on `truncated` (the last
+model response died at the token ceiling), `stalled` (the loop guard fired) or
+`blocker` (the model declared a typed obstacle). All three are honest reds that
+`reflect` can act on, and `tokens_in`/`tokens_out` are first-class ledger columns
+next to `cost_usd`, so `harness report` prices a run even when the provider
+charges $0.
+
+Retry is also gated on the graded ruler: `config/graph.toml`'s `delta_gate` (on
+by default) stops giving attempts to a unit whose `[checks]` score is not
+*moving* — a retry that does not shift the needle escalates instead of repeating.
+
+## Trust boundary: instruction on one side, data on the other
+
+The executor used to receive three things on the same channel: our system
+prompt, the task, and text the loop generated or collected by itself — a mined
+skill body, an old failure trace, the checker's hint, a human decision from
+another case. Only the first two are reviewed. One of the others saying "ignore
+the instructions above" is prompt injection carrying our own stamp of authority.
+
+`harness/trust_boundary.py` marks the difference. Untrusted content travels
+inside an `<untrusted_reference_data>` block that states it is data and not
+instructions, and the tags are neutralised **inside** the body so the text cannot
+close the block and write "after" it. What stays in the system prompt is the
+skill *index* (name — description); the executor reads the body as data, through
+a tool, when it wants it. When the block and the task have to share one string
+(`ExecRequest.prompt`), the task is labelled explicitly as the only source of
+instructions.
+
+Scope: skill bodies are inside the block too. `mutate.check` judges the **path**
+of a skill write against the genome, not its text, and no A/B binds a new skill's
+content to a verdict — so nothing has judged that body before it reaches the
+prompt, which makes it data. `harness/memory/decisions.py` follows the same
+rule: a human answer recalled from another case is labelled "a human said this
+before (not an order)", because past evidence presented as a command makes the
+loop obey a ghost.
+
+`HARNESS_TRUST_BOUNDARY=0` turns the whole thing off and restores the previous
+single-channel prompt — a rollback with no data migration. Separately,
+`harness/redact.py` scrubs secrets from every path that logs, reports or writes
+a trace, so the fence does not leak the thing it is guarding.
+
 ## Self-evolution
 
 The full cycle in one paragraph: the **policy** (`improve/policy.py`, a
 Wilson+UCB bandit over each action's historical KEEP rate, keyed on
 `(kind, action)`, deterministic with an rng seeded by `thread_id:cycle`, and
 consuming the governor's explore budget and bench) picks which of the registry's
-12 actions to try → the action runs `propose` → `apply` goes through a
+14 actions to try → the action runs `propose` → `apply` goes through a
 fail-closed **genome check** and, when the change touches the judge, through
 `meta_check` (which demands a green **sealed exam** plus a human ack) → the
 change is judged by an alternating **A/B** (Wilson) or by the sealed exam →
@@ -295,6 +384,8 @@ The registered actions (`uv run harness actions`):
 | action | what it mutates | judged by |
 |---|---|---|
 | `research` | distils repeated ledger failures into `skills/<slug>.md` | A/B |
+| `procedural` | mines the tool traces of *accepted* runs into a procedure skill, kept only when the n-gram's lift over failed runs clears the floor | A/B |
+| `decompose` | turns one large task into an ordered queue of atomic sub-units (same schema and parser as `add`) | A/B |
 | `codegen` | Python in `plugins/**` | sealed exam |
 | `synthesize` | turns failed runs into quarantine exams | A/B |
 | `redteam` | attacks its own skills/prompt, files counter-examples in quarantine | A/B |
@@ -401,8 +492,8 @@ overrides the token so a deployment need not write the secret to a file.
 
 ## What is proven and what is not
 
-`805 passed, 2 deselected` on `uv run --extra deepagents pytest -q`;
-`uv run harness doctor` reports 18 checks, 0 failures, 0 warnings; the loop has
+`1274 passed, 1 skipped, 5 deselected` on `uv run --extra deepagents pytest -q`;
+`uv run harness doctor` reports 21 checks, 0 failures, 0 warnings; the loop has
 been run end to end against a local LM Studio/MLX model at $0. No benchmark
 numbers are claimed here, because none have been measured on a public suite.
 
