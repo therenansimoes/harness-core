@@ -46,11 +46,16 @@ GO_CMD = "go test ./..."
 # (não é trivial: falha quando o run não mudou arquivo nenhum) e é infinitamente
 # melhor que aceitar um run que não fez nada.
 #
-# `git diff` e não `git status --porcelain`: o workspace do run tem os symlinks
-# de cache do provision (`node_modules`, `.venv`, `.cache`) como não rastreados,
-# e o status ficaria sujo mesmo com o agente parado. O preço é que run que só
-# CRIA arquivo sai vermelho aqui — falso negativo é o erro barato dos dois.
-FALLBACK_CMD = "! git diff --quiet"
+# `git status --porcelain` e não `git diff --quiet`: o status enxerga também
+# arquivo NOVO, e o `git diff` antigo era cego a untracked — run que só CRIAVA
+# arquivo saía vermelho sem motivo. Os symlinks de cache do provision
+# (`node_modules`, `.venv`, `.cache`) são untracked e sujariam o status mesmo
+# com o agente parado, daí os pathspecs `:(exclude)`. O `grep -q .` sai 0
+# quando sobrou qualquer mudança.
+FALLBACK_CMD = (
+    "git status --porcelain -- "
+    "':(exclude)node_modules' ':(exclude).venv' ':(exclude).cache' | grep -q ."
+)
 
 MAKE_TEST_RE = re.compile(r"^test:", re.MULTILINE)
 # Tamanho do pedaço legível do id. O sufixo aleatório é que garante unicidade;

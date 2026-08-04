@@ -53,15 +53,28 @@ packages = ["harness"]
 # no checkout. Vira `harness/_defaults/*` na wheel — é o que `harness.paths`
 # procura antes de cair no checkout.
 #
-# PENDÊNCIA CONHECIDA: `config/projects.toml` é registro LOCAL (paths absolutos
-# da máquina do dono do checkout) e viaja junto. `exclude` NÃO filtra
-# force-include no hatchling — testado com "config/projects.toml",
-# "/config/projects.toml" e "**/projects.toml", os três no-op. Sair da wheel
-# exige decisão de layout (tirar o arquivo do `config/` versionado, ou
-# enumerar arquivo a arquivo no force-include, que quebra silenciosamente
-# quando nasce config nova).
+# `config/` vai arquivo a arquivo, não como diretório: `config/projects.toml` é
+# registro LOCAL (paths absolutos da máquina do dono do checkout) e não pode
+# viajar na wheel — e `exclude` NÃO filtra force-include no hatchling (testado
+# com "config/projects.toml", "/config/projects.toml" e "**/projects.toml", os
+# três no-op). O custo da enumeração é esquecer de listar config nova; contra
+# isso existe `tests/test_packaging.py`, que compara esta lista com
+# `git ls-files config/` e fica vermelho no mesmo commit que cria o arquivo.
 [tool.hatch.build.targets.wheel.force-include]
-"config" = "harness/_defaults/config"
+"config/adapters.toml" = "harness/_defaults/config/adapters.toml"
+"config/agents.toml" = "harness/_defaults/config/agents.toml"
+"config/catalog.toml" = "harness/_defaults/config/catalog.toml"
+"config/genome.toml" = "harness/_defaults/config/genome.toml"
+"config/governor.toml" = "harness/_defaults/config/governor.toml"
+"config/graph.toml" = "harness/_defaults/config/graph.toml"
+"config/kinds.toml" = "harness/_defaults/config/kinds.toml"
+"config/mcp.toml" = "harness/_defaults/config/mcp.toml"
+"config/models.toml" = "harness/_defaults/config/models.toml"
+"config/ruler.toml" = "harness/_defaults/config/ruler.toml"
+"config/tools.toml" = "harness/_defaults/config/tools.toml"
+"config/topology.toml" = "harness/_defaults/config/topology.toml"
+"config/web.toml" = "harness/_defaults/config/web.toml"
+"config/workflows" = "harness/_defaults/config/workflows"
 "skills" = "harness/_defaults/skills"
 "templates" = "harness/_defaults/templates"
 

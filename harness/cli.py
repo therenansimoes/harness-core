@@ -715,7 +715,9 @@ def cmd_quickstart(args: argparse.Namespace) -> int:
     print('3. pedir        harness do "conserta o bug em target.py"')
     print()
 
-    pendencias = [c for c in doctor.checks() if c.status != doctor.OK]
+    # Com `root=` explícito: o quickstart roda de qualquer cwd, e o ambiente que
+    # ele acabou de semear é `~/.harness`.
+    pendencias = [c for c in doctor.checks(root=paths.home_root()) if c.status != doctor.OK]
     if not shutil.which("git"):
         pendencias.append(doctor.Check("git", doctor.FAIL, "git não está no PATH — instale antes"))
     if not pendencias:
@@ -1744,9 +1746,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     quickstart.set_defaults(func=cmd_quickstart, parser=quickstart)
 
-    d = sub.add_parser(
-        "do", help="[BÁSICO] faz o pedido na pasta atual (o default decide tudo)"
-    )
+    d = sub.add_parser("do", help="[BÁSICO] faz o pedido na pasta atual (o default decide tudo)")
     d.add_argument("task", help='o pedido em português, ex.: "conserta o bug em target.py"')
     # Nada de SUPPRESS: flag escondida é flag que ninguém descobre, e a promessa
     # do `do` é que o default resolve — não que não haja volante.
