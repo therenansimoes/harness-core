@@ -15,7 +15,7 @@ import tomllib
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Callable, ClassVar
+from typing import Any, Callable, ClassVar, Sequence
 
 from harness.skills import render_prompt, select_skills
 from harness.types import Capabilities, ExecRequest, ExecResult, ExitReason, Preflight
@@ -85,34 +85,61 @@ class DeepagentsBackend:
 
         before = _snapshot(req.workspace, exclude=req.trace_path)
         agent, usage_cb = _build_agent(req)
+        tracer = _trace_collector()
         config: dict[str, Any] = {
             # `recursion_limit` conta passos do grafo (modelo + tools + middleware),
             # não turnos; folga de 4x para o limite real ser o middleware.
             "recursion_limit": max(50, req.max_turns * 4),
-            "callbacks": [usage_cb],
+            "callbacks": [usage_cb, tracer],
         }
 
         payload = {"messages": [{"role": "user", "content": req.prompt}]}
         try:
             state = _with_timeout(lambda: agent.invoke(payload, config), req.timeout_s)
         except TimeoutError:
-            return _result(req, before, ok=False, exit_reason="timeout", turns=0, usage=usage_cb)
+            # Cópia: a thread do invoke não morre no timeout e segue mutando a lista.
+            partial = list(tracer.messages)
+            _write_trace(req.trace_path, partial, error=f"timeout após {req.timeout_s}s")
+            return _result(
+                req,
+                before,
+                ok=False,
+                exit_reason="timeout",
+                turns=_turns(partial),
+                usage=usage_cb,
+            )
         except Exception as exc:  # inclui GraphRecursionError e erro de provider
+            partial = list(tracer.messages)
             if type(exc).__name__ == "GraphRecursionError":
+                _write_trace(req.trace_path, partial, error=f"GraphRecursionError: {exc}")
                 return _result(
-                    req, before, ok=False, exit_reason="max_turns", turns=0, usage=usage_cb
+                    req,
+                    before,
+                    ok=False,
+                    exit_reason="max_turns",
+                    turns=_turns(partial),
+                    usage=usage_cb,
                 )
-            return _failure(req, "error", f"{type(exc).__name__}: {exc}")
+            return _failure(req, "error", f"{type(exc).__name__}: {exc}", messages=partial)
 
         messages = state.get("messages", [])
         _write_trace(req.trace_path, messages)
-        turns = sum(1 for m in messages if getattr(m, "type", None) == "ai")
+        after = _snapshot(req.workspace, exclude=req.trace_path)
+        changed = _diff(before, after)
+        turns = _turns(messages)
         hit_limit = _hit_call_limit(messages)
+        exit_reason: ExitReason
         if hit_limit:
+            exit_reason, ok = "max_turns", False
             turns = max(0, turns - 1)  # a mensagem-sentinela não é um turno do agente
-        exit_reason: ExitReason = "max_turns" if hit_limit else "done"
+        elif not changed and not _final_text(messages):
+            # Desistência silenciosa: nada escrito e nada dito. "done" aqui é o
+            # ledger registrando sucesso num run que não produziu nada.
+            exit_reason, ok = "stalled", False
+        else:
+            exit_reason, ok = "done", True
         return _result(
-            req, before, ok=not hit_limit, exit_reason=exit_reason, turns=turns, usage=usage_cb
+            req, before, ok=ok, exit_reason=exit_reason, turns=turns, usage=usage_cb, after=after
         )
 
 
@@ -184,10 +211,23 @@ def _build_agent(req: ExecRequest):
     # Convenção de workspace é responsabilidade do BACKEND, não da unit: o
     # filesystem virtual tem root no workspace, e a unit fala "seu diretório de
     # trabalho" sem saber disso. Sem esta ponte, modelo pequeno alucina path.
+    # O "/" só existe para as tools de arquivo (filesystem virtual com root no
+    # workspace); a tool `execute` é shell REAL com cwd no workspace, então
+    # `ls /dist` lá cai na raiz da máquina e volta vazio — o modelo conclui que
+    # a tarefa não tem arquivos e encerra sem escrever nada.
     system_prompt = (
         "Seu diretório de trabalho é o root do filesystem: os arquivos da "
         'tarefa estão em "/" (ex.: /arquivo.py). Use ls para conferir e as '
-        "tools de arquivo (read_file, edit_file, write_file) para mexer neles."
+        "tools de arquivo (read_file, edit_file, write_file) para mexer neles. "
+        "Na tool `execute` é diferente: é shell real e o cwd JÁ é o diretório "
+        'de trabalho, então use path RELATIVO ("dist/", "./x.py") — "/" no '
+        "shell é a raiz da máquina e não tem nada da tarefa. "
+        # read_file numera as linhas; modelo pequeno copia a numeração/indentação
+        # de volta no old_string e o edit_file (match exato) falha em loop.
+        "O `read_file` mostra números de linha que NÃO existem no arquivo: no "
+        "`old_string` do edit_file use só o texto cru, com a indentação exata. "
+        "Se o edit_file falhar duas vezes com 'String not found', pare de "
+        "tentar e reescreva o arquivo inteiro com write_file."
     )
     # `kind` já é campo do ExecRequest (preenchido pelo router no run_graph e
     # pela unit no cli); getattr segura request serializado de genoma antigo.
@@ -309,6 +349,77 @@ def _hit_call_limit(messages: list[Any]) -> bool:
     return False
 
 
+def _final_text(messages: list[Any]) -> str:
+    """Texto da última mensagem do agente. "" = ele não disse nada.
+
+    O content pode vir como lista de blocos (thinking + text): só os blocos
+    `text` contam. Mensagem com tool_calls não é desistência, mesmo sem texto.
+    """
+    for m in reversed(messages):
+        if getattr(m, "type", None) != "ai":
+            continue
+        content = getattr(m, "content", "")
+        if isinstance(content, list):
+            content = "".join(
+                str(b.get("text", "")) for b in content if isinstance(b, dict) and "text" in b
+            )
+        if str(content).strip():
+            return str(content)
+        return "" if not getattr(m, "tool_calls", None) else "[tool_calls]"
+    return ""
+
+
+def _turns(messages: list[Any]) -> int:
+    return sum(1 for m in messages if getattr(m, "type", None) == "ai")
+
+
+class _TraceMsg:
+    """Mensagem mínima no formato que `_write_trace` lê (via getattr)."""
+
+    def __init__(self, type: str, content: str, tool_calls: list[Any] | None = None) -> None:
+        self.type = type
+        self.content = content
+        self.tool_calls = tool_calls
+
+
+def _trace_collector() -> Any:
+    """Callback que acumula as mensagens ENQUANTO o grafo roda.
+
+    Timeout e GraphRecursionError não devolvem state: sem isto o trace desses
+    runs sai vazio, e são justamente os que precisam de diagnóstico. Todo o
+    corpo é best-effort — o coletor não pode derrubar o run que observa.
+    """
+    from langchain_core.callbacks import BaseCallbackHandler
+
+    class _Collector(BaseCallbackHandler):
+        def __init__(self) -> None:
+            self.messages: list[Any] = []
+
+        def on_llm_end(self, response: Any, **kwargs: Any) -> None:
+            try:
+                for gen in getattr(response, "generations", []) or []:
+                    for g in gen:
+                        msg = getattr(g, "message", None)
+                        if msg is not None:
+                            self.messages.append(msg)
+            except Exception:
+                pass
+
+        def on_tool_end(self, output: Any, **kwargs: Any) -> None:
+            try:
+                self.messages.append(_TraceMsg("tool", str(output)[:4000]))
+            except Exception:
+                pass
+
+        def on_tool_error(self, error: BaseException, **kwargs: Any) -> None:
+            try:
+                self.messages.append(_TraceMsg("tool", str(error)[:4000]))
+            except Exception:
+                pass
+
+    return _Collector()
+
+
 def _with_timeout(fn: Callable[[], Any], timeout_s: float) -> Any:
     """Roda `fn` numa thread daemon e desiste depois de `timeout_s`.
 
@@ -395,6 +506,7 @@ def _result(
     exit_reason: ExitReason,
     turns: int,
     usage: Any,
+    after: dict[str, tuple[int, int]] | None = None,
 ) -> ExecResult:
     tin, tout = _tokens(usage)
     return ExecResult(
@@ -404,14 +516,21 @@ def _result(
         cost_usd=cost_usd(req.model, tin, tout),
         tokens_in=tin,
         tokens_out=tout,
-        files_changed=_diff(before, _snapshot(req.workspace, exclude=req.trace_path)),
+        # `after` reaproveita o snapshot de quem já decidiu por ele (o "stalled"
+        # precisa do diff antes de escolher o exit_reason); sem ele, tira agora.
+        files_changed=_diff(
+            before,
+            after if after is not None else _snapshot(req.workspace, exclude=req.trace_path),
+        ),
         session_id=req.session_id,
         trace_path=req.trace_path,
     )
 
 
-def _failure(req: ExecRequest, exit_reason: ExitReason, reason: str) -> ExecResult:
-    _write_trace(req.trace_path, [], error=reason)
+def _failure(
+    req: ExecRequest, exit_reason: ExitReason, reason: str, messages: Sequence[Any] = ()
+) -> ExecResult:
+    _write_trace(req.trace_path, list(messages), error=reason)
     return ExecResult(
         ok=False,
         exit_reason=exit_reason,

@@ -116,9 +116,18 @@ def test_propose_reads_ledger(tmp_path):
 SKILL_MD = '---\nname = "helper"\nkinds = []\ndescription = "d"\n---\n\nCorpo da skill.\n'
 
 
+class _FakeMsg:
+    type = "ai"
+    content = "feito"
+    tool_calls = None
+
+
 class _FakeAgent:
     def invoke(self, payload, config):
-        return {"messages": []}
+        # Resposta final com texto: state sem nenhuma mensagem do agente é
+        # desistência silenciosa (exit_reason "stalled"), e o assunto destes
+        # testes é o system_prompt/atribuição, não o exit_reason.
+        return {"messages": [_FakeMsg()]}
 
 
 @pytest.fixture

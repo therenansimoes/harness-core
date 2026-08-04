@@ -8,7 +8,8 @@ from typing import Literal, Mapping
 
 Kind = Literal["code", "content", "config", "refactor", "infra"]
 
-ExitReason = Literal["done", "max_turns", "timeout", "error", "blocked"]
+# "stalled": executou, não escreveu nada e não disse nada.
+ExitReason = Literal["done", "max_turns", "timeout", "error", "blocked", "stalled"]
 
 
 @dataclass(frozen=True)

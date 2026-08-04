@@ -201,6 +201,28 @@ def test_kind_no_request_injeta_skill_no_system_prompt(tmp_path, monkeypatch):
     assert "MARCADOR-DA-SKILL" not in capturado["system_prompt"]
 
 
+def test_system_prompt_separa_shell_de_filesystem_virtual(tmp_path, monkeypatch):
+    """Diagnóstico do u4a: o modelo rodava `ls /dist` no shell real (raiz da
+    máquina), recebia "não existe" e encerrava sem escrever nada; e repetia
+    edit_file com a indentação dos números de linha do read_file até desistir.
+    As duas pontes moram no system prompt do backend."""
+    pytest.importorskip("deepagents")
+    import deepagents
+
+    capturado: dict[str, str] = {}
+
+    def spy(*a, **kw):
+        capturado["system_prompt"] = kw["system_prompt"]
+        return object()
+
+    monkeypatch.setattr(deepagents, "create_deep_agent", spy)
+    da._build_agent(ExecRequest(prompt="x", workspace=tmp_path, model="ollama:qwen3:4b"))
+    prompt = capturado["system_prompt"]
+    assert "RELATIVO" in prompt  # `execute` é shell real com cwd no workspace
+    assert "números de linha" in prompt  # read_file numera, o arquivo não
+    assert "write_file" in prompt  # saída do loop de edit_file que não casa
+
+
 def test_model_instance_tem_temperature_baixa():
     """Fix do thinking/temperature: instância, não string crua (com fail-open)."""
     pytest.importorskip("langchain")
@@ -210,6 +232,84 @@ def test_model_instance_tem_temperature_baixa():
             continue  # provider sem credencial local: fallback pra string crua
         assert got.temperature == da.MODEL_TEMPERATURE
     assert da._model_for(None) is None
+
+
+# --- stalled e trace parcial ------------------------------------------------
+
+
+class FakeMsg:
+    def __init__(self, type, content, tool_calls=None):
+        self.type = type
+        self.content = content
+        self.tool_calls = tool_calls
+
+
+class FakeUsage:
+    usage_metadata: dict = {}
+
+
+def _fake_backend(monkeypatch, invoke):
+    """Backend com o grafo trocado por `invoke` — sem lib, sem rede."""
+    monkeypatch.setattr(da, "_import_deepagents", lambda: None)
+
+    class FakeAgent:
+        def invoke(self, payload, config):
+            return invoke(payload, config)
+
+    monkeypatch.setattr(da, "_build_agent", lambda req: (FakeAgent(), FakeUsage()))
+    return da.DeepagentsBackend()
+
+
+def _req(tmp_path, **kw):
+    kw.setdefault("prompt", "x")
+    return ExecRequest(workspace=tmp_path, trace_path=tmp_path / "trace.jsonl", **kw)
+
+
+def test_desistencia_silenciosa_vira_stalled(tmp_path, monkeypatch):
+    """u4a: zero escrita e zero texto final saía como done/ok=True no ledger."""
+    backend = _fake_backend(
+        monkeypatch, lambda payload, config: {"messages": [FakeMsg("ai", "")]}
+    )
+    res = backend.execute(_req(tmp_path))
+    assert (res.ok, res.exit_reason, res.files_changed) == (False, "stalled", ())
+
+
+@pytest.mark.parametrize(
+    "escreve, texto",
+    [
+        (True, ""),  # escreveu e ficou calado: entregou algo
+        (False, "relatório do que encontrei"),  # não escreveu mas respondeu
+    ],
+)
+def test_stalled_exige_as_duas_condicoes(tmp_path, monkeypatch, escreve, texto):
+    def invoke(payload, config):
+        if escreve:
+            (tmp_path / "x.py").write_text("print(1)\n", encoding="utf-8")
+        return {"messages": [FakeMsg("ai", texto)]}
+
+    res = _fake_backend(monkeypatch, invoke).execute(_req(tmp_path))
+    assert (res.ok, res.exit_reason) == (True, "done")
+
+
+def test_timeout_materializa_trace_parcial(tmp_path, monkeypatch):
+    """Timeout descartava o trace inteiro — justamente o run que precisa dele."""
+    import time
+
+    class FakeGen:
+        message = FakeMsg("ai", "pensando alto")
+
+    class FakeLLMResult:
+        generations = [[FakeGen()]]
+
+    def invoke(payload, config):
+        config["callbacks"][1].on_llm_end(FakeLLMResult())
+        time.sleep(5)
+
+    res = _fake_backend(monkeypatch, invoke).execute(_req(tmp_path, timeout_s=0.2))
+    assert res.exit_reason == "timeout"
+    linhas = [json.loads(l) for l in res.trace_path.read_text().splitlines()]
+    assert any("error" in r for r in linhas)
+    assert sum(1 for r in linhas if r.get("type") == "ai") == 1
 
 
 # --- ollama de verdade -----------------------------------------------------

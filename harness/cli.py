@@ -251,6 +251,8 @@ def run_once(
         # A régua decide, não o executor: verify roda sempre que houve execução
         # (mesmo max_turns/timeout — pode ter consertado antes de estourar).
         # "blocked"/"error" nem chegaram a executar; aí não há o que verificar.
+        # "stalled" fica fora de propósito: por definição é zero escrita no
+        # workspace, então o verify só repetiria o resultado do run anterior.
         ran = result.exit_reason in ("done", "max_turns", "timeout")
         verify_tail = ""
         if ran:
@@ -817,6 +819,10 @@ def cmd_ui_verify(args: argparse.Namespace) -> int:
     estava pronto". Quem põe isto no `verify_cmd` já decidiu que a tela faz parte
     do aceite, então qualquer falha derruba o exit code — inclusive Chrome
     ausente, que significa "não foi verificado", não "passou".
+
+    Exceção deliberada: `<a href>` local morto sai como AVISO e não derruba o
+    exit code, porque numa fila progressiva o nav aponta para páginas que a
+    unidade seguinte ainda vai criar. `--strict-links` devolve o gate completo.
     """
     from harness import uiverify
 
@@ -827,13 +833,17 @@ def cmd_ui_verify(args: argparse.Namespace) -> int:
         expect=tuple(args.expect_asset or ()),
         shot_out=args.shot_out,
         ask=args.ask,
+        strict_links=args.strict_links,
     )
     for motivo in res.failures:
         print(f"ui-verify FALHA {motivo}", file=sys.stderr)
+    for aviso in res.warnings:
+        print(f"ui-verify aviso: {aviso}", file=sys.stderr)
     shot = f"{res.shot} ({res.shot_kb:.1f}kb)" if res.shot else "nenhum"
     print(
         f"ui-verify dist={args.dist} url={args.url_path} "
         f"assets={res.ok_assets}/{res.checked} shot={shot} falhas={len(res.failures)}"
+        + (f" avisos={len(res.warnings)}" if res.warnings else "")
     )
     return 1 if res.failures else 0
 
@@ -1296,6 +1306,9 @@ def build_parser() -> argparse.ArgumentParser:
                     dest="expect_asset", metavar="KIND",
                     help=f"exige ≥1 asset do tipo CARREGÁVEL (repetível): "
                          f"{'|'.join(ASSET_KINDS)}")
+    ui.add_argument("--strict-links", action="store_true", dest="strict_links",
+                    help="<a href> local morto REPROVA em vez de avisar (gate de "
+                         "completude: use na unidade que fecha o site)")
     ui.add_argument("--shot-out", default=None, dest="shot_out", metavar="PATH",
                     help=f"onde gravar o screenshot (default: ./{SHOT_NAME}, que "
                          "sobrevive com --keep-ws para review humano)")

@@ -99,6 +99,41 @@ def test_referencia_externa_nao_e_conferida(tmp_path):
     assert res.checked == 1
 
 
+NAV_MORTO = '<nav><a href="/projetos.html">projetos</a></nav>'
+
+
+def test_pagina_linkada_ausente_e_aviso_nao_falha(tmp_path):
+    """O caso de produção: o nav da unidade 1 aponta para as quatro páginas, u5/u6
+    é que as criam. Página linkada ausente é completude, não renderização."""
+    res = uiverify.verify(make_dist(tmp_path, LINK_OK, body=NAV_MORTO),
+                          expect=("css",), shot_out=tmp_path / "shot.png")
+    assert res.failures == ()
+    assert res.warnings == ("pagina linkada ausente: /projetos.html",)
+
+
+def test_script_morto_continua_reprovando(tmp_path):
+    """O que o navegador carrega junto com a página não virou aviso nenhum."""
+    res = uiverify.verify(
+        make_dist(tmp_path, LINK_OK + '<script src="/_astro/app.js"></script>',
+                  body=NAV_MORTO),
+        shot_out=tmp_path / "shot.png",
+    )
+    assert res.failures == ("asset 404: /_astro/app.js",)
+    assert res.warnings == ("pagina linkada ausente: /projetos.html",)
+
+
+def test_strict_links_reprova_a_pagina_linkada(tmp_path, monkeypatch, capsys):
+    """`--strict-links` é o gate completo de quem fecha o site: aí o `<a>` morto
+    derruba o exit code, e sem a flag o mesmo dist sai 0."""
+    dist = make_dist(tmp_path, LINK_OK, body=NAV_MORTO)
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["ui-verify", str(dist), "--strict-links"]) == 1
+    assert cli.main(["ui-verify", str(dist)]) == 0
+    err = capsys.readouterr().err
+    assert "ui-verify FALHA asset 404: /projetos.html" in err
+    assert "ui-verify aviso: pagina linkada ausente: /projetos.html" in err
+
+
 def test_style_inline_conta_como_css(tmp_path):
     """O Astro inlina folha pequena; exigir `<link>` reprovaria build legítimo."""
     res = uiverify.verify(make_dist(tmp_path, f"<style>{CSS}</style>", css=False),

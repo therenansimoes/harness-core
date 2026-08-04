@@ -82,7 +82,7 @@ CFG_MODEL = "harness_model"
 CFG_MAX_TURNS = "harness_max_turns"
 CFG_ROUTE = "harness_route"
 
-DEFAULT_MAX_TURNS = 8
+DEFAULT_MAX_TURNS = 30  # auditoria 2026-08-03: 8 model calls não cobrem ler+editar+verificar
 VERIFY_TIMEOUT_S = 120.0
 VERIFY_LOG = "verify.log"
 TRACE_FILE = "trace.jsonl"
@@ -520,6 +520,11 @@ def _ui_verify(ws: Path, policy: GraphPolicy) -> list[str]:
     máquina sem Chrome isso viraria DISCARD sem evidência nenhuma. Quem quer o
     rigor de "não verificado é reprovado" põe `harness ui-verify` no próprio
     `verify_cmd` da unidade, onde Chrome ausente É falha.
+
+    Sem `strict_links` de propósito: numa fila progressiva o nav da primeira
+    unidade linka páginas que a última ainda vai criar, e reprovar por isso
+    derrubava run cuja tela renderizou perfeitamente. Quem quer o gate de
+    completude põe `harness ui-verify --strict-links` no `verify_cmd`.
     """
     dist = ws / policy.ui_verify_dist
     if not dist.is_dir():

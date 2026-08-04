@@ -23,6 +23,14 @@ aqui não é `subprocess.run(timeout=...)`: é aguardar o PNG ficar COMPLETO (ma
 number + chunk IEND) e então matar o processo. Um check que trava um minuto por
 causa disso não seria usado por ninguém.
 
+Não toda referência morta é tela morta, e confundir as duas custou run reprovado
+em produção: numa fila progressiva o nav da unidade 1 já aponta para as quatro
+páginas do site, e u5/u6 é que as criam. O `<a href>` para uma página que ainda
+não existe é buraco de COMPLETUDE (job da unidade final), não de renderização —
+vira aviso. Quebra renderização o que o navegador carrega junto com a página:
+`<script src>`, `<link>` de stylesheet/ícone e `<img src>`; esses continuam
+reprovando. Quem quer o gate completo pede `--strict-links`.
+
 O `--ask` é opt-in por unidade e custa alguns centavos: manda o screenshot pro
 Claude CLI em haiku e exige um JSON. Sem ele, nenhum token é gasto. Isto continua
 sendo verify de UNIDADE — quem escolhe a régua é o autor da unidade —, não juiz
@@ -51,6 +59,14 @@ from urllib.parse import urljoin
 SHOT_NAME = "ui-verify.png"
 DEFAULT_MIN_KB = 20.0
 ASSET_KINDS = ("css", "js")
+
+# `rel` de `<link>` que o navegador busca ao pintar a página. `canonical`,
+# `alternate` e afins descrevem o site para robô: morto ali não é tela morta.
+RENDER_RELS = frozenset(
+    {"stylesheet", "icon", "shortcut", "apple-touch-icon", "mask-icon", "preload",
+     "manifest"}
+)
+MISSING_PAGE = "pagina linkada ausente"
 
 SHOT_TIMEOUT_S = 30.0
 ASSET_TIMEOUT_S = 5.0
@@ -84,6 +100,7 @@ _SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*:")
 _REF = re.compile(r"""\b(?:href|src)\s*=\s*["']([^"']*)["']""", re.I)
 _LINK = re.compile(r"<link\b[^>]*>", re.I)
 _SCRIPT_SRC = re.compile(r"""<script\b[^>]*\bsrc\s*=\s*["']([^"']*)["']""", re.I)
+_IMG_SRC = re.compile(r"""<img\b[^>]*\bsrc\s*=\s*["']([^"']*)["']""", re.I)
 _STYLE_INLINE = re.compile(r"<style\b[^>]*>(.*?)</style>", re.I | re.S)
 _ATTR = re.compile(r"""\b([\w:-]+)\s*=\s*["']([^"']*)["']""")
 _FENCE = re.compile(r"^```[a-zA-Z]*\s*\n(.*)\n```$", re.S)
@@ -98,6 +115,9 @@ class Result:
     shot_kb: float
     checked: int
     ok_assets: int
+    # Referência morta que não impede a página de renderizar: sai no relatório,
+    # não no exit code.
+    warnings: tuple[str, ...] = ()
 
 
 def verify(
@@ -108,11 +128,16 @@ def verify(
     expect: tuple[str, ...] = (),
     shot_out: Path | str | None = None,
     ask: str | None = None,
+    strict_links: bool = False,
 ) -> Result:
     """Roda a régua inteira sobre um `dist/` e devolve todas as falhas.
 
     Todas, não a primeira: quem lê o relatório quer saber que o CSS morreu E que
     a imagem some junto, não descobrir uma por vez a cada rodada.
+
+    `strict_links=True` volta ao gate completo, em que `<a href>` local morto
+    também reprova — útil para a unidade FINAL de uma fila, que é a dona da
+    completude do site.
     """
     root = Path(dist).resolve()
     shot = Path(shot_out).resolve() if shot_out else Path.cwd() / SHOT_NAME
@@ -129,10 +154,19 @@ def verify(
         # Um GET por referência: os três checks abaixo leem o MESMO mapa, senão a
         # mesma folha de estilo é baixada três vezes por rodada.
         fetched = {ref: _get(urljoin(page, ref)) for ref in _refs(html)}
+        # Uma referência que aparece nas duas classes (o mesmo caminho em `<img
+        # src>` e em `<a href>`) é asset: quem carrega junto com a página manda.
+        assets = _asset_refs(html)
+        dead = [ref for ref, (status, _) in fetched.items() if status != 200]
         failures = [
-            f"asset {_status(status)}: {ref}"
-            for ref, (status, _) in fetched.items()
-            if status != 200
+            f"asset {_status(fetched[ref][0])}: {ref}"
+            for ref in dead
+            if strict_links or ref in assets
+        ]
+        warnings = [
+            f"{MISSING_PAGE}: {ref}"
+            for ref in dead
+            if not strict_links and ref not in assets
         ]
         failures += _check_expected(html, expect, fetched)
         shot_kb, shot_fail = _check_shot(page, shot, min_kb)
@@ -142,7 +176,14 @@ def verify(
 
     if ask and shot.is_file():
         failures += _check_ask(shot, ask)
-    return Result(tuple(failures), shot if shot.is_file() else None, shot_kb, checked, ok_assets)
+    return Result(
+        tuple(failures),
+        shot if shot.is_file() else None,
+        shot_kb,
+        checked,
+        ok_assets,
+        tuple(warnings),
+    )
 
 
 # --------------------------------------------------------------------------- servidor
@@ -208,6 +249,26 @@ def _is_local(ref: str) -> bool:
     if not ref or ref.startswith("#") or ref.startswith("//"):
         return False
     return not _SCHEME.match(ref)
+
+
+def _asset_refs(html: str) -> set[str]:
+    """Referências locais cujo 404 quebra a RENDERIZAÇÃO da página.
+
+    O resto (`<a href>` para outra página, `rel=canonical`) o navegador só busca
+    se alguém clicar — ausência ali é completude de site, não tela crua.
+    """
+    refs = _SCRIPT_SRC.findall(html) + _IMG_SRC.findall(html) + _render_links(html)
+    return {ref for ref in refs if _is_local(ref)}
+
+
+def _render_links(html: str) -> list[str]:
+    hrefs = []
+    for tag in _LINK.findall(html):
+        attrs = {k.lower(): v for k, v in _ATTR.findall(tag)}
+        rel = attrs.get("rel", "").lower().split()
+        if attrs.get("href") and RENDER_RELS.intersection(rel):
+            hrefs.append(attrs["href"])
+    return hrefs
 
 
 def _stylesheets(html: str) -> list[str]:
