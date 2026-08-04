@@ -22,7 +22,7 @@ backend = "deepagents"
 # LM Studio local (MLX, porta 1234), $0 por run — o ÚNICO runtime local desde
 # 2026-08-04. Auditoria 2026-08-03: o 3B anterior falhou todas as unidades do dia
 # (não fecha ler+editar+verificar). O teto de turnos acompanha o modelo do t0.
-model = "openai:qwen3.5-9b-mlx"
+model = "openai:qwen/qwen3.5-9b"
 max_turns = 40
 cost_rank = 0
 
@@ -68,7 +68,7 @@ refactor = "t2"
 input_per_mtok = 0.0
 output_per_mtok = 0.0
 
-[pricing."openai:qwen3.5-9b-mlx"]
+[pricing."openai:qwen/qwen3.5-9b"]
 input_per_mtok = 0.0
 output_per_mtok = 0.0
 
@@ -101,6 +101,6 @@ output_per_mtok = 0.0
 # leva ~78s na M3 Pro, por isso o timeout tem que ser MAIOR que isso: em 60s o
 # request morria por timeout mesmo com orçamento sobrando.
 [vision]
-model = "openai:qwen3.5-9b-mlx"
+model = "openai:qwen/qwen3.5-9b"
 timeout_s = 240
 max_tokens = 3000

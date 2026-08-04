@@ -54,6 +54,9 @@ class UnitSpec:
     # `[checks]` do unit.toml: ADITIVO. Vazio (o default) = régua binária de
     # sempre, byte a byte.
     checks: tuple[Check, ...] = ()
+    # Adapter LoRA pedido no dedo (`config/adapters.toml`): vence o matcher da
+    # frota. None (o default) = quem escolhe é `routing/adapters.select_adapter`.
+    adapter: str | None = None
 
 
 @dataclass(frozen=True)
@@ -90,6 +93,10 @@ class ExecRequest:
     # Roteamento decidiu o kind; sem ele no request o backend só acha skill de
     # `kinds = []` — nenhuma seed tem — e a injeção nunca acontece.
     kind: str | None = None
+    # Id do adapter LoRA escolhido pelo router (`config/adapters.toml`). None =
+    # modelo base puro. Default obrigatório: os call sites posicionais que já
+    # existem não sabem deste campo.
+    adapter: str | None = None
 
 
 @dataclass(frozen=True)
@@ -119,6 +126,9 @@ class Selection:
     kind: Kind
     max_turns: int
     reasons: tuple[str, ...] = ()
+    # Peso especializado por cima do modelo (frota LoRA local). None = base pura
+    # — o caso normal. Congelado entre tentativas: ver `run_graph._route`.
+    adapter: str | None = None
 
 
 @dataclass(frozen=True)

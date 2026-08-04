@@ -89,6 +89,7 @@ def load_unit(path: Path) -> UnitSpec:
         kind=data.get("kind"),
         project=str(project) if project else None,
         checks=_load_checks(unit_file, data.get("checks")),
+        adapter=str(data["adapter"]) if data.get("adapter") else None,
     )
 
 

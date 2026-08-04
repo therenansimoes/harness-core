@@ -58,6 +58,11 @@ class RunState(TypedDict):
     # de editar. Só um flag — o plano em si é do executor (planner + write_todos),
     # aqui não roda LLM. Quem lê usa `get(..., False)`: checkpoint antigo não tem.
     needs_plan: bool
+    # Adapter LoRA da PRIMEIRA tentativa, congelado para as seguintes: trocar o
+    # peso no meio do run tiraria do retry a única variável que ele controla (o
+    # tier) e faria o A/B comparar duas coisas diferentes. Quem lê usa
+    # `get(..., None)`: checkpoint antigo não tem a chave.
+    adapter: str | None
     # Segundos que o `retry` espera antes da próxima tentativa — o gate põe quando
     # o agente declarou `external_wait`. 0.0 (o normal) = sem espera. Quem lê usa
     # `get(..., 0.0)`: checkpoint antigo não tem a chave.

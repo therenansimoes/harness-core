@@ -70,6 +70,7 @@ from harness.routing import (
     config_dir,
     router,
 )
+from harness.routing.adapters import runs_local, select_adapter
 from harness.ruler.gate import gate as ruler_gate
 from harness.ruler.kpi import KpiSpec, collect, load_kpis
 from harness.ruler.verify import (
@@ -510,8 +511,12 @@ def _route(state: RunState, config=None) -> dict:
         selection = replace(selection, max_turns=turns)
     deadline = _gov_deadline(state["run_id"], _db(config), gov)
 
+    adapter = _adapter(state, selection, attempt)
+    selection = replace(selection, adapter=adapter)
+
     return {
         "selection": selection,
+        "adapter": adapter,
         "events": [
             _event(
                 "route",
@@ -520,12 +525,34 @@ def _route(state: RunState, config=None) -> dict:
                 model=selection.model,
                 tier=selection.tier,
                 kind=selection.kind,
+                adapter=adapter,
                 attempt=attempt,
                 # `reasons` no trace: sem ela a escolha vira número sem porquê.
                 reasons=list(selection.reasons),
             )
         ],
     }
+
+
+def _adapter(state: RunState, selection: Selection, attempt: int) -> str | None:
+    """Qual peso LoRA paga esta tentativa. None = modelo base puro, o normal.
+
+    Duas regras, nesta ordem:
+
+    1. Seleção que não roda no runtime local não tem onde aplicar adapter — a
+       escalação para a nuvem ZERA o peso em vez de carregar um id morto pro
+       trace. É também o que mantém o registro fora do caminho de quem fixou
+       backend no dedo: sem local, `adapters.toml` nem é lido.
+    2. Escolhido na tentativa 0 e CONGELADO nas seguintes. O retry existe para
+       mudar UMA variável (o tier); trocar o peso junto faria o ledger comparar
+       duas coisas diferentes com o mesmo rótulo.
+    """
+    if not runs_local(selection.backend, selection.model):
+        return None
+    if attempt:
+        return state.get("adapter")
+    escolhido = select_adapter(state["unit"], selection.kind)
+    return escolhido.id if escolhido else None
 
 
 def _provision(state: RunState, config=None) -> dict:
@@ -668,6 +695,7 @@ def _execute(state: RunState, config=None) -> dict:
             trace_path=ws / TRACE_FILE,
             run_id=run_id,
             kind=sel.kind,
+            adapter=sel.adapter,
         )
     )
     payload = _exec_payload(result)

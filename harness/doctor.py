@@ -74,6 +74,7 @@ def checks(root: Path | str | None = None, data: Path | None = None) -> list[Che
         _cache(data_dir),
         _executor(base),
         _lmstudio(base),
+        _adapters(),
         *_backends(),
     ]
 
@@ -368,6 +369,39 @@ def _lmstudio(base: Path) -> Check:
         return Check("lmstudio", OK, "nenhum tier usa modelo local")
     pre = _lmstudio_preflight(str(local[0]["model"]))
     return Check("lmstudio", OK if pre.ok else WARN, pre.reason)
+
+
+def _adapters() -> Check:
+    """A frota LoRA carrega, e o runtime dela está no ar.
+
+    Registro TORTO é FALHA (é a doutrina do próprio `load_adapters`: typo virando
+    "sem adapter" em silêncio faz o run pagar a conta com o peso errado). Frota
+    VAZIA é ok — a frota é opt-in e a base pura sempre atende. Servidor MLX
+    desligado é AVISO, mesma política do check do LM Studio: quem sobe o
+    mlx_lm.server é o Makefile/humano, não o harness."""
+    from harness.routing.adapters import AdapterError, load_adapters
+
+    try:
+        fleet = load_adapters()
+    except AdapterError as exc:
+        return Check("adapters", FAIL, str(exc))
+    if not fleet:
+        return Check("adapters", OK, "frota vazia (opt-in)")
+
+    # Import local pelo mesmo motivo do `_lmstudio`: o backend puxa skills/roles.
+    from harness.backends.deepagents_backend import RUNTIME_MLX, _mlx_preflight
+
+    ids = ", ".join(a.id for a in fleet)
+    mlx = [a for a in fleet if a.runtime == RUNTIME_MLX]
+    if not mlx:
+        return Check("adapters", OK, f"{len(fleet)} adapter(s): {ids} — nenhum usa MLX")
+
+    pre = _mlx_preflight(mlx[0])
+    return Check(
+        "adapters",
+        OK if pre.ok else WARN,
+        f"{len(fleet)} adapter(s): {ids} — {pre.reason}",
+    )
 
 
 def _backends() -> list[Check]:

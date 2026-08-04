@@ -1,0 +1,240 @@
+# adapters.toml — a frota de pesos LoRA locais. Config, não código: quem lê é
+# `harness/routing/adapters.py` (escolhe) e o backend deepagents (aplica).
+#
+# Um adapter é o MESMO modelo base com um `.safetensors` por cima. Trocar custa
+# um reload no servidor (~1,2s medido); reusar o que já está quente custa zero.
+# Escolha determinística, sem LLM: filtro por `kinds`, gatilho por `paths`,
+# ranking por `match` contra o prompt da unidade. Ninguém pontuou = modelo base
+# puro, que é o default e nunca é erro.
+#
+# ARQUIVO AUSENTE = sem frota. Arquivo TORTO derruba o load (id duplicado, `ref`
+# que não existe no disco, runtime desconhecido, kind fora da lista): registry
+# com typo virando "sem adapter" em silêncio esconde o bug e roda com o peso
+# errado.
+#
+# Campos:
+#   id               chave no registro; é o que o trace carimba e o que
+#                    `adapter = "..."` de um unit.toml aponta
+#   runtime          "mlx" (mlx_lm.server, adapter por request no corpo do
+#                    /v1/chat/completions) | "lmstudio"
+#   served_model     nome do modelo BASE como o runtime o conhece — o adapter só
+#                    existe colado nele
+#   ref              path ABSOLUTO do diretório do adapter no disco
+#   kinds            vazio = vale para todo kind (mesmo contrato das skills)
+#   match            tokens do que este peso sabe fazer (ranking)
+#   paths            globs que disparam o adapter sem passar pelo ranking
+#   system           prefixo do system prompt do agente quando este peso é o
+#                    escolhido — o texto com que ele foi TREINADO, na frente de
+#                    tudo (inclusive do prompt do executor)
+#   enable_thinking  liga o template de raciocínio do base
+#   temperature/top_p/repeat_penalty/max_tokens   sampling do card do adapter
+#   priority         desempate entre adapters com o mesmo score
+#   tool_format      "native" (default) = tool calling do chat template do base.
+#                    "hermes" é vocabulário válido mas REJEITA no load: o
+#                    mlx_lm.server infere o parser de tool call do template do
+#                    BASE no load (o adapter só carrega peso), então resposta em
+#                    <tool_call> num base não-hermes volta como texto e o loop
+#                    de tools do agente não vê nada. Ver VALID_TOOL_FORMATS em
+#                    harness/routing/adapters.py.
+#   output/scale     metadado do registro: carregado e validado, ainda não
+#                    consumido por ninguém
+#
+# O servidor MLX sobe fora do harness (Makefile/humano) e responde em
+# `$HARNESS_MLX_BASE_URL` (default http://127.0.0.1:1235/v1).
+
+# Exemplo comentado — modelo de entrada nova:
+#
+# [[adapter]]
+# id = "csv"
+# runtime = "mlx"
+# served_model = "mlx-community/Qwen3.5-4B-4bit"
+# ref = "/Users/renansimoes/.cache/huggingface/hub/models--exemplo/snapshots/abc123"
+# kinds = ["content"]
+# match = ["csv", "planilha", "coluna", "delimitador"]
+# paths = ["*.csv"]
+# enable_thinking = false
+# temperature = 0.0
+# max_tokens = 512
+# output = "csv"
+# priority = 0
+
+# Text-to-SQL sobre Llama-3.2-3B-Instruct.
+# 25k ex Spider+Create-Context; substitui sahilsangwan
+[[adapter]]
+id = "sql"
+runtime = "mlx"
+served_model = "mlx-community/Llama-3.2-3B-Instruct-4bit"
+ref = "/Users/renansimoes/models/lora-fleet/sql"
+kinds = ["code", "config"]
+match = ["sql", "query", "database", "sqlite", "select"]
+paths = ["*.sql"]
+# rotas de extração/veredito: thinking come o budget de saída (verificação 2026-08-04)
+enable_thinking = false
+temperature = 0.0
+max_tokens = 128
+output = "text"
+priority = 0
+
+# Tool/function calling sobre Qwen3.5-4B.
+# treinado a 2048 tokens; não usar em diálogo de tools longo
+# xLAM substituto bloqueado: parser Hermes, ver docstring adapters.py
+[[adapter]]
+id = "tools"
+runtime = "mlx"
+served_model = "mlx-community/Qwen3.5-4B-4bit"
+ref = "/Users/renansimoes/models/lora-fleet/tools"
+kinds = []
+match = ["tool", "function", "calling", "api", "schema"]
+enable_thinking = true
+
+# Extração de campos estruturados a partir de texto livre (ARIA AAR 3B).
+[[adapter]]
+id = "jsonextract"
+runtime = "mlx"
+served_model = "mlx-community/Llama-3.2-3B-Instruct-4bit"
+ref = "/Users/renansimoes/models/lora-fleet/jsonextract"
+kinds = []
+match = ["extract", "json", "structured", "fields", "parse", "summarize-structured"]
+enable_thinking = false
+system = ""  # TODO: system do card
+output = "json"
+
+# Código seguro / análise de vulnerabilidade sobre Llama-3.2-3B-Instruct.
+# OWASP Top10; vulnerável+segura+exploit+mitigação
+[[adapter]]
+id = "securecode"
+runtime = "mlx"
+served_model = "mlx-community/Llama-3.2-3B-Instruct-4bit"
+ref = "/Users/renansimoes/models/lora-fleet/securecode"
+kinds = []
+match = ["security", "vulnerability", "owasp", "exploit", "injection", "auth"]
+
+# QA de métricas de marketing sobre Llama-3.2-3B-Instruct.
+# QA numérico multi-step; abstém sem dado; 88% win vs base
+[[adapter]]
+id = "market-bi"
+runtime = "mlx"
+served_model = "mlx-community/Llama-3.2-3B-Instruct-4bit"
+ref = "/Users/renansimoes/models/lora-fleet/market-bi"
+kinds = []
+match = ["marketing", "revenue", "spend", "conversion", "roi", "metric"]
+
+# Extração de relações/entidades sobre Llama-3.2-3B-Instruct.
+# F1 0.827; 2-shot
+[[adapter]]
+id = "rel-extract"
+runtime = "mlx"
+served_model = "mlx-community/Llama-3.2-3B-Instruct-4bit"
+ref = "/Users/renansimoes/models/lora-fleet/rel-extract"
+kinds = []
+match = ["relation", "entity", "knowledge", "graph", "triples"]
+enable_thinking = false
+
+# Código: implementação, refactor e correção de bug.
+[[adapter]]
+id = "code"
+runtime = "mlx"
+served_model = "mlx-community/Qwen3.5-4B-4bit"
+ref = "/Users/renansimoes/models/lora-fleet/code"
+kinds = []
+match = ["code", "implement", "refactor", "bug", "fix", "python", "typescript"]
+priority = 10
+
+# Agente: planejar, orquestrar e executar com tools.
+[[adapter]]
+id = "agent"
+runtime = "mlx"
+served_model = "mlx-community/Qwen3.5-4B-4bit"
+ref = "/Users/renansimoes/models/lora-fleet/agent"
+kinds = []
+match = ["agent", "tool", "plan", "execute", "orchestrate"]
+enable_thinking = true
+temperature = 0.0
+priority = 10
+
+# Leitura de cupom/nota fiscal: campos e totais em JSON.
+[[adapter]]
+id = "receipts"
+runtime = "mlx"
+served_model = "mlx-community/Qwen3.5-4B-4bit"
+ref = "/Users/renansimoes/models/lora-fleet/receipts"
+kinds = []
+match = ["receipt", "invoice", "ocr", "nota", "total"]
+enable_thinking = false
+output = "json"
+
+# Juiz de política/drift: veredito, não prosa.
+# taxonomia vai no `system` (campo já tem consumidor; texto pendente); p95 664ms
+[[adapter]]
+id = "judge"
+runtime = "mlx"
+served_model = "mlx-community/Qwen3.5-4B-4bit"
+ref = "/Users/renansimoes/models/lora-fleet/judge"
+kinds = []
+match = ["judge", "safety", "policy", "drift", "verdict"]
+enable_thinking = false
+temperature = 0.0
+max_tokens = 512
+output = "json"
+
+# Condensador: resumo/compressão de contexto.
+# system prompt verbatim do card ModelScope (TODO: copiar pro campo `system`); budget dinâmico max(160, len*0.5)
+[[adapter]]
+id = "condense"
+runtime = "mlx"
+served_model = "mlx-community/Qwen3.5-4B-4bit"
+ref = "/Users/renansimoes/models/lora-fleet/condense"
+kinds = []
+match = ["summarize", "summary", "condense", "compress", "digest"]
+enable_thinking = false
+temperature = 0.3
+output = "text"
+
+# Scaffold de app/frontend inteiro.
+[[adapter]]
+id = "coder-heavy"
+runtime = "lmstudio"
+served_model = "qwopus3.5-4b-coder-mtp"
+ref = "/Users/renansimoes/.lmstudio/models/Jackrong/Qwopus3.5-4B-Coder-MTP-GGUF"
+kinds = []
+match = ["scaffold", "webapp", "frontend", "website", "app"]
+enable_thinking = true
+temperature = 1.0
+top_p = 0.95
+
+# Raciocínio/decisão.
+# distill Opus 4.6; alucina dentro do think
+[[adapter]]
+id = "reasoning"
+runtime = "lmstudio"
+served_model = "qwen3.5-4b-opus-distill-v2"
+ref = "/Users/renansimoes/.lmstudio/models/Jackrong/Qwen3.5-4B-Opus-Distill-v2"
+kinds = []
+match = ["reason", "analyze", "decide", "tradeoff", "architecture"]
+enable_thinking = true
+
+# Raciocínio clínico.
+# 2% timeout em 1024; mmproj não baixado (vision fraca p/ médico no bench)
+[[adapter]]
+id = "medical"
+runtime = "lmstudio"
+served_model = "qwen3.5-4b-medical-reasoning"
+ref = "/Users/renansimoes/.lmstudio/models/Kerassy/Qwen3.5-4B-Medical-Reasoning"
+kinds = []
+match = ["medical", "health", "clinical", "diagnosis", "symptom"]
+enable_thinking = true
+temperature = 0.7
+top_p = 0.9
+max_tokens = 1024
+
+# Matemática: cálculo, equação, prova.
+# alpha32 (mais forte; rota dedicada); rep_penalty 1.1 OBRIGATÓRIO senão loop
+[[adapter]]
+id = "maththink"
+runtime = "lmstudio"
+served_model = "maththink-qwen-3.5-4b_alpha32"
+ref = "/Users/renansimoes/.lmstudio/models/DavidOKB/MathThink-alpha32/MathThink-Qwen-3.5-4B_alpha32"
+kinds = []
+match = ["math", "calculate", "equation", "proof", "numeric"]
+temperature = 1.0
+repeat_penalty = 1.1

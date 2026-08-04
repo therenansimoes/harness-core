@@ -524,6 +524,120 @@ def test_model_for_cai_pra_temperature_se_provider_rejeita_kwarg(monkeypatch):
     ]
 
 
+def _adapter(**kw):
+    from harness.routing.adapters import Adapter
+
+    base = {"id": "sql", "runtime": "mlx", "served_model": "base-4bit", "ref": "/pesos/sql"}
+    return Adapter(**{**base, **kw})
+
+
+def test_model_for_com_adapter_manda_o_peso_no_corpo(monkeypatch):
+    """Frota LoRA: o modelo é o BASE do adapter, no servidor DELE, com o path do
+    peso no corpo — o `model` do tier não vale, o LoRA só existe colado no base."""
+    pytest.importorskip("langchain")
+    import langchain.chat_models as lcm
+
+    visto: list[tuple] = []
+    monkeypatch.setattr(
+        lcm, "init_chat_model", lambda m, **kw: visto.append((m, kw)) or f"model:{m}"
+    )
+    monkeypatch.delenv(da.MLX_BASE_URL_ENV, raising=False)
+
+    adapter = _adapter(temperature=0.0, max_tokens=128, repeat_penalty=1.05)
+    assert da._model_for("openai:qwen3.5-9b-mlx", adapter) == "model:openai:base-4bit"
+
+    _, kw = visto[-1]
+    assert kw["base_url"] == da.MLX_BASE_URL
+    assert kw["extra_body"] == {
+        "adapters": "/pesos/sql",
+        "chat_template_kwargs": {"enable_thinking": False},
+        "repetition_penalty": 1.05,
+    }
+    # Sampling do card ganha do default genérico; o que o card não diz não vai.
+    assert (kw["temperature"], kw["max_tokens"]) == (0.0, 128)
+    assert "top_p" not in kw
+
+
+def test_model_for_com_adapter_sem_sampling_usa_o_default(monkeypatch):
+    pytest.importorskip("langchain")
+    import langchain.chat_models as lcm
+
+    visto: list[tuple] = []
+    monkeypatch.setattr(
+        lcm, "init_chat_model", lambda m, **kw: visto.append((m, kw)) or f"model:{m}"
+    )
+    da._model_for("openai:qwen3.5-9b-mlx", _adapter(enable_thinking=True))
+    _, kw = visto[-1]
+    assert kw["temperature"] == da.MODEL_TEMPERATURE
+    assert kw["extra_body"]["chat_template_kwargs"] == {"enable_thinking": True}
+    assert "max_tokens" not in kw
+
+
+def test_model_for_com_adapter_cai_pra_base_se_o_cliente_recusa(monkeypatch):
+    """Cliente que não monta com adapter não derruba um run já roteado: a base
+    atende. Sem isto, uma versão nova do langchain viraria run perdido."""
+    pytest.importorskip("langchain")
+    import langchain.chat_models as lcm
+
+    def fake(m, **kw):
+        if "base_url" in kw:
+            raise TypeError("unexpected keyword 'base_url'")
+        return f"model:{m}"
+
+    monkeypatch.setattr(lcm, "init_chat_model", fake)
+    assert da._model_for("openai:qwen3.5-9b-mlx", _adapter()) == "model:openai:qwen3.5-9b-mlx"
+
+
+CARD_SYSTEM = "Você é um juiz de política. Responda só com o veredito em JSON."
+
+
+def _system_com_adapter(tmp_path, monkeypatch, adapter) -> str:
+    """system_prompt montado com este adapter no lugar do registro real."""
+    import deepagents
+
+    from harness.routing import adapters as registro
+
+    capturado: dict[str, str] = {}
+
+    def spy(*a, **kw):
+        capturado["system_prompt"] = kw["system_prompt"]
+        return object()
+
+    monkeypatch.setattr(deepagents, "create_deep_agent", spy)
+    if adapter is not None:
+        monkeypatch.setattr(registro, "get_adapter", lambda aid, path=None: adapter)
+    da._build_agent(
+        ExecRequest(
+            prompt="x",
+            workspace=tmp_path,
+            model="openai:qwen3.5-9b-mlx",
+            adapter=None if adapter is None else "judge",
+        )
+    )
+    return capturado["system_prompt"]
+
+
+def test_system_do_card_do_adapter_prefixa_o_system_prompt(tmp_path, monkeypatch):
+    """O `system` do card é o texto com que AQUELE peso foi treinado (taxonomia
+    do juiz, regra do condensador): vai na frente de tudo, que é onde o LoRA o
+    viu no fine-tuning."""
+    pytest.importorskip("deepagents")
+
+    base = _system_com_adapter(tmp_path, monkeypatch, None)
+    com = _system_com_adapter(tmp_path, monkeypatch, _adapter(system=CARD_SYSTEM))
+    assert com == f"{CARD_SYSTEM}\n\n{base}"
+
+
+def test_adapter_sem_system_nao_mexe_no_prompt(tmp_path, monkeypatch):
+    """Default do registro é `system = ""`: o caminho de quem não preencheu o
+    campo (e o de quem só pôs espaço em branco) é byte a byte o de antes."""
+    pytest.importorskip("deepagents")
+
+    base = _system_com_adapter(tmp_path, monkeypatch, None)
+    assert _system_com_adapter(tmp_path, monkeypatch, _adapter()) == base
+    assert _system_com_adapter(tmp_path, monkeypatch, _adapter(system="  \n ")) == base
+
+
 # --- stalled e trace parcial ------------------------------------------------
 
 

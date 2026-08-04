@@ -37,6 +37,13 @@ LMSTUDIO_BASE_URL_ENV = "OPENAI_BASE_URL"
 LMSTUDIO_KEY_ENV = "OPENAI_API_KEY"
 LMSTUDIO_TIMEOUT_S = 3.0
 
+# Servidor da frota LoRA (`mlx_lm.server`): OUTRO processo, outra porta. É o
+# único que aceita `adapters` no corpo do request — o LM Studio carrega o peso
+# do lado dele. Sobe fora do harness (Makefile/humano), como o LM Studio.
+MLX_BASE_URL = "http://127.0.0.1:1235/v1"
+MLX_BASE_URL_ENV = "HARNESS_MLX_BASE_URL"
+RUNTIME_MLX = "mlx"
+
 CONFIG_DIR_ENV = "HARNESS_CONFIG_DIR"
 MODELS_FILE = "models.toml"
 
@@ -108,11 +115,15 @@ class DeepagentsBackend:
         """Import + servidor local. ZERO chamada de LLM."""
         return self._preflight(self.model)
 
-    def _preflight(self, model: str | None) -> Preflight:
+    def _preflight(self, model: str | None, adapter: Any = None) -> Preflight:
         try:
             _import_deepagents()
         except ImportError as exc:
             return Preflight(ok=False, reason=f"{_INSTALL_HINT} ({exc})")
+        # Com adapter da frota quem atende é o servidor DELE: sondar o LM Studio
+        # bloquearia um run que ia rodar no MLX só porque o app 1234 está fechado.
+        if adapter is not None and adapter.runtime == RUNTIME_MLX:
+            return _mlx_preflight(adapter)
         if model and model.startswith(OPENAI_PREFIX):
             return _lmstudio_preflight(model)
         return Preflight(ok=True, reason="deepagents importável")
@@ -120,7 +131,7 @@ class DeepagentsBackend:
     def execute(self, req: ExecRequest) -> ExecResult:
         _bootstrap_env()
 
-        pre = self._preflight(req.model)
+        pre = self._preflight(req.model, _adapter_for(req.adapter))
         if not pre.ok:
             return _failure(req, "blocked", pre.reason)
 
@@ -276,6 +287,56 @@ def _lmstudio_preflight(model: str) -> Preflight:
             ),
         )
     return Preflight(ok=True, reason=f"LM Studio ok em {url}, modelo {wanted} servido")
+
+
+# --------------------------------------------------------------------------- frota LoRA
+
+
+def _mlx_base_url() -> str:
+    return (os.environ.get(MLX_BASE_URL_ENV) or MLX_BASE_URL).rstrip("/")
+
+
+def _adapter_for(adapter_id: str | None):
+    """Resolve o id que o router carimbou. Fail-open no padrão do arquivo:
+    registro ilegível não derruba um run já roteado — sem adapter, a base
+    atende."""
+    if not adapter_id:
+        return None
+    try:
+        from harness.routing.adapters import get_adapter
+
+        return get_adapter(adapter_id)
+    except Exception:
+        return None
+
+
+def _mlx_preflight(adapter: Any) -> Preflight:
+    """Servidor MLX vivo E servindo o base do adapter. Mesma sonda barata do LM
+    Studio, outro processo: quem sobe é o Makefile, não o harness."""
+    url = f"{_mlx_base_url()}/models"
+    try:
+        served = _lmstudio_models(url)
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        return Preflight(
+            ok=False,
+            reason=(
+                f"servidor MLX não respondeu em {url} após {LMSTUDIO_TIMEOUT_S}s ({exc}) — "
+                f"suba o mlx_lm.server com o base {adapter.served_model}"
+            ),
+        )
+    # Servidor que não lista nada ainda serve o base carregado na linha de
+    # comando: lista vazia não é prova de ausência, e bloquear aí seria falso
+    # negativo. Só o nome CONTRADITÓRIO bloqueia.
+    if served and adapter.served_model not in served:
+        listed = ", ".join(sorted(served))
+        return Preflight(
+            ok=False,
+            reason=(
+                f"servidor MLX em {url} não serve o base {adapter.served_model!r} do adapter "
+                f"{adapter.id!r} (tem: {listed})"
+            ),
+        )
+    return Preflight(ok=True, reason=f"MLX ok em {url}, adapter {adapter.id} pronto")
 
 
 # --------------------------------------------------------------------------- agente
@@ -468,7 +529,8 @@ def _build_agent(req: ExecRequest):
     # `model` só serve ao papel que delega (o subagent aninhado é compilado na
     # hora): é a MESMA instância do agente principal, nenhum peso extra na
     # máquina.
-    chat_model = _model_for(req.model)
+    adapter = _adapter_for(req.adapter)
+    chat_model = _model_for(req.model, adapter)
     roles = load_roles(backend=fs, allowed=allowed, model=chat_model)
     manual = roles_manual(roles)
     if manual:
@@ -479,6 +541,15 @@ def _build_agent(req: ExecRequest):
     constitution = _target_constitution(req.workspace)
     if constitution:
         system_prompt = f"{system_prompt}\n\n{constitution}"
+
+    # O `system` do card do adapter (`config/adapters.toml`) é o texto com que
+    # AQUELE peso foi treinado — taxonomia do juiz, regra do condensador. Vai na
+    # FRENTE de tudo, inclusive do prompt do executor, porque é a posição em que
+    # o LoRA o viu no fine-tuning; enfiado no meio ele vira mais um parágrafo.
+    # Sem adapter (ou com `system` vazio, que é o default do registro) nada aqui
+    # muda: o prompt é o mesmo de antes, byte a byte.
+    if adapter is not None and (adapter.system or "").strip():
+        system_prompt = f"{adapter.system.strip()}\n\n{system_prompt}"
 
     extra_tools = list(load_mcp_tools())  # contrato: [] em QUALQUER falha
     # Tools de engenharia (edição cirúrgica) e de web. Cada import é fail-open
@@ -583,14 +654,19 @@ def _thinking_kwargs(model: str) -> dict[str, Any]:
     return {}
 
 
-def _model_for(model: str | None):
+def _model_for(model: str | None, adapter: Any = None):
     """Instância de chat model com temperature baixa e thinking ligado.
 
     `create_deep_agent` aceita string OU BaseChatModel; a string usa o default
     do provider (temperature 1, thinking off nos templates duplos). O canal de
     thinking varia por provider (ver `_thinking_kwargs`), e provider que rejeita
     o kwarg cai para só-temperature e depois para a string crua — o
-    comportamento de antes."""
+    comportamento de antes.
+
+    Com adapter da frota o caminho é outro (`_adapter_model`); sem adapter,
+    nada abaixo muda."""
+    if adapter is not None:
+        return _adapter_model(model, adapter)
     if not model:
         return model
     from_provider = _thinking_kwargs(model)
@@ -602,6 +678,43 @@ def _model_for(model: str | None):
         except Exception:
             continue
     return model
+
+
+def _adapter_model(model: str | None, adapter: Any):
+    """Chat model apontado pro servidor do adapter, com o peso NO CORPO.
+
+    O `model` do tier não vale aqui: um LoRA só existe colado no base com que foi
+    treinado, então quem nomeia o modelo é `served_model`. `base_url` explícito
+    porque o servidor MLX é outro processo, noutra porta, e o env do LM Studio
+    aponta pro 1234. O sampling do card (temperature/top_p/max_tokens) ganha do
+    `MODEL_TEMPERATURE` genérico: o adapter foi medido com ele, o default não.
+
+    `adapters` é o path do diretório do peso — o servidor troca com um reload
+    (~1,2s) e mantém um prompt cache por (modelo, adapter), sem contaminação
+    entre runs. Falha em montar o cliente cai pro caminho sem adapter: a base
+    atende, e derrubar um run já roteado por causa disto seria pior.
+    """
+    extra_body: dict[str, Any] = {
+        "adapters": adapter.ref,
+        "chat_template_kwargs": {"enable_thinking": bool(adapter.enable_thinking)},
+    }
+    if adapter.repeat_penalty is not None:
+        extra_body["repetition_penalty"] = adapter.repeat_penalty
+    kwargs: dict[str, Any] = {
+        "base_url": _mlx_base_url() if adapter.runtime == RUNTIME_MLX else _lmstudio_base_url(),
+        "extra_body": extra_body,
+        "temperature": MODEL_TEMPERATURE if adapter.temperature is None else adapter.temperature,
+    }
+    if adapter.top_p is not None:
+        kwargs["top_p"] = adapter.top_p
+    if adapter.max_tokens is not None:
+        kwargs["max_tokens"] = adapter.max_tokens
+    try:
+        from langchain.chat_models import init_chat_model
+
+        return init_chat_model(f"{OPENAI_PREFIX}{adapter.served_model}", **kwargs)
+    except Exception:
+        return _model_for(model)
 
 
 def _prompt_files(prompt: str) -> list[str]:
