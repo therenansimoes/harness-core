@@ -103,12 +103,12 @@ def test_capabilities_are_declared():
 def test_pricing_file_has_only_free_local_models():
     pricing = da.load_pricing(Path("config"))
     assert pricing, "config/models.toml sem [pricing]"
-    # locais grátis: só os modelos MLX servidos pelo LM Studio em loopback
+    # locais grátis: só os modelos MLX servidos em loopback (LM Studio 1234 /
+    # mlx_lm.server 1235). Limpeza 2026-08-04 removeu bonsai/gemma/optiq.
     local_openai = {
-        "openai:qwen3.5-9b-optiq",
-        "openai:qwen3.5-9b-mlx",
-        "openai:bonsai-27b-mlx",
-        "openai:google/gemma-4-e4b",
+        "openai:qwen/qwen3.5-9b",
+        "openai:mlx-community/Qwen3.5-4B-4bit",
+        "openai:mlx-community/Llama-3.2-3B-Instruct-4bit",
     }
     assert all(k in local_openai for k in pricing)
     assert all(

@@ -188,8 +188,7 @@ def _parse(raw: dict, vistos: set[str]) -> Adapter:
     tool_format = str(raw.get("tool_format", "native"))
     if tool_format not in VALID_TOOL_FORMATS:
         raise AdapterError(
-            f"adapter {aid!r}: tool_format {tool_format!r} não existe: "
-            f"{sorted(VALID_TOOL_FORMATS)}"
+            f"adapter {aid!r}: tool_format {tool_format!r} não existe: {sorted(VALID_TOOL_FORMATS)}"
         )
     # Vocabulário válido que o backend ainda não sabe servir para no load, não
     # em silêncio: peso que fala hermes num base não-hermes chamaria a tool sem

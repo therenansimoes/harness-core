@@ -72,6 +72,12 @@ queue when you want the unit to actually run.
 
 Authoring calls a model (default `haiku`, capped by `--max-usd`, default 0.25).
 
+For an objective too big for one unit, let the planner slice it:
+`uv run harness decompose "<objective>" --project myapp [--planner remote|local]`
+writes an ordered queue of small units behind a red-first gate (the plan is
+rejected unless every step lands with a verifier that fails first). `--planner
+local` splits on the local fleet; `--dry` shows the plan without writing it.
+
 ---
 
 ## 3. Drain the queue
@@ -123,6 +129,11 @@ The unit is in `queue/stuck/` and the ledger has the trace. In order:
    verifier, not a bad agent.
 3. Move the unit back out of `stuck/` and re-run the queue after fixing either
    the prompt or the verifier.
+
+The queue prints the re-slice command when it stops:
+`uv run harness replan --project myapp --unit <unit_id>`. `replan` triages the
+stuck unit by blocker and score and, when the route says so, splits just that
+unit into smaller sub-steps. It is never run automatically — you call it.
 
 Do **not** loosen the verifier to make the unit pass. That is the one change
 that makes every later number meaningless.

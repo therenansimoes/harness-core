@@ -90,7 +90,25 @@ def load_unit(path: Path) -> UnitSpec:
         project=str(project) if project else None,
         checks=_load_checks(unit_file, data.get("checks")),
         adapter=str(data["adapter"]) if data.get("adapter") else None,
+        deps=_load_str_list(unit_file, "deps", data.get("deps")),
+        files=_load_str_list(unit_file, "files", data.get("files")),
     )
+
+
+def _load_str_list(unit_file: Path, field_name: str, raw: object) -> tuple[str, ...]:
+    """`deps`/`files` do unit.toml -> tupla de string. Ausente = ().
+
+    Item não-string é erro na hora de carregar: `deps = [1]` viraria o id "1",
+    que não bate com unidade nenhuma, e a dependência sumiria em silêncio.
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError(f"{unit_file}: {field_name} precisa ser lista de string")
+    for item in raw:
+        if not isinstance(item, str):
+            raise ValueError(f"{unit_file}: {field_name} tem item não-string: {item!r}")
+    return tuple(raw)
 
 
 def _load_checks(unit_file: Path, raw: object) -> tuple[Check, ...]:
@@ -1182,22 +1200,27 @@ def cmd_decompose(args: argparse.Namespace) -> int:
         DECOMPOSE_MAX_USD,
         DecomposeError,
         apply_decompose,
+        planner_backend,
         propose_decompose,
     )
 
     try:
+        backend, adapter = planner_backend(args.planner)
         proposal = propose_decompose(
             args.task,
             args.project,
             n_max=args.n_max,
+            backend=backend,
             model=args.model,
             max_usd=DECOMPOSE_MAX_USD if args.max_usd is None else args.max_usd,
             projects_file=Path(args.projects) if args.projects else None,
             queue_dir=Path(args.queue_dir) if args.queue_dir else None,
+            adapter=adapter,
         )
         if proposal is None:
             print(
-                "decompose: plano inválido ou com menos de 2 passos — nada gravado",
+                "decompose: plano inválido, reprovado no gate ou com menos de 2 passos "
+                "— nada gravado",
                 file=sys.stderr,
             )
             return 1
@@ -1206,6 +1229,25 @@ def cmd_decompose(args: argparse.Namespace) -> int:
         print(f"decompose falhou: {exc}", file=sys.stderr)
         return 1
     return 0
+
+
+def cmd_replan(args: argparse.Namespace) -> int:
+    """Unidade travada: triagem por blocker + nota, repique só quando cabe."""
+    from harness.add import AddError
+    from harness.improve.decompose import DecomposeError
+    from harness.improve.replan import replan
+
+    try:
+        return replan(
+            args.project,
+            args.unit,
+            queue_dir=Path(args.queue_dir) if args.queue_dir else None,
+            projects_file=Path(args.projects) if args.projects else None,
+            n_max=args.n_max,
+        )
+    except (DecomposeError, AddError, FileNotFoundError, ValueError) as exc:
+        print(f"replan falhou: {exc}", file=sys.stderr)
+        return 1
 
 
 def cmd_seal(args: argparse.Namespace) -> int:
@@ -1932,7 +1974,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Import tardio como no cmd_decompose: só o teto do plano é preciso aqui, e
     # o módulo puxa backends/registry — quem nunca decompõe não paga isso.
-    from harness.improve.decompose import DEFAULT_N_MAX
+    from harness.improve.decompose import DEFAULT_N_MAX, PLANNERS
 
     dec = sub.add_parser(
         "decompose",
@@ -1948,6 +1990,12 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"teto de passos do plano (default {DEFAULT_N_MAX})",
     )
     dec.add_argument("--dry", action="store_true", help="mostra a fila planejada sem gravar nada")
+    dec.add_argument(
+        "--planner",
+        choices=PLANNERS,
+        default=PLANNERS[0],
+        help="quem planeja: remote (default) ou local (frota local + adapter de raciocínio)",
+    )
     dec.add_argument("--model", default=None, help="modelo do planejamento (default: haiku)")
     dec.add_argument(
         "--max-usd",
@@ -1964,6 +2012,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="fila destino (default: a do projeto no registro)",
     )
     dec.set_defaults(func=cmd_decompose)
+
+    from harness.improve.replan import REPLAN_N_MAX
+
+    rep = sub.add_parser(
+        "replan",
+        help="unidade travada: roteia por blocker/nota e repica só ela quando cabe",
+    )
+    rep.add_argument("--project", required=True, help="projeto registrado em config/projects.toml")
+    rep.add_argument("--unit", required=True, help="id da unidade (o nome do dir na fila)")
+    rep.add_argument(
+        "--n-max",
+        type=int,
+        default=REPLAN_N_MAX,
+        dest="n_max",
+        help=f"teto de sub-passos do repique (default {REPLAN_N_MAX})",
+    )
+    rep.add_argument("--projects", default=None, help="registro de projetos alternativo")
+    rep.add_argument(
+        "--queue-dir",
+        default=None,
+        dest="queue_dir",
+        help="fila do projeto (default: a do registro)",
+    )
+    rep.set_defaults(func=cmd_replan)
 
     seal = sub.add_parser("seal", help="promove um exame da quarentena para benchmarks/sealed")
     seal.add_argument("name", help="nome do dir em benchmarks/quarantine")

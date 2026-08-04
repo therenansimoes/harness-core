@@ -198,5 +198,7 @@ def run_queue(
         shutil.move(str(unit_dir), str(bucket / unit_dir.name))
         if not aceita:
             print(f"{unit_dir.name} travou — fila progressiva, o resto depende dela")
+            # Só a linha de comando: repicar é decisão de quem lê, nunca automático.
+            print(f"repicar: uv run harness replan --project {project} --unit {unit_dir.name}")
             break
     return 0

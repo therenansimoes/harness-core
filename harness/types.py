@@ -57,6 +57,13 @@ class UnitSpec:
     # Adapter LoRA pedido no dedo (`config/adapters.toml`): vence o matcher da
     # frota. None (o default) = quem escolhe é `routing/adapters.select_adapter`.
     adapter: str | None = None
+    # Ids de unidades ANTERIORES de que esta depende. Vazio (o default) = só a
+    # ordem da fila. Default obrigatório: unit.toml escrito antes disto não tem
+    # o campo.
+    deps: tuple[str, ...] = ()
+    # Arquivos que a unidade toca, declarados na spec. Vazio (o default) = não
+    # declarado. Default obrigatório, mesmo motivo de `deps`.
+    files: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
