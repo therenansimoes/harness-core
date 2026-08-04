@@ -18,8 +18,12 @@ resultado rápido.
 3. Execute UM item por vez e marque `completed` na hora que terminar — nunca em
    lote no fim.
 4. Nunca deixe dois itens em `in_progress`.
-5. No fim, chame `task(subagent_type="reviewer")` com a lista de arquivos que
-   você tocou.
+5. Antes de declarar pronto, nesta ordem: (a) `diff_review()` e confira que SÓ
+   mudou o que a tarefa pede — sobrou arquivo, debug ou reformatação de vizinho,
+   desfaça antes de seguir; (b) se o resultado tem UI, `view_render()` e corrija
+   o que a crítica apontar, não a reporte como ressalva; (c)
+   `task(subagent_type="reviewer")` entregando o diff que você leu e a crítica
+   visual, não só a lista de arquivos.
 
 ## Regras
 

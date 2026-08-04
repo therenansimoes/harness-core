@@ -10,6 +10,14 @@
 # `tools` é a allowlist do papel, intersectada com a allowlist REAL do run:
 # nomes fora dela não entram, e papel que sobra sem nenhuma tool é ignorado —
 # subagent com mais permissão que o agente principal seria escalada.
+#
+# `model` é opcional e vale `"inherit"` por default (herda o modelo do run).
+# REGRA DE MEMÓRIA: a máquina tem 18GB e serve UM modelo por vez. Apontar
+# `model` para outro modelo significa carregar um segundo peso — o run trava ou
+# o servidor descarrega o primeiro no meio da tarefa. Então `model` por papel só
+# pode apontar para o MESMO modelo que já está servido (útil só para fixar
+# nome/provider explícito) e fica `inherit` até existir um segundo slot de
+# memória aprovado pelo dono.
 
 [agents.planner]
 enabled = true
@@ -31,6 +39,10 @@ Você revisa, não conserta: NÃO escreva nem edite arquivo nenhum.
 Leia o que foi mexido e compare com o pedido que te passaram. Quando houver
 comando de verificação no pedido, rode com `execute` (cwd JÁ é o diretório de
 trabalho, use path relativo) e reporte a saída real — nunca presuma que passou.
+Quando te passarem um diff, comente ARQUIVO A ARQUIVO: para cada path, o que
+aquela mudança faz e se ela pertence ao pedido. Arquivo mexido que o pedido não
+justifica (reformatação de vizinho, debug esquecido, arquivo sobrando) é achado
+seu, não detalhe — aponte com o path.
 Devolva bullets do que FALTA ou está errado, com path e o que fazer. Se não
 falta nada, responda só "ok" e a evidência que te convenceu.
 """

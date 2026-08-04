@@ -98,10 +98,27 @@ def _spec(name: str, cfg: Any, backend: Any, allowed: list[str]) -> dict | None:
         # escreve é o loop, não a lib.
         "system_prompt": _prompt_com_allowlist(prompt, tools),
     }
+    model = _model(cfg.get("model"))
+    if model:
+        # `SubAgent.model` é `str | BaseChatModel`; string `provider:modelo` é o
+        # que a lib resolve sozinha. A chave só entra quando o papel pediu outro
+        # modelo — ausente significa "herda o do agente principal", e é assim
+        # que fica enquanto a máquina serve um modelo por vez.
+        spec["model"] = model
     middleware = _fs_middleware(backend, tools)
     if middleware:
         spec["middleware"] = middleware
     return spec
+
+
+def _model(declared: Any) -> str | None:
+    """Modelo do papel, ou None quando o papel herda o do agente principal.
+
+    `"inherit"` (e ausente/vazio) é herdar: a chave `model` nem aparece na spec."""
+    if not isinstance(declared, str):
+        return None
+    model = declared.strip()
+    return None if model in ("", "inherit") else model
 
 
 def _tools(declared: Any, allowed: list[str]) -> list[str]:

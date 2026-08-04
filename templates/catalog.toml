@@ -1,0 +1,30 @@
+# Catálogo dos templates de scaffold. Dado, não código: `harness/scaffold.py` lê
+# este arquivo para validar o `kind`, e a chave da seção É o `kind`.
+#
+# Regra de curadoria (vale para template novo): no MÁXIMO 8 arquivos, e cada
+# arquivo tem que ser lido inteiro sem cansar. Template é ponto de partida, não
+# framework — o que sobra o modelo apaga, e apagar custa turno.
+#
+# Campos:
+#   dir     — pasta relativa a templates/ (obrigatório)
+#   summary — uma linha, o que é
+#   use     — QUANDO escolher este e não outro (é o campo que o modelo lê)
+#   next    — comandos a rodar depois do scaffold, em ordem
+
+[static-site]
+dir = "static-site"
+summary = "Página estática sem build: HTML + tokens de design + reset."
+use = "Landing, demo, relatório, qualquer tela que não precise de bundler. Zero dependência, abre no browser direto."
+next = ["python -m http.server (na pasta criada)"]
+
+[vite-vanilla]
+dir = "vite-vanilla"
+summary = "App JS vanilla com Vite, vitest configurado e os mesmos tokens do static-site."
+use = "Quando há lógica de verdade no cliente e você quer HMR e teste. Sem framework: nada de React/Vue aqui."
+next = ["npm install", "npm test", "npm run dev"]
+
+[fastapi-min]
+dir = "fastapi-min"
+summary = "API FastAPI com /healthz, uma rota validada por pydantic e 2 testes de TestClient."
+use = "Backend HTTP em Python. Já vem com teste em processo (sem porta) e uv configurado."
+next = ["uv run pytest", "uv run uvicorn app.main:app --reload"]

@@ -8,6 +8,7 @@ pytest.importorskip("deepagents")
 
 from harness.backends.safe_shell import (  # noqa: E402
     BLOCKED_EXIT_CODE,
+    EMPTY_OUTPUT,
     MAX_TIMEOUT,
     SafeShellBackend,
     check_command,
@@ -98,6 +99,24 @@ def test_cerca_nunca_derruba_o_run(tmp_path, monkeypatch):
     monkeypatch.setattr(ss, "check_command", lambda *a, **kw: 1 / 0)
     fs = SafeShellBackend(root_dir=str(tmp_path), virtual_mode=True)
     assert fs.execute("ls").exit_code == 0
+
+
+def test_sucesso_silencioso_ganha_texto_explicito(tmp_path):
+    """rc=0 sem saída é ambíguo: o modelo pequeno reexecuta. Diga o sucesso."""
+    fs = SafeShellBackend(root_dir=str(tmp_path), virtual_mode=True)
+    res = fs.execute("mkdir -p novo")
+    assert res.exit_code == 0
+    assert res.output == EMPTY_OUTPUT
+    # comando com saída real não é tocado
+    assert "novo" in fs.execute("ls").output
+
+
+def test_falha_sem_saida_continua_como_veio(tmp_path):
+    """Só o sucesso silencioso ganha texto; rc != 0 é o exit code falando."""
+    fs = SafeShellBackend(root_dir=str(tmp_path), virtual_mode=True)
+    res = fs.execute("test -f nao_existe")
+    assert res.exit_code != 0
+    assert EMPTY_OUTPUT not in (res.output or "")
 
 
 def test_workspace_e_o_cwd_do_backend(tmp_path):

@@ -1,0 +1,102 @@
+/* Tokens do projeto: a ÚNICA fonte de verdade de cor, espaço, tipografia e
+   forma. Regra de uso: componente novo consome token, não inventa valor. Se um
+   valor falta aqui, o certo é acrescentar um token — hex solto no CSS de tela é
+   o começo de um tema que ninguém consegue trocar depois.
+
+   Duas escolhas estruturais que valem entender antes de editar:
+
+   1. Uma matiz só (`--hue`). Os neutros NÃO são cinza morto: carregam chroma
+      baixo na matiz do acento, então fundo, borda e texto "puxam" pro acento e
+      a página parece desenhada em vez de montada. Trocar a identidade visual
+      inteira é mudar `--hue`.
+   2. Os dois temas na MESMA linha, via `light-dark()`. Isso evita o bloco
+      duplicado de tema escuro que sempre sai de sincronia com o claro. Quem
+      escolhe o lado é `color-scheme`: `light dark` no `:root` obedece o SO
+      (`prefers-color-scheme`), e `data-theme` no `<html>` vence a preferência. */
+
+:root {
+  color-scheme: light dark;
+
+  --hue: 268; /* violeta-índigo: acento e neutros saem daqui */
+  --hue-support: 196; /* apoio análogo, para estado informativo/seleção */
+
+  /* --- cor: um token por PAPEL (nunca por aparência: `--surface`, não `--branco`) */
+  --bg:           light-dark(oklch(0.985 0.006 var(--hue)), oklch(0.185 0.014 var(--hue)));
+  --surface:      light-dark(oklch(1     0     0),          oklch(0.225 0.016 var(--hue)));
+  --surface-sunk: light-dark(oklch(0.955 0.010 var(--hue)), oklch(0.155 0.012 var(--hue)));
+  --border:       light-dark(oklch(0.895 0.014 var(--hue)), oklch(0.315 0.020 var(--hue)));
+  --text:         light-dark(oklch(0.255 0.022 var(--hue)), oklch(0.945 0.008 var(--hue)));
+  --text-muted:   light-dark(oklch(0.505 0.020 var(--hue)), oklch(0.735 0.014 var(--hue)));
+  --accent:       light-dark(oklch(0.545 0.185 var(--hue)), oklch(0.720 0.150 var(--hue)));
+  --accent-hover: light-dark(oklch(0.475 0.195 var(--hue)), oklch(0.790 0.140 var(--hue)));
+  --accent-sunk:  light-dark(oklch(0.960 0.030 var(--hue)), oklch(0.280 0.055 var(--hue)));
+  --on-accent:    light-dark(oklch(0.990 0.010 var(--hue)), oklch(0.170 0.030 var(--hue)));
+  --info:         light-dark(oklch(0.520 0.130 var(--hue-support)), oklch(0.760 0.110 var(--hue-support)));
+
+  /* --- espaço: 4 / 8 / 16 / 24 / 40 px. Cinco degraus de propósito — escala
+     curta é o que mantém ritmo; com doze valores tudo vira "quase alinhado". */
+  --space-1: 0.25rem; /*  4px — dentro de um controle */
+  --space-2: 0.5rem;  /*  8px — entre irmãos colados */
+  --space-3: 1rem;    /* 16px — padding padrão de bloco */
+  --space-4: 1.5rem;  /* 24px — entre blocos */
+  --space-5: 2.5rem;  /* 40px — entre seções */
+
+  /* --- tipografia: escala 1.25 (terça maior) a partir de 1rem. O display é
+     fluido porque só ele quebra layout em telas estreitas. */
+  --font-sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, monospace;
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.5rem;
+  --text-2xl: 2rem;
+  --text-display: clamp(2.25rem, 1.6rem + 3vw, 3.5rem);
+  --leading-tight: 1.15; /* título: linha curta pede entrelinha curta */
+  --leading: 1.55;       /* corpo */
+  --tracking-tight: -0.015em; /* só em título grande */
+  --measure: 66ch;       /* medida de leitura: acima disso o olho perde a linha */
+
+  /* --- forma e movimento */
+  --radius-sm: 4px;
+  --radius: 10px;
+  --radius-pill: 999px;
+  --ring-width: 2px;
+  --ring-offset: 2px;
+  --shadow-1: 0 1px 2px oklch(0.2 0.03 var(--hue) / 0.07),
+              0 2px 6px oklch(0.2 0.03 var(--hue) / 0.06);
+  --shadow-2: 0 2px 4px oklch(0.2 0.03 var(--hue) / 0.08),
+              0 12px 28px oklch(0.2 0.03 var(--hue) / 0.12);
+  --ease: cubic-bezier(0.2, 0, 0.2, 1);
+  --dur: 160ms;
+}
+
+/* Sombra é o único token que `light-dark()` não resolve: no escuro a sombra
+   preta desaparece e o que separa camada é um halo claro, não uma projeção.
+   O `:not([data-theme="light"])` faz o override manual continuar valendo. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --shadow-1: 0 1px 2px oklch(0 0 0 / 0.5), 0 0 0 1px oklch(0.98 0.01 var(--hue) / 0.06);
+    --shadow-2: 0 4px 10px oklch(0 0 0 / 0.55), 0 0 0 1px oklch(0.98 0.01 var(--hue) / 0.08);
+  }
+}
+
+/* `data-theme` no <html> vence a preferência do SO. Só `color-scheme` muda:
+   todo token de cor acima segue esse valor sozinho. */
+[data-theme="light"] {
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --shadow-1: 0 1px 2px oklch(0 0 0 / 0.5), 0 0 0 1px oklch(0.98 0.01 var(--hue) / 0.06);
+  --shadow-2: 0 4px 10px oklch(0 0 0 / 0.55), 0 0 0 1px oklch(0.98 0.01 var(--hue) / 0.08);
+}
+
+/* Preferência de movimento é preferência do usuário, não detalhe de polimento:
+   zerar a duração aqui desliga a transição de todo componente de uma vez. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur: 0ms;
+  }
+}

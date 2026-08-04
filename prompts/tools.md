@@ -77,6 +77,11 @@ Escreve um arquivo INTEIRO, criando ou sobrescrevendo.
 - Exemplo: `write_file(file_path="/soma.py", content="def soma(a, b):\n    return a + b\n")`
 - Pegadinha: sobrescreve sem aviso. Para arquivo existente, leia antes e
   reescreva com TODO o conteúdo, não só o pedaço novo.
+- **Gate READ-BEFORE-WRITE**: reescrever arquivo existente exige `read_file`
+  dele nesta sessão, na versão atual. Sem leitura, ou se o arquivo mudou depois
+  dela, a escrita é recusada (`leia o arquivo antes de reescrever` / `o arquivo
+  mudou desde tua leitura`) — leia e refaça. `content` idêntico ao arquivo passa
+  como no-op (`Nada a mudar`).
 - **Shrink-guard**: se o `content` tiver menos de 70% do tamanho atual do
   arquivo, a escrita é **recusada** com `isso apagaria ~X% do arquivo`. Não
   existe flag para forçar. A saída é `edit_range` (mudar o trecho) ou reenviar
@@ -98,6 +103,9 @@ Troca um trecho exato por outro dentro de um arquivo existente.
 - **Pegadinha crítica**: o match é EXATO, byte a byte, incluindo espaços e
   indentação. `old_string` precisa ser único no arquivo (senão use
   `replace_all=true`).
+- **Gate READ-BEFORE-WRITE**: vale igual aqui e em `edit_range`/`insert_lines`/
+  `append_file` — sem `read_file` da versão atual do arquivo, a edição é
+  recusada. Ler é barato; reescrever em cima do que você lembra apaga trabalho.
 - **Regra de saída do loop**: se falhar 2 vezes com "String not found", PARE de
   tentar variações. Use `edit_range` com o número da linha que o `read_file`
   mostrou — lá não existe casamento de texto para errar.
@@ -393,6 +401,220 @@ Mata um servidor subido por `start_server`, junto com os processos filhos dele.
 - Exemplo: `stop_server(id="a1b2c3d4")`
 - Use quando precisar RESUBIR o servidor depois de editar config/dependência.
   Para simples fim de tarefa não precisa: o run limpa sozinho.
+<!--
+Fragmento do manual das tools: índice de símbolos (definição, uso, assinatura).
+Some do prompt quando as tools de símbolo não estão montadas — descrever tool
+que não existe gasta turno do modelo tentando chamá-la.
+-->
+
+## find_symbol
+
+Diz **onde um nome é definido**: arquivo, linha, tipo e a linha da assinatura.
+
+- Argumento: `name` (string) — o nome exato ou o começo dele.
+- Exemplos: `find_symbol(name="handleSubmit")` · `find_symbol(name="Ledger")` ·
+  `find_symbol(name="render_")`
+- **Chame isto ANTES de `grep` ou de `read_file` num repo que você não conhece.**
+  É ~10x mais barato em contexto: devolve a DEFINIÇÃO em uma linha, enquanto o
+  grep devolve os 40 usos primeiro e o `read_file` traz o arquivo inteiro para
+  você achar uma linha. Ler arquivo para descobrir onde algo mora é o erro que
+  queima o orçamento da run.
+- Indexa `.py` (classe, `def`, `async def` — inclusive métodos e decorados),
+  `.js/.jsx/.ts/.tsx` (`function`, `class`, `const`/`let` e arrow com nome;
+  `interface`/`type`/`enum` em TypeScript) e `.html` (ids, com `<section>`,
+  `<main>` e `<nav>` marcados pela tag).
+- Casa nome exato primeiro; se sobrar espaço na lista, completa por prefixo. Saída
+  no topo de 20 — se vier truncada, o nome é genérico demais, refine.
+- "nenhuma definição" é resposta útil e **final**: o nome não é definido neste
+  workspace (veio de dependência, ou você errou o nome). Não vale sair varrendo o
+  repo à mão atrás dele.
+- Não indexa `.venv`, `node_modules`, `dist`, `build`, `.git` nem pasta oculta, e
+  para em 2000 arquivos. Símbolo de biblioteca instalada não está aqui de
+  propósito: você não vai editar dependência.
+
+## find_references
+
+Diz **quem usa** um nome, ignorando string e comentário.
+
+- Argumento: `name` (string).
+- Exemplo: `find_references(name="MAX_HITS")`
+- Só os arquivos que o índice conhece, casamento por palavra inteira, topo 20.
+  `"handleSubmit"` dentro de string ou de comentário **não** conta — é isso que
+  separa esta tool de um `grep`, que casa os dois e mente sobre o raio do uso.
+- Use antes de renomear, mudar assinatura ou apagar: a lista é o estrago que a
+  mudança vai causar. Depois de editar, rode de novo para conferir que sobrou
+  zero uso do nome antigo.
+
+## signature_of
+
+Devolve **a linha da assinatura** de uma função ou classe.
+
+- Argumento: `name` (string).
+- Exemplo: `signature_of(name="index_workspace")` →
+  `def index_workspace(ws: str | Path) -> dict[...]:`
+- Use antes de CHAMAR algo que você não escreveu: resolve nome e ordem dos
+  parâmetros em uma linha. Inventar argumento e descobrir o erro no `run_tests`
+  custa dois turnos; isto custa um.
+- É a linha literal do arquivo, não a documentação: se a função tem `*args` ou
+  default esquisito, é o que você vai ver. Precisa do corpo? Só então
+  `read_file` na linha que o `find_symbol` deu.
+<!--
+Fragmento do manual das tools: olhar a tela. Some do prompt quando a tool de
+visão não está montada — descrever tool que não existe gasta turno do modelo
+tentando chamá-la.
+-->
+
+## view_render
+
+Tira um screenshot da página e devolve o que aparece NA TELA.
+
+- Argumentos: `port` (int) OU `dist_path` (string) — exatamente um dos dois; e
+  `question` (string, opcional) para focar o olhar.
+- Exemplos: `view_render(port=54231)` · `view_render(dist_path="dist",
+  question="o menu está alinhado com o título?")`
+- **200 não é prova de tela viva.** Um `<link rel="stylesheet">` apontando para
+  caminho morto responde 200 na página e chega crua no navegador: o HTML do
+  `read_file` está lindo e a tela está branca. Só o screenshot separa os dois.
+- `port` só funciona para servidor que ESTA run subiu com `start_server` (a
+  mesma cerca do `local_probe`). Porta de fora do workspace é recusada.
+- `dist_path` serve o diretório em loopback numa porta efêmera: use depois do
+  build, sem precisar de `start_server`.
+- Se a resposta disser `tela provavelmente vazia`, o PNG saiu abaixo de 20kb:
+  nada pintou. Conserte o carregamento (asset, rota, erro de JS) antes de mexer
+  em estilo — ninguém julga aparência de tela branca.
+- A resposta traz nota 0-10 e bullets com problemas concretos quando há modelo de
+  visão na máquina. Se vier `visão indisponível`, o screenshot foi tirado e
+  renderizou algo, mas ninguém descreveu o conteúdo: não invente que está bonito,
+  verifique o que der por outros meios.
+- Cada chamada grava um PNG novo em `.harness/shots/`. Olhe DEPOIS de mudar o
+  CSS, não antes: o valor da tool é o antes/depois da sua própria mudança.
+<!--
+Fragmento do manual das tools: ler o DOM. Some do prompt quando as tools de DOM
+não estão montadas — descrever tool que não existe gasta turno do modelo
+tentando chamá-la.
+-->
+
+## inspect_dom
+
+Mostra UM elemento do DOM que o navegador montou.
+
+- Argumentos: `selector` (string) e `port` (int, do `start_server` desta run).
+- Exemplos: `inspect_dom(selector="#app", port=54231)` ·
+  `inspect_dom(selector="button.primary", port=54231)`
+- Seletor aceita **só forma simples**: `tag`, `#id`, `.class`, `tag.class`. Qualquer
+  outra coisa (`div > p`, `ul li`, `a:hover`, `#a .b`) é recusada com
+  `seletor não suportado` — não insista, escolha um alvo simples.
+- É o DOM **depois** do navegador, não o arquivo do `read_file`: nó injetado por
+  script aparece aqui e não aparece lá. É por isso que a tool existe.
+- `existe: não` é resposta útil: o elemento que você acha que escreveu não chegou
+  no DOM. Antes de mexer em CSS, descubra por que o nó não está lá.
+- `computed` é **parcial e honesto**: só `display`, `color` e `font-size`, e só
+  quando o valor está literal no `style=` ou numa regra literal do `<style>`.
+  CSS externo, `var()` e herança não entram. `(nada declarado literalmente)`
+  significa "não sei", não "não tem estilo".
+- `bbox: indisponível (requer CDP)` é permanente. Não existe posição nem tamanho
+  em pixel por aqui: para alinhamento, use `view_render` e olhe a tela.
+
+## a11y_audit
+
+Audita acessibilidade e devolve cada achado com o conserto ao lado.
+
+- Argumentos: `port` (int) OU `dist_path` (string) — exatamente um.
+- Exemplos: `a11y_audit(port=54231)` · `a11y_audit(dist_path="dist")`
+- Verifica: `img` sem `alt`; `input` sem label associado (`<label for>`, `<label>`
+  em volta ou `aria-label`); heading fora de ordem (`h1` → `h3` pulando o `h2`);
+  link vazio ou só de ícone sem `aria-label`; contraste WCAG AA (4.5:1).
+- Cada linha sai como `achado: arquivo/elemento — como corrigir`, e a última
+  linha é a contagem. Conserte pela lista, sem reescrever a página inteira.
+- `dist_path` varre os `.html` do diretório e o achado vem com o **nome do
+  arquivo** — é o arquivo para abrir. `port` audita o DOM montado e o achado vem
+  com `port-<porta>`.
+- **Contraste tem duas respostas, e `não avaliável` não é reprovação.** A razão só
+  sai quando texto E fundo são literais no `style=`/`<style>`. Cor de CSS externo
+  ou de `var()` cai em `não avaliável` e **não conta como achado**: não invente que
+  está errado nem que está certo.
+- Zero achados não é certificado de acessibilidade: aqui não roda lighthouse nem
+  leitor de tela. É o piso, não o teto.
+<!--
+Fragmento do manual das tools: scaffold de projeto e geração de asset SVG. Some
+do prompt quando as tools de scaffold não estão montadas.
+-->
+
+## scaffold
+
+Cria um projeto novo a partir de um template CURADO do harness.
+
+- Argumentos: `kind` (string, obrigatório — um dos kinds do catálogo), `name`
+  (string, obrigatório — o nome da pasta nova).
+- Exemplo: `scaffold(kind="static-site", name="landing")`
+- Kinds: `static-site` (página sem build), `vite-vanilla` (JS vanilla com Vite +
+  vitest), `fastapi-min` (API Python com 2 testes que passam).
+- **Chame isto antes de escrever `index.html`, `package.json` ou `pyproject.toml`
+  na mão.** O que você escreveria em 6 turnos já vem pronto e melhor: landmarks
+  semânticos, skip-link, meta viewport, tokens de cor/espaço/tipografia com tema
+  escuro, e teste verde no primeiro comando. Escrever isso de novo é gastar
+  orçamento para entregar pior.
+- `name` é UMA pasta no workspace: sem `/`, sem `..`, sem path absoluto. Para
+  criar na raiz do workspace, faça o scaffold numa pasta e mova o que precisa.
+- Destino que já tem arquivo é RECUSADO e nada é escrito. Se você já começou o
+  projeto na mão, não tente scaffold por cima: ou escolhe outro nome, ou segue
+  editando o que está lá.
+- A saída lista todos os arquivos criados e os comandos do próximo passo (ex.:
+  `npm install`, `uv run pytest`). Rode-os na pasta criada — não invente outros.
+- Depois do scaffold, EDITE: título, descrição e o texto de placeholder são
+  honestos de propósito ("substitua este texto"), e entregar com eles é entregar
+  incompleto.
+
+## asset_gen
+
+Desenha um SVG por geometria e grava em `assets/`.
+
+- Argumentos: `kind` (string, obrigatório — `icon`, `placeholder` ou
+  `logo-mark`), `spec` (string, obrigatório — o conteúdo, formato por kind).
+- `kind="icon"`: `spec` é a forma. Disponíveis: `seta`, `check`, `x`,
+  `engrenagem`, `casa`, `lupa`. Ex.: `asset_gen(kind="icon", spec="lupa")`.
+  Forma fora dessa lista volta erro com a lista — não tente `spec="foguete"`.
+- `kind="placeholder"`: `spec` é `LARGURAxALTURA` mais um rótulo. Ex.:
+  `asset_gen(kind="placeholder", spec="1200x630 Hero")`. Sai um retângulo com o
+  rótulo e as dimensões escritas dentro — é o que evita imagem quebrada na tela.
+- `kind="logo-mark"`: `spec` é o nome, opcionalmente com `circulo` ou `hex`.
+  Ex.: `asset_gen(kind="logo-mark", spec="Oficina Aruã hex")` → monograma "OA".
+- A cor sai do `tokens.css` do workspace quando existe, então o asset combina
+  com o tema do projeto sozinho. Não passe cor.
+- **Não escreva SVG à mão e não peça `<path d="...">` para você mesmo.** Path
+  inventado não fecha, o browser mostra nada, e "arrumar o path" queima turno
+  atrás de turno. Aqui a geometria é código: o XML sempre parseia.
+- A saída traz o path relativo e o `<img>` pronto. Arquivo existente não é
+  sobrescrito: sai `-2`, `-3` no nome.
+<!--
+Fragmento do manual das tools: auto-crítica do próprio diff. Some do prompt
+quando a tool de review não está montada.
+-->
+
+## diff_review
+
+Mostra o que VOCÊ mudou no workspace, arquivo por arquivo.
+
+- Sem argumentos: `diff_review()`.
+- A saída traz a contagem por arquivo (`+linhas/-linhas`), o histograma do
+  `--stat`, as primeiras 40 linhas do diff de cada arquivo e a lista de arquivos
+  novos (untracked) com tamanho. A ordem é por linhas mudadas, do maior para o
+  menor.
+- **Chame isto antes de declarar pronto, sempre.** Verify_cmd verde não prova que
+  você mudou só o que a tarefa pede: reformatação de arquivo vizinho, `print` de
+  debug, `.bak` esquecido e arquivo criado por engano passam todos no teste. O
+  que essa tool responde é a única pergunta que o teste não responde.
+- Leia procurando o que NÃO deveria estar lá. Achou? Desfaça antes de seguir —
+  reportar como ressalva não é o mesmo que consertar.
+- `nenhuma mudança detectada` é resposta possível e é grave se você acha que
+  editou algo: ou você escreveu fora do workspace, ou não escreveu.
+- Binário sai só como `(binário, N bytes)`: o conteúdo não é despejado. Se o
+  tamanho de um asset está absurdo, o problema é ele.
+- O teto é de 4000 chars no total; com muito arquivo mexido a saída avisa quantos
+  ficaram de fora. Nesse caso o `--stat` continua completo o suficiente para você
+  ver os paths — use `read_file` nos que ficaram sem diff.
+- Diff grande demais para revisar é sinal de que a tarefa cresceu além do pedido,
+  não motivo para pular a leitura.
 ## task
 
 Delega um sub-pedaço isolado a um subagente, que devolve um resumo.

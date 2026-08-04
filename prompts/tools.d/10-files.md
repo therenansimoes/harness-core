@@ -49,6 +49,11 @@ Escreve um arquivo INTEIRO, criando ou sobrescrevendo.
 - Exemplo: `write_file(file_path="/soma.py", content="def soma(a, b):\n    return a + b\n")`
 - Pegadinha: sobrescreve sem aviso. Para arquivo existente, leia antes e
   reescreva com TODO o conteúdo, não só o pedaço novo.
+- **Gate READ-BEFORE-WRITE**: reescrever arquivo existente exige `read_file`
+  dele nesta sessão, na versão atual. Sem leitura, ou se o arquivo mudou depois
+  dela, a escrita é recusada (`leia o arquivo antes de reescrever` / `o arquivo
+  mudou desde tua leitura`) — leia e refaça. `content` idêntico ao arquivo passa
+  como no-op (`Nada a mudar`).
 - **Shrink-guard**: se o `content` tiver menos de 70% do tamanho atual do
   arquivo, a escrita é **recusada** com `isso apagaria ~X% do arquivo`. Não
   existe flag para forçar. A saída é `edit_range` (mudar o trecho) ou reenviar
@@ -70,6 +75,9 @@ Troca um trecho exato por outro dentro de um arquivo existente.
 - **Pegadinha crítica**: o match é EXATO, byte a byte, incluindo espaços e
   indentação. `old_string` precisa ser único no arquivo (senão use
   `replace_all=true`).
+- **Gate READ-BEFORE-WRITE**: vale igual aqui e em `edit_range`/`insert_lines`/
+  `append_file` — sem `read_file` da versão atual do arquivo, a edição é
+  recusada. Ler é barato; reescrever em cima do que você lembra apaga trabalho.
 - **Regra de saída do loop**: se falhar 2 vezes com "String not found", PARE de
   tentar variações. Use `edit_range` com o número da linha que o `read_file`
   mostrou — lá não existe casamento de texto para errar.

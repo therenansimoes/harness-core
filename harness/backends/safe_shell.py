@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 import shlex
+from dataclasses import replace
 from pathlib import Path
 
 from deepagents.backends.local_shell import LocalShellBackend
@@ -29,6 +30,14 @@ BLOCKED_EXIT_CODE = 126  # "command found but not executable", em espírito
 
 _PREFIX = "comando bloqueado pela cerca do harness"
 _HINT = "use paths relativos ao workspace"
+
+# `mv`, `mkdir -p`, `ruff format` sem achado: sucesso silencioso. Output vazio é
+# indistinguível de "a tool falhou" para o modelo pequeno, que reexecuta o mesmo
+# comando e queima turno. Dizer o sucesso em texto mata a ambiguidade.
+EMPTY_OUTPUT = "(comando executou com exit 0 e não produziu saída)"
+# O `LocalShellBackend` já troca saída vazia por este placeholder (local_shell.py
+# ~325), então o vazio quase nunca chega cru aqui — os dois contam como vazio.
+_LIB_EMPTY_OUTPUT = "<no output>"
 
 # Absolutos inofensivos: `2>/dev/null` aparece em quase todo comando de verify
 # e não é vazamento de workspace.
@@ -249,6 +258,21 @@ def _inside(token: str, root: Path) -> bool:
     return candidate == root or root in candidate.parents
 
 
+def _output_explicito(response):
+    """Sucesso silencioso (rc=0, stdout+stderr vazios) ganha texto de sucesso.
+
+    Só toca esse caso: rc != 0 sem saída continua como veio (ali o vazio é o
+    dado, e o exit code já diz que falhou). Fail-open no formato do response —
+    `ExecuteResponse` é frozen, e resposta de outro shape volta intacta."""
+    try:
+        output = (response.output or "").strip()
+        if response.exit_code == 0 and output in ("", _LIB_EMPTY_OUTPUT):
+            return replace(response, output=EMPTY_OUTPUT)
+    except (AttributeError, TypeError):
+        return response
+    return response
+
+
 class SafeShellBackend(LocalShellBackend):
     """LocalShellBackend com denylist, cerca de workspace e timeout curto.
 
@@ -270,7 +294,7 @@ class SafeShellBackend(LocalShellBackend):
         # trava, e o run não tem esse tempo.
         if timeout is not None:
             timeout = max(1, min(timeout, MAX_TIMEOUT))
-        return super().execute(command, timeout=timeout)
+        return _output_explicito(super().execute(command, timeout=timeout))
 
     def _blocked_reason(self, command: str) -> str | None:
         """Nunca propaga exceção: cerca que derruba o run é pior que cerca que
@@ -285,6 +309,7 @@ __all__ = [
     "CONTAINER_PROGS",
     "DEFAULT_TIMEOUT",
     "DENYLIST",
+    "EMPTY_OUTPUT",
     "GLOBAL_FLAGS",
     "INSTALLERS",
     "INSTALL_SUBCMDS",

@@ -2,6 +2,7 @@
 name = "toml-calibration-safety"
 kinds = ["config"]
 description = "Segurança ao calibrar TOML: delta pequeno, roundtrip-check, default congelado, fail-open/fail-closed"
+paths = ["*.toml"]
 ---
 ## Calibração segura de TOML
 

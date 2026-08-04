@@ -9,7 +9,11 @@ from typing import Literal, Mapping
 Kind = Literal["code", "content", "config", "refactor", "infra"]
 
 # "stalled": executou, não escreveu nada e não disse nada.
-ExitReason = Literal["done", "max_turns", "timeout", "error", "blocked", "stalled"]
+# "truncated": a última resposta do modelo morreu no teto de tokens
+# (finish_reason=length) — braço CORTADO, não braço ruim. Sem isto o A/B e o
+# bandit contam como "done" (ou "stalled") um run que nem chegou a terminar a
+# frase, e punem/premiam o braço pelo motivo errado.
+ExitReason = Literal["done", "max_turns", "timeout", "error", "blocked", "stalled", "truncated"]
 
 
 @dataclass(frozen=True)

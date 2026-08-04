@@ -12,6 +12,8 @@ from harness.backends.smart_fs import (  # noqa: E402
     BIG_FILE_LINES,
     GUARD_HEAD_LINES,
     SmartFilesystemMiddleware,
+    record_read,
+    reset_reads,
 )
 
 PY_MODULE = """import os
@@ -26,6 +28,16 @@ class Alvo:
 def solto():
     pass
 """
+
+
+@pytest.fixture(autouse=True)
+def _registro_limpo():
+    """O registro do gate READ-BEFORE-WRITE é de módulo (as tools de arquivo
+    nascem em dois lugares e compartilham ele). Sem zerar, um teste destrava o
+    seguinte."""
+    reset_reads()
+    yield
+    reset_reads()
 
 
 def _runtime():
@@ -124,6 +136,7 @@ def test_shrink_guard_recusa_e_explica(tmp_path):
     big = _big(tmp_path)
     before = big.read_bytes()
     _mw, tools = _fs_tools(tmp_path)
+    tools["read_file"].func(file_path="/big.py", runtime=_runtime())  # passa o gate
 
     msg = tools["write_file"].func(file_path="/big.py", content="x = 1\n", runtime=_runtime())
 
@@ -137,6 +150,7 @@ def test_shrink_guard_deixa_passar_encolhimento_pequeno(tmp_path):
     alvo = tmp_path / "conf.txt"
     alvo.write_text("a" * 1000, encoding="utf-8")
     _mw, tools = _fs_tools(tmp_path)
+    tools["read_file"].func(file_path="/conf.txt", runtime=_runtime())  # passa o gate
 
     msg = tools["write_file"].func(file_path="/conf.txt", content="b" * 800, runtime=_runtime())
 
@@ -151,6 +165,115 @@ def test_write_de_arquivo_novo_continua_ok(tmp_path):
 
     assert msg.status == "success"
     assert (tmp_path / "novo.py").read_text(encoding="utf-8") == "y = 2\n"
+
+
+# --------------------------------------------------------------------------- #
+# gate READ-BEFORE-WRITE
+# --------------------------------------------------------------------------- #
+
+
+def test_write_sem_read_em_arquivo_existente_e_bloqueado(tmp_path):
+    alvo = tmp_path / "app.js"
+    alvo.write_text("// versao no disco\n" * 20, encoding="utf-8")
+    antes = alvo.read_bytes()
+    _mw, tools = _fs_tools(tmp_path)
+
+    msg = tools["write_file"].func(
+        file_path="/app.js", content="// versao de memoria\n" * 20, runtime=_runtime()
+    )
+
+    assert msg.status == "error"
+    assert "leia o arquivo antes de reescrever" in msg.content
+    assert alvo.read_bytes() == antes
+
+
+def test_read_antes_do_write_libera(tmp_path):
+    alvo = tmp_path / "app.js"
+    alvo.write_text("// v1\n" * 20, encoding="utf-8")
+    _mw, tools = _fs_tools(tmp_path)
+
+    tools["read_file"].func(file_path="/app.js", runtime=_runtime())
+    msg = tools["write_file"].func(file_path="/app.js", content="// v2\n" * 20, runtime=_runtime())
+
+    assert msg.status == "success"
+    assert alvo.read_text(encoding="utf-8") == "// v2\n" * 20
+
+
+def test_arquivo_mudou_por_fora_depois_do_read_bloqueia_por_sha(tmp_path):
+    alvo = tmp_path / "app.js"
+    alvo.write_text("// v1\n" * 20, encoding="utf-8")
+    _mw, tools = _fs_tools(tmp_path)
+    tools["read_file"].func(file_path="/app.js", runtime=_runtime())
+
+    alvo.write_text("// v1\n" * 20 + "// outra unidade mexeu\n", encoding="utf-8")
+    antes = alvo.read_bytes()
+    msg = tools["write_file"].func(file_path="/app.js", content="// v2\n" * 21, runtime=_runtime())
+
+    assert msg.status == "error"
+    assert "mudou desde tua leitura" in msg.content
+    assert alvo.read_bytes() == antes
+
+
+def test_write_identico_ao_disco_passa_como_noop(tmp_path):
+    alvo = tmp_path / "conf.txt"
+    alvo.write_text("a=1\nb=2\n", encoding="utf-8")
+    _mw, tools = _fs_tools(tmp_path)
+
+    msg = tools["write_file"].func(file_path="/conf.txt", content="a=1\nb=2\n", runtime=_runtime())
+
+    assert msg.status == "success"
+    assert "Nada a mudar" in msg.content
+
+
+def test_edit_file_sem_read_bloqueia_e_com_read_passa(tmp_path):
+    alvo = tmp_path / "m.py"
+    alvo.write_text(PY_MODULE, encoding="utf-8")
+    _mw, tools = _fs_tools(tmp_path)
+
+    bloqueado = tools["edit_file"].func(
+        file_path="/m.py", old_string="return 1", new_string="return 2", runtime=_runtime()
+    )
+    assert bloqueado.status == "error"
+    assert "leia o arquivo antes" in bloqueado.content
+    assert "return 1" in alvo.read_text(encoding="utf-8")
+
+    tools["read_file"].func(file_path="/m.py", runtime=_runtime())
+    ok = tools["edit_file"].func(
+        file_path="/m.py", old_string="return 1", new_string="return 2", runtime=_runtime()
+    )
+    assert ok.status == "success"
+    assert "return 2" in alvo.read_text(encoding="utf-8")
+
+
+def test_edit_range_respeita_o_gate(tmp_path):
+    alvo = tmp_path / "m.py"
+    alvo.write_text(PY_MODULE, encoding="utf-8")
+    _mw, fs = _fs_tools(tmp_path)
+    edit_range = {t.name: t for t in ft.make_file_tools(tmp_path)}["edit_range"]
+    args = {"path": "/m.py", "start_line": 6, "end_line": 6, "new_content": "        return 2"}
+
+    bloqueado = edit_range.invoke(args)
+    assert "leia o arquivo antes de reescrever" in bloqueado
+    assert "return 1" in alvo.read_text(encoding="utf-8")
+
+    # o registro é compartilhado: o read_file do middleware destrava as tools
+    # de `file_tools.py`, que falam o mesmo path virtual
+    fs["read_file"].func(file_path="/m.py", runtime=_runtime())
+    assert "substituídas" in edit_range.invoke(args)
+    assert "return 2" in alvo.read_text(encoding="utf-8")
+
+
+def test_gate_nao_atrapalha_arquivo_novo(tmp_path):
+    _mw, tools = _fs_tools(tmp_path)
+    append_file = {t.name: t for t in ft.make_file_tools(tmp_path)}["append_file"]
+
+    escrito = tools["write_file"].func(file_path="/novo.txt", content="linha\n", runtime=_runtime())
+    criado = append_file.invoke({"path": "/outro.txt", "content": "linha"})
+
+    assert escrito.status == "success"
+    assert "criado com" in criado
+    # escrever marca leitura: a edição seguinte no mesmo arquivo não é atrito
+    assert "no fim" in append_file.invoke({"path": "/novo.txt", "content": "outra"})
 
 
 # --------------------------------------------------------------------------- #
@@ -383,7 +506,9 @@ def test_jail_nao_cria_arquivo_fora(tmp_path):
 
 def test_make_file_tools_expoe_nomes_novos(tmp_path):
     pytest.importorskip("langchain_core")
-    (tmp_path / "a.py").write_text("def f():\n    pass\n", encoding="utf-8")
+    conteudo = "def f():\n    pass\n"
+    (tmp_path / "a.py").write_text(conteudo, encoding="utf-8")
+    record_read("/a.py", conteudo)  # o gate exige leitura fresca
 
     tools = {t.name: t for t in ft.make_file_tools(tmp_path)}
 

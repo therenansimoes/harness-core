@@ -197,6 +197,91 @@ def test_middleware_replacement_actually_restricts_tools(tmp_path, monkeypatch):
     assert {"ls", "read_file", "edit_file"} <= _agent_tool_names(restrito)
 
 
+def _middleware_names(tmp_path, monkeypatch) -> list[str]:
+    """Nomes das classes do stack de middleware que chega ao create_deep_agent."""
+    import deepagents
+
+    capturado: dict[str, object] = {}
+
+    def spy(*a, **kw):
+        capturado["middleware"] = kw["middleware"]
+        return object()
+
+    monkeypatch.setattr(deepagents, "create_deep_agent", spy)
+    da._build_agent(ExecRequest(prompt="x", workspace=tmp_path, model="openai:qwen3.5-9b-mlx"))
+    return [type(m).__name__ for m in capturado["middleware"]]
+
+
+def test_compactacao_e_retry_de_tool_estao_no_stack(tmp_path, monkeypatch):
+    """Sem eles o run longo do 9B estoura o ctx e erro transitório de tool
+    queima turno do agente."""
+    pytest.importorskip("deepagents")
+    nomes = _middleware_names(tmp_path, monkeypatch)
+    assert "ContextEditingMiddleware" in nomes
+    assert "ToolRetryMiddleware" in nomes
+
+
+def test_compactacao_limpa_tool_result_velho_acima_do_gatilho():
+    """Comportamento, não presença: o edit é determinístico e roda offline."""
+    pytest.importorskip("deepagents")
+    from langchain.agents.middleware import ClearToolUsesEdit
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+    from langchain_core.messages.utils import count_tokens_approximately
+
+    def par(i: int, nome: str, corpo: str):
+        call = {"name": nome, "args": {"path": f"/f{i}.py"}, "id": f"c{i}"}
+        return [
+            AIMessage(content="", tool_calls=[call]),
+            ToolMessage(content=corpo, tool_call_id=f"c{i}", name=nome),
+        ]
+
+    gordo = "x " * 12000  # ~6k tokens por tool result: 6 pares passam do gatilho
+    messages = [HumanMessage(content="tarefa")]
+    for i in range(3):
+        messages += par(i, "read_file", gordo)
+    messages += par(3, "write_file", gordo)  # excluído do clear
+    messages += par(4, "read_file", gordo)
+    messages += par(5, "read_file", gordo)
+    assert count_tokens_approximately(messages) > da.CONTEXT_TRIGGER_TOKENS
+
+    edit = ClearToolUsesEdit(
+        trigger=da.CONTEXT_TRIGGER_TOKENS,
+        clear_at_least=0,
+        keep=da.CONTEXT_KEEP_TOOL_RESULTS,
+        exclude_tools=("write_file", "edit_file"),
+    )
+    edit.apply(messages, count_tokens=count_tokens_approximately)
+
+    corpos = [(m.name, m.content) for m in messages if isinstance(m, ToolMessage)]
+    assert corpos[0] == ("read_file", "[cleared]")   # os velhos saem
+    assert corpos[1] == ("read_file", "[cleared]")
+    assert corpos[2] == ("read_file", "[cleared]")
+    assert corpos[3] == ("write_file", gordo)        # exclude_tools respeitado
+    assert corpos[-1] == ("read_file", gordo)        # keep=2 preserva os recentes
+    assert corpos[-2] == ("read_file", gordo)
+    # `clear_at_least=0` limpa tudo de uma vez e o contexto volta pra BAIXO do
+    # gatilho. Com cota parcial ele pararia na primeira limpeza e o turno
+    # seguinte seria cortado do mesmo jeito.
+    assert count_tokens_approximately(messages) < da.CONTEXT_TRIGGER_TOKENS
+
+
+def test_compactacao_nao_toca_conversa_curta():
+    pytest.importorskip("deepagents")
+    from langchain.agents.middleware import ClearToolUsesEdit
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+    from langchain_core.messages.utils import count_tokens_approximately
+
+    messages = [
+        HumanMessage(content="tarefa"),
+        AIMessage(content="", tool_calls=[{"name": "read_file", "args": {}, "id": "c0"}]),
+        ToolMessage(content="print(1)", tool_call_id="c0", name="read_file"),
+    ]
+    ClearToolUsesEdit(trigger=da.CONTEXT_TRIGGER_TOKENS).apply(
+        messages, count_tokens=count_tokens_approximately
+    )
+    assert messages[-1].content == "print(1)"
+
+
 def test_backend_suporta_execucao(tmp_path, monkeypatch):
     """`execute` só chega ao modelo se o backend passa em `supports_execution`.
 
@@ -431,10 +516,12 @@ def test_model_for_cai_pra_temperature_se_provider_rejeita_kwarg(monkeypatch):
 
 
 class FakeMsg:
-    def __init__(self, type, content, tool_calls=None):
+    def __init__(self, type, content, tool_calls=None, response_metadata=None):
         self.type = type
         self.content = content
         self.tool_calls = tool_calls
+        if response_metadata is not None:
+            self.response_metadata = response_metadata
 
 
 class FakeUsage:
@@ -481,6 +568,70 @@ def test_stalled_exige_as_duas_condicoes(tmp_path, monkeypatch, escreve, texto):
         return {"messages": [FakeMsg("ai", texto)]}
 
     res = _fake_backend(monkeypatch, invoke).execute(_req(tmp_path))
+    assert (res.ok, res.exit_reason) == (True, "done")
+
+
+def test_resposta_cortada_no_teto_de_tokens_vira_truncated(tmp_path, monkeypatch):
+    """`finish_reason=length` não é conclusão: braço cortado ≠ braço ruim."""
+
+    def invoke(payload, config):
+        (tmp_path / "x.py").write_text("print(1)\n", encoding="utf-8")
+        return {
+            "messages": [
+                FakeMsg("ai", "comecei a explicar e", response_metadata={"finish_reason": "length"})
+            ]
+        }
+
+    res = _fake_backend(monkeypatch, invoke).execute(_req(tmp_path))
+    assert (res.ok, res.exit_reason) == (False, "truncated")
+    # o run escreveu: o diff continua registrado, a régua é quem julga depois
+    assert res.files_changed == ("x.py",)
+
+
+def test_truncated_ganha_de_stalled_e_perde_pro_limite_de_turnos(tmp_path, monkeypatch):
+    cortada = FakeMsg("ai", "", response_metadata={"finish_reason": "length"})
+    res = _fake_backend(monkeypatch, lambda p, c: {"messages": [cortada]}).execute(_req(tmp_path))
+    assert res.exit_reason == "truncated"  # e não "stalled"
+
+    sentinela = FakeMsg(
+        "ai",
+        da.LIMIT_MESSAGE_PREFIX + " run limit",
+        response_metadata={"finish_reason": "length"},
+    )
+    res = _fake_backend(monkeypatch, lambda p, c: {"messages": [sentinela]}).execute(_req(tmp_path))
+    assert res.exit_reason == "max_turns"
+
+
+@pytest.mark.parametrize(
+    "meta",
+    [
+        None,                             # provider sem metadata: fail-open
+        {},                               # metadata vazio
+        {"finish_reason": "stop"},        # terminou normal
+        {"finish_reason": None},          # campo presente e nulo
+        {"outra_coisa": "length"},        # chave inesperada não engana
+    ],
+)
+def test_sem_sinal_de_corte_o_comportamento_e_o_de_antes(tmp_path, monkeypatch, meta):
+    msg = FakeMsg("ai", "terminei", response_metadata=meta)
+    res = _fake_backend(monkeypatch, lambda p, c: {"messages": [msg]}).execute(_req(tmp_path))
+    assert (res.ok, res.exit_reason) == (True, "done")
+
+
+def test_stop_reason_do_anthropic_tambem_conta(tmp_path, monkeypatch):
+    msg = FakeMsg("ai", "cortado", response_metadata={"stop_reason": "max_tokens"})
+    res = _fake_backend(monkeypatch, lambda p, c: {"messages": [msg]}).execute(_req(tmp_path))
+    assert res.exit_reason == "truncated"
+
+
+def test_truncated_olha_so_a_ultima_resposta(tmp_path, monkeypatch):
+    """Corte num turno do meio o modelo já contornou; o que conta é o fim."""
+    messages = [
+        FakeMsg("ai", "cortei aqui", response_metadata={"finish_reason": "length"}),
+        FakeMsg("tool", "ok"),
+        FakeMsg("ai", "agora terminei", response_metadata={"finish_reason": "stop"}),
+    ]
+    res = _fake_backend(monkeypatch, lambda p, c: {"messages": messages}).execute(_req(tmp_path))
     assert (res.ok, res.exit_reason) == (True, "done")
 
 

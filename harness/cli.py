@@ -1,6 +1,7 @@
 """CLI do harness. `harness run` / `ab` / `backends` / `improve` / `replay` /
 `lineage` / `export` / `import` / `doctor` / `skills` / `actions` / `seal` /
-`frontier` / `evolve` / `ui-verify` / `bench` / `queue` / `webhook`."""
+`frontier` / `evolve` / `ui-verify` / `vision-judge` / `bench` / `queue` /
+`webhook`."""
 
 from __future__ import annotations
 
@@ -300,7 +301,9 @@ def run_once(
         # "blocked"/"error" nem chegaram a executar; aí não há o que verificar.
         # "stalled" fica fora de propósito: por definição é zero escrita no
         # workspace, então o verify só repetiria o resultado do run anterior.
-        ran = result.exit_reason in ("done", "max_turns", "timeout")
+        # "truncated" entra junto: a resposta foi cortada no teto de tokens, mas
+        # o agente pode ter escrito o conserto antes — a régua tem o que julgar.
+        ran = result.exit_reason in ("done", "max_turns", "timeout", "truncated")
         verify_tail = ""
         if ran:
             # O verificador entra agora, com o agente já fora: durante o
@@ -981,6 +984,90 @@ def cmd_ui_verify(args: argparse.Namespace) -> int:
     return 1 if res.failures else 0
 
 
+def cmd_vision_judge(args: argparse.Namespace) -> int:
+    """`harness vision-judge`: um VLM local olha a tela e dá nota.
+
+    Subcheck da régua GRADUADA, não régua binária: entra no `[checks]` do
+    unit.toml com peso pequeno. A diferença em relação ao `ui-verify` está toda
+    no fail-open — juiz probabilístico não reprova quando falta o juiz. Sem
+    `[vision]` no models.toml, servidor mudo ou resposta ilegível saem 0 com o
+    motivo em stderr. O que reprova aqui é o que o modelo VIU e achou ruim.
+
+    `--min-nota baseline` troca o piso absoluto pelo relativo: a nota aceita da
+    última vez. Sem baseline gravado, passa e grava — o primeiro run é que define
+    o chão.
+    """
+    from harness import quality_baseline, vision
+    from harness.backends.dom_tools import VAZIA, render
+
+    ws = Path(args.ws or ".")
+    piso, usa_baseline = _min_nota(args, ws)
+
+    shot, kb, erro = render(ws, port=args.port, dist_path=args.dist)
+    if erro:
+        # Tela vazia é falha REAL da unidade; Chrome ausente é "não foi
+        # verificado" e não pode reprovar um check de peso opcional.
+        vazia = VAZIA in erro
+        print(f"vision-judge {'FALHA' if vazia else 'aviso'} {erro}", file=sys.stderr)
+        print(f"vision-judge shot=nenhum {'reprovado' if vazia else 'fail-open'}")
+        return 1 if vazia else 0
+
+    assert shot is not None
+    if args.ref:
+        res = vision.compare_reference(shot, Path(args.ref), question=args.question)
+        if res["unavailable"]:
+            print(f"vision-judge aviso: {res['unavailable']}", file=sys.stderr)
+            print(f"vision-judge shot={shot} ({kb:.1f}kb) fail-open")
+            return 0
+        melhor = res["melhor"]
+        if melhor != "a":
+            print(f"vision-judge FALHA a referência está melhor: {res['motivo']}", file=sys.stderr)
+        print(
+            f"vision-judge shot={shot} ({kb:.1f}kb) ref={args.ref} melhor={melhor}"
+        )
+        return 0 if melhor == "a" else 1
+
+    res = vision.judge_image(shot, question=args.question)
+    if res["unavailable"]:
+        print(f"vision-judge aviso: {res['unavailable']}", file=sys.stderr)
+        print(f"vision-judge shot={shot} ({kb:.1f}kb) fail-open")
+        return 0
+    nota = float(res["nota"])
+    for bullet in res["bullets"]:
+        print(f"vision-judge - {bullet}", file=sys.stderr)
+    passou = piso is None or nota >= piso
+    if usa_baseline and passou:
+        # Sobe o chão só quando a nota foi aceita: baseline que grava nota pior
+        # deixaria o gate afrouxar sozinho.
+        quality_baseline.save_baseline(ws, {"nota": nota})
+    if not passou:
+        print(f"vision-judge FALHA nota {nota:.1f} < {piso:.1f}", file=sys.stderr)
+    print(
+        f"vision-judge shot={shot} ({kb:.1f}kb) nota={nota:.1f} "
+        f"piso={'nenhum' if piso is None else f'{piso:.1f}'}"
+        + (" (baseline)" if usa_baseline else "")
+    )
+    return 0 if passou else 1
+
+
+def _min_nota(args: argparse.Namespace, ws: Path) -> tuple[float | None, bool]:
+    """(piso, é_baseline). `baseline` sem arquivo = sem piso: passa e grava."""
+    from harness import quality_baseline
+
+    bruto = str(args.min_nota)
+    if bruto.strip().lower() == "baseline":
+        anterior = (quality_baseline.load_baseline(ws) or {}).get("nota")
+        try:
+            return float(anterior), True  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None, True
+    try:
+        return float(bruto), False
+    except ValueError:
+        args.parser.error(f"--min-nota: esperado número ou 'baseline', veio {bruto!r}")
+        raise AssertionError  # pragma: no cover - error() já saiu
+
+
 def _pct(values: list[float], q: int) -> float:
     """Percentil por rank mais próximo — sem dependência, honesto para n pequeno."""
     ordered = sorted(values)
@@ -1462,6 +1549,29 @@ def build_parser() -> argparse.ArgumentParser:
                     help="opt-in que GASTA (~$0.01): manda o screenshot para o "
                          "claude CLI em haiku e exige JSON {\"ok\",\"motivo\"}")
     ui.set_defaults(func=cmd_ui_verify, parser=ui)
+
+    vj = sub.add_parser(
+        "vision-judge",
+        help="subcheck de UI: um VLM local olha o screenshot e dá nota (fail-open)",
+    )
+    alvo = vj.add_mutually_exclusive_group(required=True)
+    alvo.add_argument("--port", type=int, default=None,
+                      help="porta de um servidor registrado nesta run (start_server)")
+    alvo.add_argument("--dist", default=None, metavar="PATH",
+                      help="diretório buildado a servir em loopback (ex.: dist)")
+    vj.add_argument("--question", default=None, metavar="PERGUNTA",
+                    help="foca o olhar do juiz (ex.: 'o menu está alinhado?')")
+    vj.add_argument("--min-nota", default="6.0", dest="min_nota", metavar="N|baseline",
+                    help="piso da nota 0-10 (default 6.0). `baseline` usa a nota "
+                         "aceita da última vez — régua relativa, anti-platô")
+    vj.add_argument("--ref", default=None, metavar="PNG",
+                    help="compara PAREADO com esta referência em vez de dar nota "
+                         "absoluta (mais confiável em VLM pequeno): passa se a tela "
+                         "nova ganhar")
+    vj.add_argument("--ws", default=None, metavar="PATH",
+                    help="workspace (default: diretório atual) — onde ficam "
+                         "procs.json, os shots e o baseline")
+    vj.set_defaults(func=cmd_vision_judge, parser=vj)
 
     export = sub.add_parser(
         "export", help="empacota skills + prior de roteamento em um bundle .tgz"

@@ -1,0 +1,27 @@
+[project]
+name = "fastapi-min"
+version = "0.1.0"
+description = "API FastAPI mínima com healthz e uma rota validada"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+]
+
+[dependency-groups]
+# Grupo (não extra): `uv run pytest` instala o grupo `dev` sozinho, sem flag.
+# `httpx` está aqui porque o TestClient do Starlette roda sobre ele — sem essa
+# linha o import do teste falha com uma mensagem que parece bug do FastAPI.
+dev = ["pytest>=8.0", "httpx>=0.27"]
+
+[tool.uv]
+# Isto é uma APLICAÇÃO, não uma biblioteca: não há wheel para instalar, então
+# `uv run` não precisa de build backend. Se você for publicar isto no PyPI,
+# tire esta linha e acrescente um [build-system].
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Com `package = false` o projeto não é instalado; sem isto, `from app.main
+# import app` não encontra o pacote (pytest só põe `tests/` no sys.path).
+pythonpath = ["."]

@@ -1,0 +1,152 @@
+/* Reset moderno mínimo + base tipográfica. Carregue DEPOIS de tokens.css.
+   "Mínimo" é regra: aqui só entra o que vale para todo elemento do documento.
+   Estilo de componente vai no CSS da tela, não neste arquivo. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* Margem de bloco é decisão de layout; o browser chuta e o chute vaza. */
+:where(body, h1, h2, h3, h4, p, figure, blockquote, dl, dd, ul, ol) {
+  margin: 0;
+}
+
+:where(ul, ol)[role="list"] {
+  padding-inline: 0;
+  list-style: none;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+  /* Âncora não fica embaixo do header sticky. */
+  scroll-padding-block-start: var(--space-5);
+}
+
+body {
+  min-height: 100svh;
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  line-height: var(--leading);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Mídia é inline por default e ganha 4px fantasma embaixo. */
+:where(img, picture, svg, video, canvas) {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+:where(input, button, textarea, select) {
+  font: inherit;
+  color: inherit;
+}
+
+:where(textarea) {
+  resize: vertical;
+}
+
+:where(h1, h2, h3) {
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
+  text-wrap: balance; /* título não deixa uma palavra órfã na última linha */
+}
+
+:where(p, li) {
+  text-wrap: pretty;
+}
+
+h1 {
+  font-size: var(--text-display);
+}
+
+h2 {
+  font-size: var(--text-xl);
+}
+
+h3 {
+  font-size: var(--text-lg);
+}
+
+:where(a) {
+  color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+  transition: color var(--dur) var(--ease);
+}
+
+:where(a:hover) {
+  color: var(--accent-hover);
+}
+
+:where(code, kbd, samp, pre) {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+:where(hr) {
+  border: 0;
+  border-block-start: 1px solid var(--border);
+  margin-block: var(--space-5);
+}
+
+/* --- primitivos de acessibilidade e layout -------------------------------- */
+
+/* Anel de foco visível SEMPRE, e só para navegação por teclado. Nunca troque
+   isto por `outline: none`: é o único feedback de quem não usa mouse. */
+:focus-visible {
+  outline: var(--ring-width) solid var(--accent);
+  outline-offset: var(--ring-offset);
+  border-radius: var(--radius-sm);
+}
+
+/* Primeiro link tabulável da página: some até receber foco. */
+.skip-link {
+  position: absolute;
+  inset-block-start: var(--space-2);
+  inset-inline-start: var(--space-2);
+  z-index: 10;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  background-color: var(--accent);
+  color: var(--on-accent);
+  box-shadow: var(--shadow-2);
+  text-decoration: none;
+  transform: translateY(-200%);
+}
+
+.skip-link:focus-visible {
+  transform: none;
+}
+
+/* Faixa de conteúdo: centralizada, com respiro lateral em tela estreita. */
+.wrap {
+  width: 100%;
+  max-width: 68rem;
+  margin-inline: auto;
+  padding-inline: var(--space-3);
+}
+
+/* Texto corrido dentro de uma medida legível. */
+.prose {
+  max-width: var(--measure);
+}
+
+.prose > * + * {
+  margin-block-start: var(--space-3);
+}
+
+.visually-hidden:not(:focus):not(:active) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

@@ -1,6 +1,6 @@
 """FilesystemMiddleware com guarda de contexto na leitura e na sobrescrita.
 
-Duas falhas do executor pequeno custam run inteiro e as duas nascem em tool de
+Três falhas do executor pequeno custam run inteiro e as três nascem em tool de
 arquivo:
 
 1. `read_file` sem paginação em arquivo de milhares de linhas: o default da
@@ -11,6 +11,11 @@ arquivo:
    "conteúdo final completo" vira o trecho que o modelo lembrava, e o resto do
    arquivo evapora sem aviso. A guarda recusa encolhimento grande e manda usar
    `edit_range`.
+3. Escrever em arquivo existente SEM ter lido a versão atual: o modelo
+   reescreve pelo que lembra do turno passado e derruba o que entrou depois
+   (caso real: a reescrita de uma página dropou o `<script src="app.js">`). O
+   gate READ-BEFORE-WRITE exige leitura fresca — sha do que foi lido igual ao
+   sha do arquivo agora — antes de qualquer escrita destrutiva.
 
 Como o override funciona: o `FilesystemMiddleware` monta `self.tools` chamando
 métodos bound (`_create_read_file_tool` etc.), então a subclasse troca a tool
@@ -27,6 +32,8 @@ ao lado do original — sem erro, com as duas versões de cada tool.
 
 from __future__ import annotations
 
+import hashlib
+import posixpath
 from typing import Any
 
 from deepagents.middleware.filesystem import FilesystemMiddleware, validate_path
@@ -41,6 +48,24 @@ BIG_FILE_LINES = 2000
 GUARD_HEAD_LINES = 60
 # Sobrescrever com menos de 70% do tamanho atual é perda de conteúdo, não edição.
 SHRINK_FLOOR = 0.7
+
+# Registro do gate: path normalizado -> sha256 do conteúdo que o modelo LEU.
+# Módulo e não instância de propósito: `edit_range`/`insert_lines`/`append_file`
+# vêm de `file_tools.py`, nascem fora do middleware e precisam consultar o MESMO
+# registro que o `read_file` alimenta. Entrada sobrevivente de um run anterior
+# não afrouxa nada — o gate só passa quando o sha ainda casa com o arquivo, e
+# sha igual significa que ninguém mexeu no arquivo desde aquela leitura.
+_READS: dict[str, str] = {}
+
+READ_GATE_UNREAD = (
+    "Erro: leia o arquivo antes de reescrever (read_file); ele pode ter mudado "
+    "desde teu último turno. Leia e refaça a escrita com o conteúdo atual."
+)
+READ_GATE_STALE = (
+    "Erro: o arquivo mudou desde tua leitura; leia de novo (read_file) antes de "
+    "reescrever — escrever agora apagaria o que entrou no meio."
+)
+NOOP_WRITE = "Nada a mudar: o content enviado é idêntico ao arquivo atual."
 
 READ_FILE_DESCRIPTION = r"""Lê o conteúdo de um arquivo do workspace.
 
@@ -62,7 +87,20 @@ WRITE_FILE_DESCRIPTION = """Escreve um arquivo INTEIRO, criando ou sobrescrevend
 reescrever arquivo existente, preserve TUDO que a tarefa não mandou mudar.
 
 Sobrescrever um arquivo existente com muito menos conteúdo do que ele tem é
-recusado: para mudar um trecho use `edit_file` ou `edit_range`."""
+recusado: para mudar um trecho use `edit_file` ou `edit_range`.
+
+Reescrever arquivo existente exige `read_file` DEPOIS da última mudança dele: se
+você não leu, ou se o arquivo mudou desde a sua leitura, a escrita é recusada e
+você lê de novo antes de tentar."""
+
+EDIT_FILE_DESCRIPTION = """Troca um trecho exato por outro dentro de um arquivo.
+
+O match de `old_string` é byte a byte, incluindo indentação, e precisa ser único
+no arquivo (senão use `replace_all=true`). Falhou duas vezes com "String not
+found"? Pare de variar o texto e use `edit_range` com o número da linha.
+
+Editar arquivo existente exige `read_file` DEPOIS da última mudança dele: sem
+leitura fresca a edição é recusada."""
 
 
 class SmartReadFileSchema(BaseModel):
@@ -91,6 +129,16 @@ class SmartWriteFileSchema(BaseModel):
 
     file_path: str = Field(description="Path absoluto do arquivo (no workspace virtual).")
     content: str = Field(description="Conteúdo final COMPLETO do arquivo.")
+
+
+class SmartEditFileSchema(BaseModel):
+    """Schema do `edit_file`. Idêntico ao da lib; declarado aqui pelo mesmo
+    motivo do `SmartWriteFileSchema`."""
+
+    file_path: str = Field(description="Path absoluto do arquivo (no workspace virtual).")
+    old_string: str = Field(description="Trecho exato a substituir (sem a numeração do read_file).")
+    new_string: str = Field(description="Trecho novo.")
+    replace_all: bool = Field(default=False, description="Substituir todas as ocorrências.")
 
 
 class SmartFilesystemMiddleware(FilesystemMiddleware):
@@ -124,11 +172,14 @@ class SmartFilesystemMiddleware(FilesystemMiddleware):
                     offset=0,
                     limit=min(GUARD_HEAD_LINES, total_lines),
                 )
-                return _append_notice(result, notice)
-            return original.func(
-                file_path=file_path,
-                runtime=runtime,
-                **_passthrough(offset, limit),
+                return self._mark_read(file_path, _append_notice(result, notice))
+            return self._mark_read(
+                file_path,
+                original.func(
+                    file_path=file_path,
+                    runtime=runtime,
+                    **_passthrough(offset, limit),
+                ),
             )
 
         async def async_read_file(
@@ -146,11 +197,14 @@ class SmartFilesystemMiddleware(FilesystemMiddleware):
                     offset=0,
                     limit=min(GUARD_HEAD_LINES, total_lines),
                 )
-                return _append_notice(result, notice)
-            return await original.coroutine(
-                file_path=file_path,
-                runtime=runtime,
-                **_passthrough(offset, limit),
+                return self._mark_read(file_path, _append_notice(result, notice))
+            return self._mark_read(
+                file_path,
+                await original.coroutine(
+                    file_path=file_path,
+                    runtime=runtime,
+                    **_passthrough(offset, limit),
+                ),
             )
 
         return StructuredTool.from_function(
@@ -189,6 +243,42 @@ class SmartFilesystemMiddleware(FilesystemMiddleware):
         )
         return total, notice
 
+    # ----------------------------------------------------------- read gate #
+
+    def _mark_read(self, file_path: str, result: Any) -> Any:
+        """Registra a leitura de `file_path` e devolve `result` intocado.
+
+        O sha é do arquivo INTEIRO mesmo quando a leitura foi paginada: o que o
+        gate garante é "você olhou este arquivo depois da última mudança dele",
+        e quem cuida de reescrever menos do que existe é o shrink-guard.
+        """
+        if isinstance(result, ToolMessage) and result.status == "error":
+            return result
+        current = self._current(file_path)
+        if current is not None:
+            record_read(file_path, current)
+        return result
+
+    def _current(self, file_path: str) -> str | None:
+        """Conteúdo utf-8 do arquivo agora, ou `None`.
+
+        `None` cobre arquivo novo, binário, path inválido e backend que
+        reclamou — todos os casos em que as guardas daqui saem de cena
+        (fail-open: guarda nunca derruba leitura nem escrita).
+        """
+        try:
+            path = validate_path(file_path)
+            probe = self.backend.read(path, 0, 1)
+            if probe.error or probe.file_data is None:
+                return None
+            if probe.file_data.get("encoding") != "utf-8":
+                return None
+            total = probe.total_lines or 1
+            full = self.backend.read(path, 0, total)
+            return full.file_data["content"] if full.file_data else None
+        except Exception:  # noqa: BLE001 - guarda nunca derruba a tool
+            return None
+
     # ---------------------------------------------------------------- write #
 
     def _create_write_file_tool(self) -> Any:
@@ -196,26 +286,22 @@ class SmartFilesystemMiddleware(FilesystemMiddleware):
         description = self._custom_tool_descriptions.get("write_file") or WRITE_FILE_DESCRIPTION
 
         def sync_write_file(file_path: str, content: str, runtime: ToolRuntime) -> Any:
-            refusal = self._shrink_refusal(file_path, content)
-            if refusal is not None:
-                return ToolMessage(
-                    content=refusal,
-                    name="write_file",
-                    tool_call_id=runtime.tool_call_id,
-                    status="error",
-                )
-            return original.func(file_path=file_path, content=content, runtime=runtime)
+            verdict = self._write_verdict(file_path, content)
+            if verdict is not None:
+                return _tool_error("write_file", runtime, *verdict)
+            return self._mark_read(
+                file_path,
+                original.func(file_path=file_path, content=content, runtime=runtime),
+            )
 
         async def async_write_file(file_path: str, content: str, runtime: ToolRuntime) -> Any:
-            refusal = self._shrink_refusal(file_path, content)
-            if refusal is not None:
-                return ToolMessage(
-                    content=refusal,
-                    name="write_file",
-                    tool_call_id=runtime.tool_call_id,
-                    status="error",
-                )
-            return await original.coroutine(file_path=file_path, content=content, runtime=runtime)
+            verdict = self._write_verdict(file_path, content)
+            if verdict is not None:
+                return _tool_error("write_file", runtime, *verdict)
+            return self._mark_read(
+                file_path,
+                await original.coroutine(file_path=file_path, content=content, runtime=runtime),
+            )
 
         return StructuredTool.from_function(
             name="write_file",
@@ -226,33 +312,162 @@ class SmartFilesystemMiddleware(FilesystemMiddleware):
             args_schema=SmartWriteFileSchema,
         )
 
-    def _shrink_refusal(self, file_path: str, content: str) -> str | None:
-        """Motivo da recusa, ou `None` para deixar passar.
+    def _write_verdict(self, file_path: str, content: str) -> tuple[str, str] | None:
+        """`(mensagem, status)` para curto-circuitar a escrita, ou `None`.
 
-        Sem flag de override de propósito: a saída certa é `edit_range`, e uma
-        flag `force=true` seria clicada em toda tentativa.
+        Ordem: escrita idêntica ao disco é no-op permitido (o modelo já está
+        onde queria chegar), depois o gate de leitura fresca, e só então o
+        shrink-guard — pedir para ler é instrução mais útil do que discutir
+        tamanho com quem escreve de memória.
         """
-        try:
-            path = validate_path(file_path)
-            probe = self.backend.read(path, 0, 1)
-            if probe.error or probe.file_data is None:
-                return None  # arquivo novo: nada para perder
-            if probe.file_data.get("encoding") != "utf-8":
-                return None
-            total = probe.total_lines or 1
-            full = self.backend.read(path, 0, total)
-            current = full.file_data["content"] if full.file_data else ""
-        except Exception:  # noqa: BLE001 - guarda nunca derruba a escrita
-            return None
-        if not current or len(content) >= SHRINK_FLOOR * len(current):
-            return None
-        lost = round((1 - len(content) / len(current)) * 100)
-        return (
-            f"Erro: recusado — isso apagaria ~{lost}% do arquivo "
-            f"({len(current)} bytes agora, {len(content)} no content enviado). "
-            f"Use edit_range para mudar só o trecho, ou confirme reescrevendo com o "
-            f"conteúdo completo do arquivo."
+        current = self._current(file_path)
+        if current is None:
+            return None  # arquivo novo: nada para perder
+        if content == current:
+            record_read(file_path, current)
+            return NOOP_WRITE, "success"
+        gate = needs_fresh_read(file_path, current)
+        if gate is not None:
+            return gate, "error"
+        shrink = _shrink_refusal(current, content)
+        if shrink is not None:
+            return shrink, "error"
+        return None
+
+    # ----------------------------------------------------------------- edit #
+
+    def _create_edit_file_tool(self) -> Any:
+        original = super()._create_edit_file_tool()
+        description = self._custom_tool_descriptions.get("edit_file") or EDIT_FILE_DESCRIPTION
+
+        def sync_edit_file(
+            file_path: str,
+            old_string: str,
+            new_string: str,
+            runtime: ToolRuntime,
+            replace_all: bool = False,
+        ) -> Any:
+            gate = self._edit_gate(file_path)
+            if gate is not None:
+                return _tool_error("edit_file", runtime, gate, "error")
+            return self._mark_read(
+                file_path,
+                original.func(
+                    file_path=file_path,
+                    old_string=old_string,
+                    new_string=new_string,
+                    runtime=runtime,
+                    replace_all=replace_all,
+                ),
+            )
+
+        async def async_edit_file(
+            file_path: str,
+            old_string: str,
+            new_string: str,
+            runtime: ToolRuntime,
+            replace_all: bool = False,
+        ) -> Any:
+            gate = self._edit_gate(file_path)
+            if gate is not None:
+                return _tool_error("edit_file", runtime, gate, "error")
+            return self._mark_read(
+                file_path,
+                await original.coroutine(
+                    file_path=file_path,
+                    old_string=old_string,
+                    new_string=new_string,
+                    runtime=runtime,
+                    replace_all=replace_all,
+                ),
+            )
+
+        return StructuredTool.from_function(
+            name="edit_file",
+            description=description,
+            func=sync_edit_file,
+            coroutine=async_edit_file,
+            infer_schema=False,
+            args_schema=SmartEditFileSchema,
         )
+
+    def _edit_gate(self, file_path: str) -> str | None:
+        """Gate de leitura fresca para `edit_file`. `None` deixa passar."""
+        return needs_fresh_read(file_path, self._current(file_path))
+
+
+def record_read(path: str, content: str) -> None:
+    """Marca que a versão ATUAL (`content`) de `path` passou pelos olhos do modelo.
+
+    Também é chamada depois de uma escrita bem-sucedida: quem acabou de escrever
+    sabe o que está no arquivo, e bloquear a edição seguinte seria só atrito.
+    """
+    _READS[_read_key(path)] = _sha(content)
+
+
+def needs_fresh_read(path: str, current: str | None = None) -> str | None:
+    """Motivo para recusar a escrita em `path`, ou `None` para deixar passar.
+
+    `current` é o conteúdo do arquivo AGORA; `None` significa arquivo novo (nada
+    para perder, passa direto). É a função que `file_tools.py` importa para o
+    `edit_range`/`insert_lines`/`append_file` usarem o MESMO gate das tools do
+    middleware, com o mesmo registro de leituras.
+    """
+    if current is None:
+        return None
+    seen = _READS.get(_read_key(path))
+    if seen is None:
+        return READ_GATE_UNREAD
+    if seen != _sha(current):
+        return READ_GATE_STALE
+    return None
+
+
+def reset_reads() -> None:
+    """Esquece todas as leituras. Existe para teste — em produção o registro
+    morre junto com o processo do run."""
+    _READS.clear()
+
+
+def _read_key(path: str) -> str:
+    """Chave do registro: o path como o MODELO fala, sem a barra da raiz.
+
+    O filesystem do executor é virtual com raiz no workspace, então `/app.py`
+    (tools do middleware) e `app.py` (tools de `file_tools.py`) são o mesmo
+    arquivo e precisam cair na mesma chave.
+    """
+    return posixpath.normpath("/" + str(path).lstrip("/")).lstrip("/")
+
+
+def _sha(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _shrink_refusal(current: str, content: str) -> str | None:
+    """Motivo da recusa por encolhimento, ou `None` para deixar passar.
+
+    Sem flag de override de propósito: a saída certa é `edit_range`, e uma flag
+    `force=true` seria clicada em toda tentativa.
+    """
+    if not current or len(content) >= SHRINK_FLOOR * len(current):
+        return None
+    lost = round((1 - len(content) / len(current)) * 100)
+    return (
+        f"Erro: recusado — isso apagaria ~{lost}% do arquivo "
+        f"({len(current)} bytes agora, {len(content)} no content enviado). "
+        f"Use edit_range para mudar só o trecho, ou confirme reescrevendo com o "
+        f"conteúdo completo do arquivo."
+    )
+
+
+def _tool_error(name: str, runtime: ToolRuntime, message: str, status: str) -> ToolMessage:
+    """Resposta curto-circuitada da tool, sem tocar no backend."""
+    return ToolMessage(
+        content=message,
+        name=name,
+        tool_call_id=runtime.tool_call_id,
+        status=status,
+    )
 
 
 def _passthrough(offset: int | None, limit: int | None) -> dict[str, int]:

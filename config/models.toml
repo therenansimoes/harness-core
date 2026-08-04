@@ -79,3 +79,28 @@ output_per_mtok = 0.0
 [pricing."openai:google/gemma-4-e4b"]
 input_per_mtok = 0.0
 output_per_mtok = 0.0
+
+# Olho do harness (`judge_image`). Bloco AUSENTE = sem visão, e sem visão o
+# caminho normal é `unavailable` — nunca nota inventada.
+#
+# É o MESMO modelo do executor local: multimodal nativo, já carregado no LM
+# Studio, custo marginal $0. Verificado empiricamente (OCR + controle negativo):
+# aceita `image_url` com data-URI base64 e responde sobre a imagem. O gemma-4
+# local NÃO serve — descarta a imagem em silêncio e responde como se tivesse
+# visto, que é o pior modo de falhar. E `prompt_tokens` do LM Studio não conta
+# token de imagem, então não dá para usar a contagem como prova de que a imagem
+# chegou.
+#
+# ORÇAMENTO: este modelo pensa SEMPRE e o thinking não desliga (medido contra o
+# servidor vivo: `chat_template_kwargs enable_thinking=false`,
+# `reasoning_effort=none` e `/no_think` no prompt são aceitos e IGNORADOS pelo LM
+# Studio). O `reasoning_content` come o orçamento inteiro antes do `content`: um
+# juízo de tela real gastou 1943 tokens só de reasoning, então com max_tokens
+# 1600 a resposta voltava com `content` vazio e `finish_reason: length` — juiz
+# sumido, não juiz negativo. 3000 fecha com folga (2096 completion medidos) e
+# leva ~78s na M3 Pro, por isso o timeout tem que ser MAIOR que isso: em 60s o
+# request morria por timeout mesmo com orçamento sobrando.
+[vision]
+model = "openai:qwen3.5-9b-mlx"
+timeout_s = 240
+max_tokens = 3000

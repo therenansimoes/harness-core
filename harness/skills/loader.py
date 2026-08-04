@@ -10,7 +10,8 @@ import os
 import re
 import tomllib
 from dataclasses import dataclass
-from pathlib import Path
+from fnmatch import fnmatch
+from pathlib import Path, PurePosixPath
 
 _PACKAGE_SKILLS = Path(__file__).resolve().parents[2] / "skills"
 
@@ -62,6 +63,8 @@ class Skill:
     description: str
     body: str
     path: Path
+    # Globs de arquivo que disparam a skill sem passar pelo ranking fuzzy.
+    paths: tuple[str, ...] = ()
 
 
 def load_skills(root: Path | None = None) -> list[Skill]:
@@ -82,28 +85,56 @@ def select_skills(
     root: Path | None = None,
     *,
     query: str | None = None,
+    files: list[str] | None = None,
     limit: int = SELECT_LIMIT,
 ) -> list[Skill]:
     """`kinds` vazio = vale para todo kind; kind None só casa com esses.
 
-    Depois do filtro por kind vem o ranking por relevância à unidade: score =
-    tokens em comum entre `query` (o prompt da unidade) e `description + corpo`
-    da skill. Barato e determinístico — sem embedding, sem chamada de modelo.
-    Empate mantém a ordem de `load_skills` (path, i.e. alfabética).
+    Depois do filtro por kind vêm dois eixos, nesta ordem:
+
+    1. Path-trigger determinístico: skill com `paths` (globs no frontmatter) cujo
+       glob casa algum arquivo de `files` — os alvos conhecidos da unidade
+       (`files_changed`, path do pedido) — entra ANTES do ranking. Sem `files` o
+       eixo nem roda, então o comportamento de quem não passa nada é o de antes.
+    2. Ranking por relevância à unidade: score = tokens em comum entre `query` (o
+       prompt da unidade) e `description + corpo` da skill. Barato e
+       determinístico — sem embedding, sem chamada de modelo. Empate mantém a
+       ordem de `load_skills` (path, i.e. alfabética).
 
     Skill sem nenhum token em comum sai fora QUANDO alguma outra pontuou; se
     ninguém pontuou (ou não veio query utilizável) cai no comportamento por kind
     puro, cortado no mesmo teto. Skill global (`kinds = []`) compete no mesmo
     ranking: não passa de graça só por não ter restrição de kind.
+
+    O teto `limit` continua valendo para o total: path-trigger fura a FILA, não
+    o orçamento de contexto.
     """
     matched = [s for s in load_skills(root) if not s.kinds or kind in s.kinds]
+    triggered = [s for s in matched if _path_hit(s, files)]
+    resto = [s for s in matched if s not in triggered]
     wanted = _tokens(query) if query else set()
     if wanted:
-        scored = [(len(wanted & _tokens(f"{s.description}\n{s.body}")), s) for s in matched]
+        scored = [(len(wanted & _tokens(f"{s.description}\n{s.body}")), s) for s in resto]
         if any(score for score, _ in scored):
             scored = [(score, s) for score, s in scored if score]
-            matched = [s for _, s in sorted(scored, key=lambda pair: -pair[0])]
-    return matched[: max(limit, 0)]
+            resto = [s for _, s in sorted(scored, key=lambda pair: -pair[0])]
+    return (triggered + resto)[: max(limit, 0)]
+
+
+def _path_hit(skill: Skill, files: list[str] | None) -> bool:
+    """True se algum glob da skill casa algum arquivo da unidade.
+
+    Casa contra o path como veio E contra o basename: `paths = ["*.toml"]` tem
+    que pegar `config/agents.toml` e `agents.toml` igual, senão o gatilho
+    depende de o chamador ter normalizado o path."""
+    if not skill.paths or not files:
+        return False
+    for arquivo in files:
+        alvo = str(arquivo)
+        nome = PurePosixPath(alvo).name
+        if any(fnmatch(alvo, glob) or fnmatch(nome, glob) for glob in skill.paths):
+            return True
+    return False
 
 
 def render_prompt(skills: list[Skill]) -> str:
@@ -131,6 +162,7 @@ def _parse(path: Path) -> Skill | None:
             description=str(meta.get("description", "")),
             body=body.strip(),
             path=path,
+            paths=tuple(str(p) for p in meta.get("paths", [])),
         )
     except Exception:  # conteúdo é externo — nunca derrubar o caller
         return None

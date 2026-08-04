@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- PLACEHOLDER: troque as duas linhas abaixo antes de publicar. O título é
+         o que aparece na aba e no resultado de busca; a descrição é o resumo. -->
+    <title>Título do projeto — substitua este texto</title>
+    <meta name="description" content="Uma frase dizendo o que esta página faz. Substitua." />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="stylesheet" href="tokens.css" />
+    <link rel="stylesheet" href="reset.css" />
+  </head>
+  <body>
+    <!-- Primeiro elemento tabulável: pula a navegação e cai no conteúdo. -->
+    <a class="skip-link" href="#conteudo">Pular para o conteúdo</a>
+
+    <header class="wrap" style="padding-block: var(--space-4)">
+      <p><strong>nome-do-projeto</strong></p>
+      <nav aria-label="Principal">
+        <ul role="list" style="display: flex; gap: var(--space-3); padding: 0">
+          <li><a href="#conteudo">Início</a></li>
+          <li><a href="#secao-um">Seção um</a></li>
+        </ul>
+      </nav>
+    </header>
+
+    <main id="conteudo" class="wrap">
+      <h1>Uma frase que diz o que esta página faz</h1>
+      <div class="prose" style="margin-block-start: var(--space-4)">
+        <p>
+          Este parágrafo é placeholder honesto: ele existe para você ver a medida de
+          leitura (<code>--measure</code>, 66 caracteres) e a entrelinha do corpo antes de
+          escrever o texto real. Não é lorem ipsum, então dá para julgar o ritmo com
+          palavras de verdade.
+        </p>
+        <p>
+          O tema escuro já funciona: siga a preferência do sistema, ou force com
+          <code>&lt;html data-theme="dark"&gt;</code>. Cor, espaço e tipografia saem todos
+          de <code>tokens.css</code>.
+        </p>
+      </div>
+
+      <section id="secao-um" aria-labelledby="titulo-secao-um" style="margin-block-start: var(--space-5)">
+        <h2 id="titulo-secao-um">Seção um</h2>
+        <p class="prose" style="margin-block-start: var(--space-2)">
+          Cada seção precisa de um título acessível — aqui via
+          <code>aria-labelledby</code> apontando para o <code>h2</code>. Duplique este
+          bloco para a próxima seção.
+        </p>
+      </section>
+    </main>
+
+    <footer class="wrap" style="margin-block-start: var(--space-5); padding-block: var(--space-4); color: var(--text-muted)">
+      <p style="font-size: var(--text-sm)">Rodapé: contato, licença, ano. Substitua.</p>
+    </footer>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

@@ -89,6 +89,37 @@ def test_sem_backend_nao_tem_middleware(tmp_path):
     assert all("middleware" not in r for r in roles)
 
 
+def test_model_por_papel_entra_na_spec_e_inherit_nao(tmp_path):
+    """`model` é opcional: só o papel que pediu outro modelo ganha a chave."""
+    p = _write(
+        tmp_path,
+        """
+[agents.custom]
+description = "faz custom"
+prompt = "prompt custom"
+model = "openai:qwen3-coder"
+
+[agents.herdeiro]
+description = "herda"
+prompt = "prompt herdeiro"
+model = "inherit"
+
+[agents.omisso]
+description = "sem campo"
+prompt = "prompt omisso"
+""",
+    )
+    por_nome = {r["name"]: r for r in load_roles(p)}
+    assert por_nome["custom"]["model"] == "openai:qwen3-coder"
+    assert "model" not in por_nome["herdeiro"]
+    assert "model" not in por_nome["omisso"]
+
+
+def test_toml_real_do_repo_herda_o_modelo_do_run():
+    """Um modelo por vez na máquina: papel versionado não aponta outro peso."""
+    assert all("model" not in r for r in load_roles("config/agents.toml"))
+
+
 def test_manual_uma_linha_por_papel():
     roles = load_roles("config/agents.toml")
     manual = roles_manual(roles)

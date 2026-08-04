@@ -15,7 +15,11 @@ Contrato de tudo neste módulo:
   backup byte a byte se o arquivo ficou inválido — o loop autônomo não deixa
   arquivo quebrado no workspace;
 - erro é STRING de retorno, nunca exceção: a tool conversa com o modelo, e
-  exceção em tool node derruba o run inteiro.
+  exceção em tool node derruba o run inteiro;
+- gate READ-BEFORE-WRITE: editar arquivo existente exige leitura fresca dele
+  (`smart_fs.needs_fresh_read`, o mesmo registro que o `read_file` alimenta).
+  O gate mora na borda da tool, não em `replace_range`/`insert_after`/`append` —
+  essas continuam sendo API de edição pura, chamável sem cerimônia.
 """
 
 from __future__ import annotations
@@ -70,15 +74,30 @@ def make_file_tools(root: str | Path) -> list:
         expect_first_line: str | None = None,
     ) -> str:
         """Substitui as linhas start_line..end_line (1-indexado, inclusivo)."""
-        return replace_range(base, path, start_line, end_line, new_content, expect_first_line)
+        gate = _read_gate(base, path)
+        if gate is not None:
+            return gate
+        out = replace_range(base, path, start_line, end_line, new_content, expect_first_line)
+        _mark_written(base, path)
+        return out
 
     def insert_lines(path: str, after_line: int, content: str) -> str:
         """Insere `content` DEPOIS da linha `after_line` (0 = topo do arquivo)."""
-        return insert_after(base, path, after_line, content)
+        gate = _read_gate(base, path)
+        if gate is not None:
+            return gate
+        out = insert_after(base, path, after_line, content)
+        _mark_written(base, path)
+        return out
 
     def append_file(path: str, content: str) -> str:
         """Acrescenta `content` no fim do arquivo (cria se não existir)."""
-        return append(base, path, content)
+        gate = _read_gate(base, path)
+        if gate is not None:
+            return gate
+        out = append(base, path, content)
+        _mark_written(base, path)
+        return out
 
     return [
         StructuredTool.from_function(
@@ -122,6 +141,51 @@ def make_file_tools(root: str | Path) -> list:
 # --------------------------------------------------------------------------- #
 # jail + leitura
 # --------------------------------------------------------------------------- #
+
+
+def _read_gate(root: Path, path: str) -> str | None:
+    """Recusa (string para o modelo) se falta leitura fresca de `path`, ou `None`.
+
+    Fail-open em tudo que não é o caso do gate: arquivo novo, diretório, binário,
+    path fora do jail (o erro específico é da própria tool) e ausência do
+    `smart_fs` (o extra `deepagents` pode não estar instalado — este módulo
+    precisa importar sem ele).
+    """
+    text = _disk_text(root, path)
+    if text is None:
+        return None
+    try:
+        from harness.backends.smart_fs import needs_fresh_read
+    except Exception:  # noqa: BLE001 - sem o gate a tool ainda funciona
+        return None
+    return needs_fresh_read(path, text)
+
+
+def _mark_written(root: Path, path: str) -> None:
+    """Registra o conteúdo pós-escrita como lido: quem escreveu sabe o que ficou
+    lá, e barrar a edição seguinte seria só atrito."""
+    text = _disk_text(root, path)
+    if text is None:
+        return
+    try:
+        from harness.backends.smart_fs import record_read
+    except Exception:  # noqa: BLE001 - mesmo motivo de `_read_gate`
+        return
+    record_read(path, text)
+
+
+def _disk_text(root: Path, path: str) -> str | None:
+    """Conteúdo utf-8 do arquivo agora, ou `None` (novo/diretório/binário/fora)."""
+    try:
+        target = _resolve(root, path)
+    except _Blocked:
+        return None
+    if not target.is_file():
+        return None
+    try:
+        return target.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
 
 
 def _resolve(root: Path, path: str) -> Path:

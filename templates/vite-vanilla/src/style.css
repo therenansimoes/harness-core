@@ -1,0 +1,13 @@
+/* Estilo da aplicação. Ordem importa: tokens primeiro (variáveis), reset em
+   seguida (base do documento), regras de tela por último. */
+@import "./tokens.css";
+@import "./reset.css";
+
+/* Só o que é desta tela vive aqui — e sempre consumindo token, nunca valor
+   solto: é o que mantém o tema trocável por uma linha em tokens.css. */
+.lead {
+  max-width: var(--measure);
+  margin-block-start: var(--space-4);
+  font-size: var(--text-lg);
+  color: var(--text-muted);
+}

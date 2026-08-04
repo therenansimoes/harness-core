@@ -90,6 +90,78 @@ def test_select_without_query_keeps_kind_order_under_limit(tmp_path):
     assert [s.name for s in select_skills("code", root, query="css", limit=1)] == ["markup-css"]
 
 
+# --- path-trigger ----------------------------------------------------------
+
+
+def test_path_trigger_fura_o_ranking_fuzzy(tmp_path):
+    """Glob casado é eixo determinístico: passa na frente da mais pontuada."""
+    root = tmp_path / "skills"
+    _write(
+        root,
+        "a_html.md",
+        'name = "html-edit"\nkinds = ["code"]\ndescription = "d"',
+        "Editar markup HTML do template.",
+    )
+    _write(
+        root,
+        "z_toml.md",
+        'name = "toml-safety"\nkinds = ["code"]\ndescription = "d"\npaths = ["*.toml"]',
+        "Nada a ver com o prompt.",
+    )
+
+    query = "editar o markup HTML do template index"
+    # sem `files`: comportamento de antes, só o ranking fuzzy
+    assert [s.name for s in select_skills("code", root, query=query)] == ["html-edit"]
+    # com um arquivo que casa o glob: a skill do path vem primeiro
+    got = select_skills("code", root, query=query, files=["config/agents.toml"])
+    assert [s.name for s in got] == ["toml-safety", "html-edit"]
+    # arquivo que não casa nenhum glob não dispara nada
+    got = select_skills("code", root, query=query, files=["index.html"])
+    assert [s.name for s in got] == ["html-edit"]
+
+
+def test_path_trigger_respeita_o_limite(tmp_path):
+    root = tmp_path / "skills"
+    for n in ("a", "b", "c"):
+        _write(
+            root,
+            f"{n}.md",
+            f'name = "{n}"\nkinds = ["config"]\ndescription = "d"\npaths = ["*.toml"]',
+        )
+    got = select_skills("config", root, files=["genome.toml"], limit=2)
+    assert [s.name for s in got] == ["a", "b"]
+
+
+def test_path_trigger_casa_basename_e_path_completo(tmp_path):
+    """Glob com diretório casa o path; glob de extensão casa também o basename.
+
+    O decoy alfabeticamente antes mostra QUEM disparou: sem gatilho a skill
+    ainda entra pelo kind, só não fura a fila."""
+    root = tmp_path / "skills"
+    _write(root, "a_decoy.md", 'name = "decoy"\nkinds = []\ndescription = "d"')
+    _write(
+        root,
+        "z_trig.md",
+        'name = "trig"\nkinds = []\ndescription = "d"\npaths = ["harness/skills/*.py", "*.toml"]',
+    )
+
+    def primeiro(files):
+        return select_skills(None, root, files=files)[0].name
+
+    assert primeiro(["agents.toml"]) == "trig"  # basename bate `*.toml`
+    assert primeiro(["config/agents.toml"]) == "trig"  # path completo também
+    assert primeiro(["harness/skills/loader.py"]) == "trig"  # glob com diretório
+    assert primeiro(["harness/improve.py"]) == "decoy"  # fora do diretório: sem gatilho
+    assert primeiro(None) == "decoy"
+
+
+def test_seed_toml_skill_dispara_por_glob():
+    """A skill versionada declara o gatilho real: qualquer .toml da unidade."""
+    got = select_skills("config", REPO_SKILLS, files=["config/genome.toml"])
+    assert got and got[0].name == "toml-calibration-safety"
+    assert got[0].paths == ("*.toml",)
+
+
 def test_select_kind_without_skills_is_empty(tmp_path):
     root = tmp_path / "skills"
     _write(root, "code.md", 'name = "so-code"\nkinds = ["code"]\ndescription = "d"', "corpo")

@@ -42,6 +42,20 @@ MODELS_FILE = "models.toml"
 # nada no retorno do grafo diz por que ele parou.
 LIMIT_MESSAGE_PREFIX = "Model call limits exceeded:"
 
+# Gatilho da compactação, calibrado pro executor local (9B MLX, ctx de 32k):
+# ~60% do contexto, o que deixa folga pro system prompt (executor + skills +
+# manual das tools + recall, já na casa dos milhares) e pra resposta do turno.
+# Acima disso o provider começa a cortar a saída em vez de errar.
+CONTEXT_WINDOW_TOKENS = 32_768
+CONTEXT_TRIGGER_TOKENS = int(CONTEXT_WINDOW_TOKENS * 0.6)
+# Quantos tool results recentes ficam intactos. 2 = o do turno anterior e o de
+# antes dele — o suficiente pro modelo continuar de onde parou.
+CONTEXT_KEEP_TOOL_RESULTS = 2
+
+# finish_reason que o provider usa pra dizer "cortei no teto de tokens".
+# `length` é o do OpenAI/LM Studio; `max_tokens` é o do Anthropic (stop_reason).
+TRUNCATED_FINISH_REASONS = frozenset({"length", "max_tokens", "max_output_tokens"})
+
 _INSTALL_HINT = "deepagents não instalado — pip install harness-core[deepagents]"
 
 # Contrato com o prompt-builder: se este arquivo existir, seu conteúdo é
@@ -144,6 +158,11 @@ class DeepagentsBackend:
         if hit_limit:
             exit_reason, ok = "max_turns", False
             turns = max(0, turns - 1)  # a mensagem-sentinela não é um turno do agente
+        elif _truncated(messages):
+            # Resposta cortada no teto de tokens não é conclusão: o run pode ter
+            # escrito algo (a régua ainda julga), mas o motivo da parada é o
+            # provider, não o agente. "done" aqui vira braço ruim no bandit.
+            exit_reason, ok = "truncated", False
         elif not changed and not _final_text(messages):
             # Desistência silenciosa: nada escrito e nada dito. "done" aqui é o
             # ledger registrando sucesso num run que não produziu nada.
@@ -276,6 +295,69 @@ def _build_agent(req: ExecRequest):
     # `system_prompt=` substitui o bloco default (inglês, ~40 linhas) — em pt-br
     # e curto porque o executor é modelo pequeno e o contexto é disputado.
     middleware.append(TodoListMiddleware(system_prompt=TODO_PROMPT))
+    # Compactação DETERMINÍSTICA: tool result velho vira placeholder quando a
+    # conversa passa do gatilho. Sem isto o run longo do 9B local estoura o ctx
+    # e o provider corta a resposta no meio (o `truncated` do execute). Não é
+    # summarization — nenhuma chamada de LLM extra, o que importa quando o único
+    # modelo disponível é o mesmo que está executando a tarefa.
+    # Fail-open no padrão do arquivo: middleware ausente na versão instalada da
+    # lib => o run segue sem compactação, como antes.
+    try:
+        from langchain.agents.middleware import (
+            ClearToolUsesEdit,
+            ContextEditingMiddleware,
+        )
+
+        middleware.append(
+            ContextEditingMiddleware(
+                edits=[
+                    ClearToolUsesEdit(
+                        trigger=CONTEXT_TRIGGER_TOKENS,
+                        # 0 (default) = limpa TODOS os elegíveis numa passada.
+                        # Medido: com `clear_at_least>0` o edit para na primeira
+                        # limpeza que atinge a cota e o contexto continua ACIMA
+                        # do gatilho — o turno seguinte é cortado do mesmo jeito.
+                        # Tool result velho não é perdido de verdade: o agente
+                        # relê o arquivo com read_file se precisar.
+                        clear_at_least=0,
+                        keep=CONTEXT_KEEP_TOOL_RESULTS,
+                        # Limpar o INPUT da tool também apaga o path que o modelo
+                        # pediu; modelo pequeno relê o mesmo arquivo em loop sem
+                        # esse rastro. Só o output sai.
+                        clear_tool_inputs=False,
+                        # `write_file`/`edit_file` devolvem a confirmação do que
+                        # foi escrito — é o registro de que a tarefa andou.
+                        exclude_tools=("write_file", "edit_file"),
+                    )
+                ],
+                # "model" chamaria `get_num_tokens_from_messages` a cada turno;
+                # no LM Studio isso é ida na rede (ou tiktoken errado pro modelo
+                # local). A aproximação erra pra cima e o gatilho já tem folga.
+                token_count_method="approximate",
+            )
+        )
+    except Exception:
+        pass
+    # Erro de tool transitório (rede da web_tools, lock de arquivo, subprocess
+    # que morreu) gastava um turno do agente e virava texto de erro no contexto.
+    try:
+        from langchain.agents.middleware import ToolRetryMiddleware
+
+        middleware.append(
+            ToolRetryMiddleware(
+                max_retries=2,
+                # 0.5s → 1s: o run tem timeout de parede, então backoff longo
+                # (default 1s * 2^n com teto de 60s) come o prazo da tarefa.
+                initial_delay=0.5,
+                backoff_factor=2.0,
+                max_delay=4.0,
+                # Falha depois das tentativas volta como ToolMessage: o modelo
+                # decide o que fazer. "error" mataria o run inteiro.
+                on_failure="continue",
+            )
+        )
+    except Exception:
+        pass
 
     usage_cb = UsageMetadataCallbackHandler()
     # Convenção de workspace é responsabilidade do BACKEND, não da unit: o
@@ -358,6 +440,31 @@ def _build_agent(req: ExecRequest):
         from harness.backends.procs import make_proc_tools
 
         extra_tools += list(make_proc_tools(req.workspace))
+    except Exception:
+        pass
+    try:
+        from harness.scaffold import make_scaffold_tools
+
+        extra_tools += list(make_scaffold_tools(req.workspace))
+    except Exception:
+        pass
+    try:
+        from harness.backends.dom_tools import make_dom_tools, make_view_tools
+
+        extra_tools += list(make_view_tools(req.workspace))
+        extra_tools += list(make_dom_tools(req.workspace))
+    except Exception:
+        pass
+    try:
+        from harness.backends.review_tools import make_review_tools
+
+        extra_tools += list(make_review_tools(req.workspace))
+    except Exception:
+        pass
+    try:
+        from harness.symbols import make_symbol_tools
+
+        extra_tools += list(make_symbol_tools(req.workspace))
     except Exception:
         pass
     agent = create_deep_agent(
@@ -512,6 +619,25 @@ def _hit_call_limit(messages: list[Any]) -> bool:
         if getattr(m, "type", None) == "ai":
             content = getattr(m, "content", "")
             return isinstance(content, str) and content.startswith(LIMIT_MESSAGE_PREFIX)
+    return False
+
+
+def _truncated(messages: list[Any]) -> bool:
+    """A ÚLTIMA resposta do modelo morreu no teto de tokens?
+
+    O sinal é o `finish_reason` do provider no `response_metadata` da mensagem
+    (o ChatOpenAI/LM Studio põe lá junto com `model_name`/`token_usage`).
+    Fail-open: metadata ausente, vazio ou de formato inesperado => False, ou
+    seja, o comportamento de antes.
+    """
+    for m in reversed(messages):
+        if getattr(m, "type", None) != "ai":
+            continue
+        meta = getattr(m, "response_metadata", None)
+        if not isinstance(meta, dict):
+            return False
+        raw = meta.get("finish_reason") or meta.get("stop_reason")
+        return str(raw).strip().lower() in TRUNCATED_FINISH_REASONS
     return False
 
 
