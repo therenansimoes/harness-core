@@ -235,8 +235,16 @@ def test_verify_cmd_invalido_sai_2_com_a_mensagem_do_add(virgem, capsys):
 
 def test_do_mock_grava_no_ledger_do_home_e_deixa_o_repo_limpo(virgem, capsys, harness_home):
     rc = cli.main(
-        ["do", "escreve o mock", "--backend", "mock", "--route", "manual",
-         "--verify-cmd", MOCK_VERIFY]
+        [
+            "do",
+            "escreve o mock",
+            "--backend",
+            "mock",
+            "--route",
+            "manual",
+            "--verify-cmd",
+            MOCK_VERIFY,
+        ]
     )
 
     out = capsys.readouterr().out
@@ -263,8 +271,17 @@ def test_do_mock_grava_no_ledger_do_home_e_deixa_o_repo_limpo(virgem, capsys, ha
 
 def test_keep_unit_deixa_a_unidade_no_lugar(virgem):
     rc = cli.main(
-        ["do", "escreve o mock", "--backend", "mock", "--route", "manual",
-         "--verify-cmd", MOCK_VERIFY, "--keep-unit"]
+        [
+            "do",
+            "escreve o mock",
+            "--backend",
+            "mock",
+            "--route",
+            "manual",
+            "--verify-cmd",
+            MOCK_VERIFY,
+            "--keep-unit",
+        ]
     )
 
     assert rc == 0
@@ -274,8 +291,17 @@ def test_keep_unit_deixa_a_unidade_no_lugar(virgem):
 
 def test_no_apply_deixa_o_resultado_na_branch(virgem, capsys):
     rc = cli.main(
-        ["do", "escreve o mock", "--backend", "mock", "--route", "manual",
-         "--verify-cmd", MOCK_VERIFY, "--no-apply"]
+        [
+            "do",
+            "escreve o mock",
+            "--backend",
+            "mock",
+            "--route",
+            "manual",
+            "--verify-cmd",
+            MOCK_VERIFY,
+            "--no-apply",
+        ]
     )
 
     assert rc == 0
@@ -285,8 +311,16 @@ def test_no_apply_deixa_o_resultado_na_branch(virgem, capsys):
 
 def test_do_verify_vermelho_nao_aplica_nada(virgem, capsys):
     rc = cli.main(
-        ["do", "escreve o mock", "--backend", "mock", "--route", "manual",
-         "--verify-cmd", "test -f arquivo_que_nunca_existe.txt"]
+        [
+            "do",
+            "escreve o mock",
+            "--backend",
+            "mock",
+            "--route",
+            "manual",
+            "--verify-cmd",
+            "test -f arquivo_que_nunca_existe.txt",
+        ]
     )
 
     saida = capsys.readouterr()
