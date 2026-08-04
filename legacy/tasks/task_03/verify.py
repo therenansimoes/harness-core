@@ -4,6 +4,7 @@
 Anti-cheat: se o agent editar test_estoque.py para fazer os testes passarem,
 o hash muda e a task falha. "Passou" tem que significar "consertou".
 """
+
 import hashlib
 import subprocess
 import sys

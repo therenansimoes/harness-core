@@ -10,8 +10,9 @@ meio-válido; quem decide o fallback é o chamador (build_run_graph).
 from __future__ import annotations
 
 import tomllib
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from harness.graph import reflect as _reflect_mod
 from harness.graph import run_graph as _rg
@@ -85,9 +86,7 @@ def _validate(spec: Mapping[str, Any]) -> tuple[list[str], list[tuple[str, str]]
         raise TopologyError("'nodes' tem duplicata")
     unknown = sorted(set(nodes) - set(NODE_IMPLS))
     if unknown:
-        raise TopologyError(
-            f"impl desconhecida: {unknown}; whitelist: {sorted(NODE_IMPLS)}"
-        )
+        raise TopologyError(f"impl desconhecida: {unknown}; whitelist: {sorted(NODE_IMPLS)}")
     missing = sorted(REQUIRED_NODES - set(nodes))
     if missing:
         raise TopologyError(f"nós obrigatórios ausentes: {missing}")
@@ -98,9 +97,7 @@ def _validate(spec: Mapping[str, Any]) -> tuple[list[str], list[tuple[str, str]]
         raise TopologyError("'edges' precisa ser lista de pares [origem, destino]")
     pairs: list[tuple[str, str]] = []
     for e in edges:
-        if not (
-            isinstance(e, list) and len(e) == 2 and all(isinstance(x, str) for x in e)
-        ):
+        if not (isinstance(e, list) and len(e) == 2 and all(isinstance(x, str) for x in e)):
             raise TopologyError(f"aresta inválida (esperado [origem, destino]): {e!r}")
         src, dst = e
         if src == "gate":
@@ -127,9 +124,7 @@ def build(spec: Mapping[str, Any]):
     for name in nodes:
         b.add_node(name, NODE_IMPLS[name])
     for src, dst in pairs:
-        b.add_edge(
-            START if src == START_NAME else src, END if dst == END_NAME else dst
-        )
+        b.add_edge(START if src == START_NAME else src, END if dst == END_NAME else dst)
     b.add_conditional_edges("gate", _rg._after_gate, list(GATE_TARGETS))
     return b
 

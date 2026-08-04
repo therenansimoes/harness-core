@@ -33,8 +33,7 @@ def test_enabled_so_liga_com_true_de_verdade(tmp_path):
 def test_tolerancia_negativa_vale_default(tmp_path):
     p = tmp_path / "ruler.toml"
     p.write_text(
-        "[pareto]\nenabled = true\ncost_tolerance_pct = -1.0\n"
-        'sec_tolerance_pct = "muito"\n',
+        '[pareto]\nenabled = true\ncost_tolerance_pct = -1.0\nsec_tolerance_pct = "muito"\n',
         encoding="utf-8",
     )
     cfg = pareto.load_pareto(p)
@@ -46,8 +45,7 @@ def test_tolerancia_negativa_vale_default(tmp_path):
 def test_toml_valido_e_lido(tmp_path):
     p = tmp_path / "ruler.toml"
     p.write_text(
-        "[pareto]\nenabled = true\ncost_tolerance_pct = 0.25\n"
-        "sec_tolerance_pct = 0.5\n",
+        "[pareto]\nenabled = true\ncost_tolerance_pct = 0.25\nsec_tolerance_pct = 0.5\n",
         encoding="utf-8",
     )
     assert pareto.load_pareto(p) == ParetoConfig(True, 0.25, 0.5)
@@ -105,7 +103,7 @@ def test_fail_open_baseline_sem_medida_nao_bloqueia():
 
 def _state(sec_a: float, sec_b: float) -> dict:
     return {
-        "arms": {"a": [2, 10], "b": [9, 10]},   # KEEP folgado no Wilson
+        "arms": {"a": [2, 10], "b": [9, 10]},  # KEEP folgado no Wilson
         "axes": {
             "a": {"cost_usd": None, "sec_total": sec_a},
             "b": {"cost_usd": None, "sec_total": sec_b},

@@ -109,9 +109,7 @@ def test_tamper_no_imutavel_vira_revert(data_dir, tmp_path):
 
 def test_verify_vermelho_retry_depois_escalate(data_dir, tmp_path):
     unit = _unit(tmp_path, "vermelho", "test -f nao_existe.txt")
-    final = run_unit(
-        unit, "mock", None, data_dir, thread_id="t-esc", max_attempts=2
-    )
+    final = run_unit(unit, "mock", None, data_dir, thread_id="t-esc", max_attempts=2)
 
     assert final["decision"].action == "escalate_human"
     assert final["attempt"] == 1
@@ -149,9 +147,7 @@ def test_kpi_regressao_vira_revert(data_dir, tmp_path):
 def test_toggles_off_reproduzem_stub(data_dir, tmp_path, monkeypatch):
     cfg = tmp_path / "config"
     cfg.mkdir()
-    (cfg / "graph.toml").write_text(
-        "[nodes]\nmeasure = false\ntamper = false\n", encoding="utf-8"
-    )
+    (cfg / "graph.toml").write_text("[nodes]\nmeasure = false\ntamper = false\n", encoding="utf-8")
     monkeypatch.setenv(CONFIG_DIR_ENV, str(cfg))
 
     # Mesma unidade adulterada + KPI piorando dos testes acima: com os toggles

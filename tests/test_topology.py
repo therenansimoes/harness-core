@@ -19,20 +19,45 @@ from harness.routing import CONFIG_DIR_ENV
 FIXTURE = Path(__file__).parent / "fixtures" / "echo"
 
 BUILTIN_HAPPY_PATH = [
-    "plan", "route", "provision", "execute", "verify",
-    "measure", "gate", "accept", "record",
+    "plan",
+    "route",
+    "provision",
+    "execute",
+    "verify",
+    "measure",
+    "gate",
+    "accept",
+    "record",
 ]
 
 ALL_NODES = [
-    "plan", "route", "provision", "execute", "verify", "measure",
-    "gate", "accept", "retry", "escalate", "revert", "record",
+    "plan",
+    "route",
+    "provision",
+    "execute",
+    "verify",
+    "measure",
+    "gate",
+    "accept",
+    "retry",
+    "escalate",
+    "revert",
+    "record",
 ]
 
 DEFAULT_EDGES = [
-    ["START", "plan"], ["plan", "route"], ["route", "provision"],
-    ["provision", "execute"], ["execute", "verify"], ["verify", "measure"],
-    ["measure", "gate"], ["retry", "route"], ["accept", "record"],
-    ["escalate", "record"], ["revert", "record"], ["record", "END"],
+    ["START", "plan"],
+    ["plan", "route"],
+    ["route", "provision"],
+    ["provision", "execute"],
+    ["execute", "verify"],
+    ["verify", "measure"],
+    ["measure", "gate"],
+    ["retry", "route"],
+    ["accept", "record"],
+    ["escalate", "record"],
+    ["revert", "record"],
+    ["record", "END"],
 ]
 
 # reflect entre plan e route: mesmo caminho feliz, com um nó a mais.
@@ -85,7 +110,7 @@ def test_reflect_inserido_roda_e_gera_evento(data_dir, tmp_path, monkeypatch, ca
     final = run_unit(FIXTURE, "mock", None, data_dir, thread_id="t-topo-reflect")
     nodes = [e["node"] for e in final["events"]]
     assert final["decision"].action == "accept"
-    assert nodes == ["plan", "reflect"] + BUILTIN_HAPPY_PATH[1:]
+    assert nodes == ["plan", "reflect", *BUILTIN_HAPPY_PATH[1:]]
     assert "topologia embutida" not in capfd.readouterr().err
 
 
@@ -99,12 +124,12 @@ def test_spec_sem_gate_recusada():
 
 
 def test_spec_com_impl_desconhecida_recusada():
-    spec = {"nodes": ALL_NODES + ["hackear"], "edges": DEFAULT_EDGES}
+    spec = {"nodes": [*ALL_NODES, "hackear"], "edges": DEFAULT_EDGES}
     with pytest.raises(topology.TopologyError, match="desconhecida"):
         topology.compile_spec(spec)
 
 
 def test_aresta_linear_saindo_do_gate_recusada():
-    spec = {"nodes": ALL_NODES, "edges": DEFAULT_EDGES + [["gate", "record"]]}
+    spec = {"nodes": ALL_NODES, "edges": [*DEFAULT_EDGES, ["gate", "record"]]}
     with pytest.raises(topology.TopologyError, match="gate"):
         topology.compile_spec(spec)

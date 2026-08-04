@@ -57,17 +57,32 @@ def sandbox(tmp_path, monkeypatch):
 
 def row(ok: bool, exit_reason: str, sec: float = 10.0, cost: float | None = None) -> RunRow:
     return RunRow(
-        run_id="r", unit_id="u", project=None, backend="mock", model=None,
-        tier="t0", kind="code", ok=ok, exit_reason=exit_reason, sec_total=sec,
-        sec_provision=0.0, cost_usd=cost, intervention=False,
+        run_id="r",
+        unit_id="u",
+        project=None,
+        backend="mock",
+        model=None,
+        tier="t0",
+        kind="code",
+        ok=ok,
+        exit_reason=exit_reason,
+        sec_total=sec,
+        sec_provision=0.0,
+        cost_usd=cost,
+        intervention=False,
         created_at=store.now_iso(),
     )
 
 
 def rule(id_: str, fails_on: tuple[str, ...], **kw) -> Rule:
     return Rule(
-        id=id_, target_file="config/models.toml", key="router.prior_floor",
-        from_value=0.50, to_value=0.65, fails_on=fails_on, **kw
+        id=id_,
+        target_file="config/models.toml",
+        key="router.prior_floor",
+        from_value=0.50,
+        to_value=0.65,
+        fails_on=fails_on,
+        **kw,
     )
 
 
@@ -173,8 +188,13 @@ def test_load_catalog_do_repo_e_valido():
         ("[[rule]]\nid='x'\n", "campos faltando"),
         ("[improve]\nnao_existe = 1\n", "não é um knob"),
         ("[[rule]]\nid='x'\ntarget_file='config/a.toml'\nkey='k'\nfrom=1\nto=1\n", "iguais"),
-        (("[[rule]]\nid='x'\ntarget_file='c'\nkey='k'\nfrom=1\nto=2\n"
-          "[[rule]]\nid='x'\ntarget_file='c'\nkey='k'\nfrom=1\nto=3\n"), "duplicado"),
+        (
+            (
+                "[[rule]]\nid='x'\ntarget_file='c'\nkey='k'\nfrom=1\nto=2\n"
+                "[[rule]]\nid='x'\ntarget_file='c'\nkey='k'\nfrom=1\nto=3\n"
+            ),
+            "duplicado",
+        ),
     ],
 )
 def test_load_catalog_falha_fechado(tmp_path, body, erro):
@@ -216,8 +236,9 @@ def test_mutate_respeita_genoma(sandbox):
     ],
 )
 def test_mutate_rejeita_alvo_fora_do_mutavel(sandbox, target_file, esperado):
-    r = Rule(id="x", target_file=target_file, key="router.prior_floor",
-             from_value=0.50, to_value=0.65)
+    r = Rule(
+        id="x", target_file=target_file, key="router.prior_floor", from_value=0.50, to_value=0.65
+    )
 
     violations = mutate.check(r, root=sandbox)
 
@@ -249,23 +270,29 @@ def test_mutate_toggle_e_idempotente(sandbox):
     r = next(x for x in rules if x.id == "floor_up")
     m = mutate.apply(r, "t", root=sandbox)
 
-    assert mutate.toggle(m, root=sandbox, applied=True) is False   # já está ligada
+    assert mutate.toggle(m, root=sandbox, applied=True) is False  # já está ligada
     assert mutate.toggle(m, root=sandbox, applied=False) is True
-    assert mutate.revert(m, root=sandbox) is False                 # já reverteu
+    assert mutate.revert(m, root=sandbox) is False  # já reverteu
     assert mutate.read_value(sandbox / "config/models.toml", r.key) == 0.50
 
 
 def test_mutate_recusa_from_desatualizado(sandbox):
-    r = Rule(id="x", target_file="config/models.toml", key="router.prior_floor",
-             from_value=0.99, to_value=0.65)
+    r = Rule(
+        id="x",
+        target_file="config/models.toml",
+        key="router.prior_floor",
+        from_value=0.99,
+        to_value=0.65,
+    )
 
     with pytest.raises(mutate.MutationError, match="catálogo desatualizado"):
         mutate.apply(r, "t", root=sandbox)
 
 
 def test_mutate_recusa_chave_inexistente(sandbox):
-    r = Rule(id="x", target_file="config/models.toml", key="router.nao_existe",
-             from_value=1, to_value=2)
+    r = Rule(
+        id="x", target_file="config/models.toml", key="router.nao_existe", from_value=1, to_value=2
+    )
 
     with pytest.raises(mutate.MutationError, match="chave inexistente"):
         mutate.apply(r, "t", root=sandbox)
@@ -277,8 +304,13 @@ def test_mutate_edita_array_de_tabelas(sandbox):
     antes = alvo.read_bytes()
     # from_value acompanha o max_turns real do t0 no models.toml do repo (40
     # desde a troca do modelo local); apply() confere o `from` antes de escrever.
-    r = Rule(id="turns", target_file="config/models.toml", key="tier[0].max_turns",
-             from_value=40, to_value=8)
+    r = Rule(
+        id="turns",
+        target_file="config/models.toml",
+        key="tier[0].max_turns",
+        from_value=40,
+        to_value=8,
+    )
 
     m = mutate.apply(r, "t", root=sandbox)
 
@@ -290,8 +322,13 @@ def test_mutate_edita_array_de_tabelas(sandbox):
 
 def test_mutate_preserva_comentario_da_linha(sandbox):
     alvo = sandbox / "config" / "models.toml"
-    r = Rule(id="x", target_file="config/models.toml", key="router.prior_floor",
-             from_value=0.50, to_value=0.65)
+    r = Rule(
+        id="x",
+        target_file="config/models.toml",
+        key="router.prior_floor",
+        from_value=0.50,
+        to_value=0.65,
+    )
 
     mutate.apply(r, "t", root=sandbox)
 
@@ -307,7 +344,7 @@ def test_mutate_recusa_mudanca_de_terceiro(sandbox):
     m = mutate.apply(next(x for x in rules if x.id == "floor_up"), "t", root=sandbox)
     alvo.write_text(alvo.read_text().replace("prior_floor = 0.65", "prior_floor = 0.71"))
 
-    with pytest.raises(mutate.MutationError, match="está '0.71'"):
+    with pytest.raises(mutate.MutationError, match=r"está '0.71'"):
         mutate.revert(m, root=sandbox)
 
 
@@ -325,6 +362,7 @@ def test_intervention_rate():
     assert escalate.intervention_rate(history) == 0.0
 
     from dataclasses import replace
+
     history[0] = replace(history[0], intervention=True)
     history[1] = replace(history[1], intervention=True)
     assert escalate.intervention_rate(history) == pytest.approx(0.25)
@@ -334,9 +372,7 @@ def test_intervention_rate():
 
 
 def test_escalate_payload():
-    p = escalate.payload(
-        escalate.NO_GRADIENT, unit="tests/fixtures/echo", evidence={"history": 0}
-    )
+    p = escalate.payload(escalate.NO_GRADIENT, unit="tests/fixtures/echo", evidence={"history": 0})
 
     assert p == {
         "reason": "no_gradient",
@@ -351,17 +387,30 @@ def test_escalate_payload():
 def test_mutations_ledger(sandbox):
     db = sandbox / "data" / store.DB_NAME
     linha = MutationRow(
-        mutation_id="abc123", rule_id="floor_up", verdict="KEEP",
-        arm_a="2/6", arm_b="6/6", applied_at=store.now_iso(), reverted=False,
+        mutation_id="abc123",
+        rule_id="floor_up",
+        verdict="KEEP",
+        arm_a="2/6",
+        arm_b="6/6",
+        applied_at=store.now_iso(),
+        reverted=False,
         note=None,
     )
 
     assert store.record_mutation(linha, path=db) is True
-    assert store.record_mutation(linha, path=db) is False   # veredito não se reescreve
+    assert store.record_mutation(linha, path=db) is False  # veredito não se reescreve
 
     store.record_mutation(
-        MutationRow("def456", "outra", "REJECTED", "0/0", "0/0", store.now_iso(),
-                    False, "genome:immutable:harness/ruler/wilson.py"),
+        MutationRow(
+            "def456",
+            "outra",
+            "REJECTED",
+            "0/0",
+            "0/0",
+            store.now_iso(),
+            False,
+            "genome:immutable:harness/ruler/wilson.py",
+        ),
         path=db,
     )
 

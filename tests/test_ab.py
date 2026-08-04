@@ -95,7 +95,7 @@ def test_run_ab_alternates(arena):
 @pytest.mark.parametrize(
     "a, b, verdict",
     [
-        ("win", "lose", "DISCARD"),   # baseline ganha: candidata não entra
+        ("win", "lose", "DISCARD"),  # baseline ganha: candidata não entra
         ("lose", "win", "KEEP"),
     ],
 )
@@ -112,10 +112,10 @@ def test_run_ab_verdicts(arena, a, b, verdict):
 def test_ab_grava_ledger(arena):
     report = run_ab(FIXTURE, ArmSpec("win", model="m1"), ArmSpec("lose", model="m2"), n=2)
 
-    rows = store.history()   # mais recente primeiro: b2, a2, b1, a1
+    rows = store.history()  # mais recente primeiro: b2, a2, b1, a1
     assert len(rows) == 4
     assert [(r.backend, r.model) for r in rows] == [("lose", "m2"), ("win", "m1")] * 2
-    assert all(r.kind == "code" for r in rows)   # chave do prior do router
+    assert all(r.kind == "code" for r in rows)  # chave do prior do router
     assert {r.run_id for r in report.rows_a} == {r.run_id for r in rows if r.ok}
     assert {r.run_id for r in report.rows_b} == {r.run_id for r in rows if not r.ok}
 
@@ -125,14 +125,14 @@ def test_ab_grava_no_data_dir_pedido(arena, tmp_path):
     run_ab(FIXTURE, ArmSpec("win"), ArmSpec("lose"), n=1, data_dir=outro)
 
     assert len(store.history(path=outro / store.DB_NAME)) == 2
-    assert not (tmp_path / "data" / store.DB_NAME).exists()   # o env não foi usado
+    assert not (tmp_path / "data" / store.DB_NAME).exists()  # o env não foi usado
 
 
 def test_run_ab_aceita_selection_do_router(arena):
     sel = Selection(backend="win", model="m", tier="tier0", kind="code", max_turns=3)
     report = run_ab(FIXTURE, sel, ArmSpec("lose"), n=1)
 
-    assert report.rows_a[0].tier == "tier0"   # sem tier a linha não vira prior
+    assert report.rows_a[0].tier == "tier0"  # sem tier a linha não vira prior
     assert report.rows_a[0].model == "m"
 
 
@@ -143,28 +143,56 @@ def test_run_ab_recusa_n_nao_positivo(arena):
 
 
 def test_cli_ab_dim_backend(data_dir, capsys):
-    rc = cli.main([
-        "ab", "--dim", "backend", "--unit", str(FIXTURE),
-        "--a-backend", "mock", "--b-backend", "mock", "--n", "2",
-    ])
+    rc = cli.main(
+        [
+            "ab",
+            "--dim",
+            "backend",
+            "--unit",
+            str(FIXTURE),
+            "--a-backend",
+            "mock",
+            "--b-backend",
+            "mock",
+            "--n",
+            "2",
+        ]
+    )
     assert rc == 0
 
     linhas = capsys.readouterr().out.strip().splitlines()
-    assert len(linhas) == 5            # 2 runs por braço + veredito
+    assert len(linhas) == 5  # 2 runs por braço + veredito
     assert linhas[0].startswith("a1 mock ok done")
     assert linhas[1].startswith("b1 mock ok done")
-    assert linhas[-1].startswith("INCONCLUSIVE a=2/2 [")   # n=2 < min_n: não opina
+    assert linhas[-1].startswith("INCONCLUSIVE a=2/2 [")  # n=2 < min_n: não opina
     assert "b=2/2 [" in linhas[-1]
     assert len(store.history()) == 4
 
 
 def test_cli_ab_dim_backend_veredito_com_braco_perdedor(arena, capsys):
-    assert cli.main([
-        "ab", "--dim", "backend", "--unit", str(FIXTURE),
-        "--a-backend", "win", "--b-backend", "lose", "--n", "6",
-    ]) == 0
-    assert capsys.readouterr().out.strip().splitlines()[-1].startswith(
-        "DISCARD a=6/6 [0.61,1.00] b=0/6 [0.00,0.39]"
+    assert (
+        cli.main(
+            [
+                "ab",
+                "--dim",
+                "backend",
+                "--unit",
+                str(FIXTURE),
+                "--a-backend",
+                "win",
+                "--b-backend",
+                "lose",
+                "--n",
+                "6",
+            ]
+        )
+        == 0
+    )
+    assert (
+        capsys.readouterr()
+        .out.strip()
+        .splitlines()[-1]
+        .startswith("DISCARD a=6/6 [0.61,1.00] b=0/6 [0.00,0.39]")
     )
 
 
@@ -173,22 +201,50 @@ def test_cli_ab_estatistico_continua(data_dir, capsys):
 
     out = capsys.readouterr().out.strip()
     assert out.startswith("KEEP") and "a=1/6" in out and "b=6/6" in out
-    assert store.history() == []   # modo estatístico não roda nada, não grava nada
+    assert store.history() == []  # modo estatístico não roda nada, não grava nada
 
 
 @pytest.mark.parametrize(
     "argv",
     [
-        ["ab"],                                                      # nenhum modo
-        ["ab", "--a", "1/6"],                                        # metade do estatístico
-        ["ab", "--dim", "backend", "--a-backend", "mock",
-         "--b-backend", "mock"],                                     # sem --unit
-        ["ab", "--dim", "backend", "--unit", str(FIXTURE),
-         "--a-backend", "mock"],                                     # sem --b-backend
-        ["ab", "--dim", "backend", "--unit", str(FIXTURE), "--a-backend", "mock",
-         "--b-backend", "mock", "--a", "1/6"],                       # modos misturados
-        ["ab", "--dim", "backend", "--unit", str(FIXTURE), "--a-backend", "mock",
-         "--b-backend", "mock", "--n", "0"],                         # n sem sentido
+        ["ab"],  # nenhum modo
+        ["ab", "--a", "1/6"],  # metade do estatístico
+        ["ab", "--dim", "backend", "--a-backend", "mock", "--b-backend", "mock"],  # sem --unit
+        [
+            "ab",
+            "--dim",
+            "backend",
+            "--unit",
+            str(FIXTURE),
+            "--a-backend",
+            "mock",
+        ],  # sem --b-backend
+        [
+            "ab",
+            "--dim",
+            "backend",
+            "--unit",
+            str(FIXTURE),
+            "--a-backend",
+            "mock",
+            "--b-backend",
+            "mock",
+            "--a",
+            "1/6",
+        ],  # modos misturados
+        [
+            "ab",
+            "--dim",
+            "backend",
+            "--unit",
+            str(FIXTURE),
+            "--a-backend",
+            "mock",
+            "--b-backend",
+            "mock",
+            "--n",
+            "0",
+        ],  # n sem sentido
     ],
 )
 def test_cli_ab_recusa_combinacao_invalida(data_dir, argv):

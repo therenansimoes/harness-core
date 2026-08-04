@@ -15,6 +15,7 @@ task que dependesse de um pacote pip presente só no host quebraria assim.
 
     docker build -t harness-runner:latest -f docker/Dockerfile.runner .
 """
+
 from __future__ import annotations
 
 import shutil
@@ -33,15 +34,13 @@ def docker_available() -> bool:
     try:
         r = subprocess.run(["docker", "info"], capture_output=True, timeout=10)
         return r.returncode == 0
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
 def ensure_image(image: str = DEFAULT_IMAGE, timeout: int = 300) -> None:
     """Builda a imagem se ela ainda não existir localmente. Idempotente."""
-    check = subprocess.run(
-        ["docker", "image", "inspect", image], capture_output=True, timeout=10
-    )
+    check = subprocess.run(["docker", "image", "inspect", image], capture_output=True, timeout=10)
     if check.returncode == 0:
         return
     build = subprocess.run(
@@ -65,13 +64,20 @@ def run_verify_in_container(
     sem precisar copiar verify.py para dentro do workspace.
     """
     cmd = [
-        "docker", "run", "--rm",
-        "--network", "none",
-        "-v", f"{ws.resolve()}:/ws",
-        "-v", f"{verify.resolve()}:/verify.py:ro",
-        "-w", "/ws",
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "-v",
+        f"{ws.resolve()}:/ws",
+        "-v",
+        f"{verify.resolve()}:/verify.py:ro",
+        "-w",
+        "/ws",
         image,
-        "python3", "/verify.py",
+        "python3",
+        "/verify.py",
     ]
     try:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)

@@ -13,9 +13,10 @@ from __future__ import annotations
 import shutil
 import subprocess
 import tomllib
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Literal
+from typing import Literal
 
 from harness.backends import procs
 from harness.ledger.store import data_dir
@@ -105,9 +106,7 @@ def dispose(ws: Workspace, keep: bool = False) -> None:
 
 def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
     """Chamada de git que nunca levanta — quem chama decide o que fazer com o rc."""
-    return subprocess.run(
-        ["git", "-C", str(cwd), *args], capture_output=True, text=True
-    )
+    return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True)
 
 
 def _worktrees(repo: Path) -> set[Path]:
@@ -168,9 +167,7 @@ def _copy_tree(repo: Path, path: Path, names: Iterable[str]) -> None:
     if path.exists():
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(
-        repo, path, symlinks=True, ignore=shutil.ignore_patterns(".git", *names)
-    )
+    shutil.copytree(repo, path, symlinks=True, ignore=shutil.ignore_patterns(".git", *names))
 
 
 def _link_caches(repo: Path, ws: Path, names: Iterable[str]) -> None:

@@ -21,6 +21,16 @@ memória que derruba a escalação vale menos que memória nenhuma.
 O namespace é o data dir GLOBAL (`HARNESS_DATA_DIR`), não o db do experimento:
 cada data dir é um harness com sua própria história de decisões.
 
+Escrita e leitura compartilham VOCABULÁRIO por construção, e isso é o que faz o
+recall existir: quem grava (`cli._record_human_decision`) põe no `context` os
+mesmos identificadores curtos que quem lê (`run_graph._prior_query`) monta na
+query — `kind`, nome de check reprovado (`check:<nome>`) e a classe de saída
+(`verify_failed`). O texto livre do hint do checker ("régua reprovou exit 2;
+arquivos exigidos…") NÃO serve de query: o vocabulário dele não existe do lado
+gravado, e o recall volta vazio sempre. Por isso o MATCH procura em `reason` E
+em `context`: o motivo é do vocabulário fechado da escalação, os checks e a
+classe de saída vêm no contexto.
+
 `HARNESS_DECISIONS=0` (ou off/false/no) é kill switch lido a cada chamada:
 `record_decision` devolve False e `recall_decisions` devolve []. `disabled()` é
 o mesmo switch como bloco, pros caminhos de exame/screening — decisão humana
@@ -136,11 +146,13 @@ def recall_decisions(
 ) -> list[str]:
     """Top-k decisões humanas do MESMO kind, mais relevantes primeiro.
 
-    `reason` é texto livre (o motivo da escalação de agora): vira OR dos seus
-    tokens contra a coluna `reason`, porque a sintaxe do MATCH não perdoa
-    pontuação. Cada item é `"<motivo>: <contexto> -> <decisão>"` — quem lê está
-    fora do caso e precisa saber a que pergunta aquela resposta respondia.
-    Qualquer erro => [] (fail-open).
+    `reason` é a query (o motivo da escalação de agora, ou os termos estáveis do
+    retry): vira OR dos seus tokens contra `reason` E `context`, porque a
+    sintaxe do MATCH não perdoa pontuação e porque o check reprovado que faz dois
+    casos serem o mesmo caso mora no contexto. Cada item é
+    `"<motivo>: <contexto> -> <decisão>"` — quem lê está fora do caso e precisa
+    saber a que pergunta aquela resposta respondia. Qualquer erro => []
+    (fail-open).
     """
     if not _enabled():
         return []
@@ -171,10 +183,14 @@ def _render_case(row: sqlite3.Row) -> str:
 
 
 def _match_expr(kind: str, query: str) -> str | None:
-    """`kind:"x" AND (reason:"a" OR reason:"b")`, ou None se não sobrou token.
+    """`kind:"x" AND (reason:"a" OR context:"a" OR …)`, ou None sem token.
 
     Tokens de <3 chars e pontuação saem fora: em FTS5 eles são ruído puro e
     `-`/`:`/`"` no meio do texto viram erro de sintaxe.
+
+    As duas colunas no OR são o outro lado do vocabulário compartilhado: o
+    motivo (vocabulário fechado) casa em `reason`, o nome do check e a classe de
+    saída casam em `context`, que é onde a ponta de escrita os põe.
     """
     tokens = _TOKEN.findall(query or "")
     if not tokens:
@@ -185,7 +201,7 @@ def _match_expr(kind: str, query: str) -> str | None:
         low = tok.lower()
         if low not in seen:
             seen.append(low)
-    terms = " OR ".join(f'reason:"{t}"' for t in seen[:32])
+    terms = " OR ".join(f'reason:"{t}" OR context:"{t}"' for t in seen[:32])
     return f'kind:"{kind}" AND ({terms})'
 
 

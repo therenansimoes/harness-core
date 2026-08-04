@@ -31,7 +31,6 @@ from harness.triggers import (
     watch_ledger,
 )
 
-
 # ---------------------------------------------------------------- inbox
 
 
@@ -167,9 +166,7 @@ def test_watch_ledger_abaixo_do_threshold_nao_dispara(tmp_path: Path) -> None:
     conn = _mk_db(db)
     _add_runs(conn, [1, 1, 0])
     fired: list[dict] = []
-    watch_ledger(
-        db, fired.append, threshold=3, max_iters=2, sleep_fn=lambda s: None
-    )
+    watch_ledger(db, fired.append, threshold=3, max_iters=2, sleep_fn=lambda s: None)
     conn.close()
     assert fired == []
 
@@ -223,8 +220,7 @@ def test_sem_token_configurado_recusa_tudo_fail_closed(tmp_path: Path) -> None:
 def test_load_webhook_config_toml_e_override_por_env(tmp_path: Path) -> None:
     p = tmp_path / "triggers.toml"
     p.write_text(
-        "[webhook]\ntoken = 'do-toml'\nrate_limit = 7\nrate_window_s = 5\n"
-        "max_body_bytes = 100\n",
+        "[webhook]\ntoken = 'do-toml'\nrate_limit = 7\nrate_window_s = 5\nmax_body_bytes = 100\n",
         encoding="utf-8",
     )
     cfg = load_webhook_config(path=p, env={})
@@ -280,9 +276,7 @@ def _post(port: int, body: bytes, token: str | None) -> int:
         return int(e.code)
 
 
-def _serve(
-    tmp_path: Path, cfg: WebhookConfig, max_requests: int
-) -> tuple[int, threading.Thread]:
+def _serve(tmp_path: Path, cfg: WebhookConfig, max_requests: int) -> tuple[int, threading.Thread]:
     bound: list[int] = []
     ready = threading.Event()
 

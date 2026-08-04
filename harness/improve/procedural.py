@@ -32,10 +32,11 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterable, Sequence
+from typing import TYPE_CHECKING
 
 from harness.genome.genome import Genome
 from harness.improve import mutate, research, root_dir
@@ -388,9 +389,7 @@ def apply_procedural(
     if not proposal.skill_body.strip():
         raise ProceduralError("procedimento sem corpo: skill que não ensina nada")
     if len(proposal.pattern.tools) < MIN_N:
-        raise ProceduralError(
-            f"padrão de {len(proposal.pattern.tools)} tool não é procedimento"
-        )
+        raise ProceduralError(f"padrão de {len(proposal.pattern.tools)} tool não é procedimento")
 
     base = root_dir(root)
     violations = mutate.check(proposal.skill, root=base, genome=genome)
@@ -419,7 +418,7 @@ def _clock(now: datetime | str | None) -> datetime:
     return dream._clock(now)
 
 
-def action() -> "Action":
+def action() -> Action:
     """A ação registrável — consultada por `target.actions()`."""
     from harness.improve.target import Action
 

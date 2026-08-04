@@ -44,7 +44,7 @@ def test_sem_amostra_e_ignorancia_inteira():
 
 def test_nao_degenera_com_p_colado_em_um():
     lo, hi = wilson_interval(6, 6)
-    assert lo < 0.62 and hi > 0.99   # Wald daria (1.0, 1.0)
+    assert lo < 0.62 and hi > 0.99  # Wald daria (1.0, 1.0)
 
 
 def test_z_maior_alarga_o_intervalo():

@@ -23,7 +23,7 @@ from harness.ledger import store
 
 BUNDLE_VERSION = 1
 SKILLS_DIR = "skills"
-ATTIC_DIR = "attic"        # skills/attic: aposentadas, não viajam
+ATTIC_DIR = "attic"  # skills/attic: aposentadas, não viajam
 PRIOR_FILE = "routing_prior.json"
 MANIFEST_FILE = "manifest.json"
 IMPORTED_PRIOR_NAME = "imported_prior.json"

@@ -85,7 +85,11 @@ def test_catalogo_tem_os_tres_kinds():
 @pytest.mark.parametrize("kind", KINDS)
 def test_template_cabe_no_teto_de_arquivos(tmp_path, kind):
     out = sc.scaffold(kind, "proj", tmp_path)
-    arquivos = sorted(p.relative_to(tmp_path / "proj").as_posix() for p in (tmp_path / "proj").rglob("*") if p.is_file())
+    arquivos = sorted(
+        p.relative_to(tmp_path / "proj").as_posix()
+        for p in (tmp_path / "proj").rglob("*")
+        if p.is_file()
+    )
     assert arquivos, kind
     assert len(arquivos) <= MAX_FILES, f"{kind}: {len(arquivos)} arquivos, teto {MAX_FILES}"
     for f in arquivos:
@@ -97,9 +101,7 @@ def test_template_cabe_no_teto_de_arquivos(tmp_path, kind):
 # --------------------------------------------------------------------------- static-site
 
 
-_VOID = frozenset(
-    {"meta", "link", "br", "img", "input", "hr", "source", "area", "base", "col"}
-)
+_VOID = frozenset({"meta", "link", "br", "img", "input", "hr", "source", "area", "base", "col"})
 
 
 class _Colhedor(HTMLParser):
@@ -304,8 +306,14 @@ def test_vite_vanilla_passa_o_proprio_vitest(tmp_path):
         pytest.skip("npm não está no PATH")
     sc.scaffold("vite-vanilla", "app", tmp_path)
     cwd = tmp_path / "app"
-    inst = subprocess.run(["npm", "install", "--no-audit", "--no-fund"], cwd=cwd,
-                          capture_output=True, text=True, check=False, timeout=900)
+    inst = subprocess.run(
+        ["npm", "install", "--no-audit", "--no-fund"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=900,
+    )
     assert inst.returncode == 0, inst.stderr[-2000:]
     proc = subprocess.run(
         ["npm", "test"], cwd=cwd, capture_output=True, text=True, check=False, timeout=600

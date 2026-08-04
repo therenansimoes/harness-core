@@ -99,9 +99,7 @@ def test_evolve_com_evaluate_fake_grava_elite_e_e_deterministico(tmp_path):
     reports = []
     for name in ("a", "b"):
         arc = Archive(tmp_path / f"{name}.sqlite")
-        reports.append(
-            evolve(evaluate_synthetic, base, arc, steps=3, pop_size=4, seed=5)
-        )
+        reports.append(evolve(evaluate_synthetic, base, arc, steps=3, pop_size=4, seed=5))
         assert arc.niches() == [("code", "low")]
         cfg, score = arc.best(("code", "low"))
         assert cfg == reports[-1].best.config and score == reports[-1].best.wilson_low
@@ -120,7 +118,7 @@ def test_fitness_real_conta_gate_e_grava_no_ledger(tmp_path, monkeypatch):
     fit = Fitness(units=[cli.load_unit(ECHO_FIXTURE)], n=2, data_dir=tmp_path / "data")
     config = {"backend": "mock", "model": None, "max_turns": 3}
 
-    assert fit(config) == (2, 2)   # mock escreve o arquivo, verify passa nas duas
+    assert fit(config) == (2, 2)  # mock escreve o arquivo, verify passa nas duas
     st = fit.stats[config_key(config)]
     assert (st.kind, st.cost_usd) == ("code", 0.0)
     assert cost_bucket(st.cost_per_run) == "low"
@@ -136,10 +134,23 @@ def test_evolve_cli_roda_com_mock_e_arquiva_elite(tmp_path, monkeypatch, capsys)
     from harness import cli
 
     db = tmp_path / "arc.sqlite"
-    rc = cli.main([
-        "evolve", "--steps", "1", "--pop", "2", "--n", "1",
-        "--unit", str(ECHO_FIXTURE), "--backend", "mock", "--archive", str(db),
-    ])
+    rc = cli.main(
+        [
+            "evolve",
+            "--steps",
+            "1",
+            "--pop",
+            "2",
+            "--n",
+            "1",
+            "--unit",
+            str(ECHO_FIXTURE),
+            "--backend",
+            "mock",
+            "--archive",
+            str(db),
+        ]
+    )
     assert rc == 0
     out = capsys.readouterr().out
     assert "evolve steps=1 pop=2" in out and "elites=1" in out

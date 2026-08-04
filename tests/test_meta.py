@@ -22,7 +22,9 @@ def test_meta_alvo_ruler_exame_ok_sem_ack_quarentena():
 
 
 def test_meta_alvo_ruler_exame_ok_com_ack_permite():
-    assert meta_check(Path("/abs/repo/config/ruler.toml"), lambda: True, human_ack=True) == "allowed"
+    assert (
+        meta_check(Path("/abs/repo/config/ruler.toml"), lambda: True, human_ack=True) == "allowed"
+    )
 
 
 def test_meta_alvo_fora_do_juiz_permite_sem_rodar_exame():

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Mapping
+from typing import Literal
 
 Kind = Literal["code", "content", "config", "refactor", "infra"]
 

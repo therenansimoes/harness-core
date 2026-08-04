@@ -15,25 +15,37 @@ from harness.types import MutationRow, RunRow
 
 
 def _skill_md(name: str, kinds: str = '["code"]', description: str = "ajuda") -> str:
-    return (
-        f'---\nname = "{name}"\nkinds = {kinds}\n'
-        f'description = "{description}"\n---\ncorpo\n'
-    )
+    return f'---\nname = "{name}"\nkinds = {kinds}\ndescription = "{description}"\n---\ncorpo\n'
 
 
 def _run_row(run_id: str, ok: bool) -> RunRow:
     return RunRow(
-        run_id=run_id, unit_id="u1", project=None, backend="mock", model=None,
-        tier=None, kind="code", ok=ok, exit_reason="ok" if ok else "verify_failed",
-        sec_total=1.0, sec_provision=0.1, cost_usd=None, intervention=False,
+        run_id=run_id,
+        unit_id="u1",
+        project=None,
+        backend="mock",
+        model=None,
+        tier=None,
+        kind="code",
+        ok=ok,
+        exit_reason="ok" if ok else "verify_failed",
+        sec_total=1.0,
+        sec_provision=0.1,
+        cost_usd=None,
+        intervention=False,
         created_at="2026-01-01T00:00:00+00:00",
     )
 
 
 def _mutation(mid: str, verdict: str) -> MutationRow:
     return MutationRow(
-        mutation_id=mid, rule_id="r1", verdict=verdict, arm_a="3/6", arm_b="5/6",
-        applied_at="2026-01-01T00:00:00+00:00", reverted=(verdict == "DISCARD"),
+        mutation_id=mid,
+        rule_id="r1",
+        verdict=verdict,
+        arm_a="3/6",
+        arm_b="5/6",
+        applied_at="2026-01-01T00:00:00+00:00",
+        reverted=(verdict == "DISCARD"),
     )
 
 

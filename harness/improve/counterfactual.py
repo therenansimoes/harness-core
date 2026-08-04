@@ -220,7 +220,7 @@ def _rerun(
         thread_id = f"whatif-{unit_dir.name}-{uuid.uuid4().hex[:8]}"
         try:
             state = run_unit(unit_dir, backend, model or None, data_dir, thread_id)
-        except Exception as exc:  # noqa: BLE001 - caso que explode é dado, não crash
+        except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
             continue
         decision = state.get("decision")

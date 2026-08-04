@@ -33,9 +33,9 @@ def test_ab_min_n_e_configuravel(capsys):
 @pytest.mark.parametrize(
     "a, b, verdict",
     [
-        ("4/6", "5/6", "INCONCLUSIVE"),   # ruído: 1 sucesso de diferença em 6
-        ("1/6", "6/6", "KEEP"),           # separação limpa
-        ("0/3", "3/3", "INCONCLUSIVE"),   # N abaixo do mínimo não vira veredito
+        ("4/6", "5/6", "INCONCLUSIVE"),  # ruído: 1 sucesso de diferença em 6
+        ("1/6", "6/6", "KEEP"),  # separação limpa
+        ("0/3", "3/3", "INCONCLUSIVE"),  # N abaixo do mínimo não vira veredito
     ],
 )
 def test_os_tres_casos_de_aceite_do_d2(capsys, a, b, verdict):

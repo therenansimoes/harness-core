@@ -5,7 +5,7 @@ da ação, e teste que depende do `datetime.now()` do processo só falha em
 setembro.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -39,7 +39,8 @@ def _traceback(erro: str, linha: int = 3) -> str:
         f"{erro}"
     )
 
-NOW = datetime(2026, 8, 3, 12, 0, 0, tzinfo=timezone.utc)
+
+NOW = datetime(2026, 8, 3, 12, 0, 0, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -71,8 +72,12 @@ def test_recorrentes_viram_licao_e_skill(db, tmp_path):
     assert "3 episódios" in proposal.dream_report
 
     record = dream.apply_dream(
-        proposal, root=tmp_path, genome=GENOME, data_dir=tmp_path / "data",
-        db_path=db, now=NOW,
+        proposal,
+        root=tmp_path,
+        genome=GENOME,
+        data_dir=tmp_path / "data",
+        db_path=db,
+        now=NOW,
     )
     skill = tmp_path / record.skill_path
     text = skill.read_text(encoding="utf-8")
@@ -117,8 +122,12 @@ def test_orfaos_arquivados_somem_do_recall(db, tmp_path):
     assert proposal.skill is None  # sem recorrente não há skill
 
     record = dream.apply_dream(
-        proposal, root=tmp_path, genome=GENOME, data_dir=tmp_path / "data",
-        db_path=db, now=later,
+        proposal,
+        root=tmp_path,
+        genome=GENOME,
+        data_dir=tmp_path / "data",
+        db_path=db,
+        now=later,
     )
     assert (record.archived, record.skill_path) == (1, "")
     assert episodic.recall("code", "TimeoutError handshake", db_path=db) == []
@@ -151,10 +160,19 @@ def test_should_dream_precisa_das_duas_condicoes(tmp_path):
         for i in range(n):
             store.record_run(
                 RunRow(
-                    run_id=f"r-{at.timestamp()}-{i}", unit_id="u", project=None,
-                    backend="mock", model=None, tier=None, kind="code", ok=True,
-                    exit_reason="ok", sec_total=1.0, sec_provision=0.0,
-                    cost_usd=None, intervention=False,
+                    run_id=f"r-{at.timestamp()}-{i}",
+                    unit_id="u",
+                    project=None,
+                    backend="mock",
+                    model=None,
+                    tier=None,
+                    kind="code",
+                    ok=True,
+                    exit_reason="ok",
+                    sec_total=1.0,
+                    sec_provision=0.0,
+                    cost_usd=None,
+                    intervention=False,
                     created_at=at.isoformat(timespec="seconds"),
                 ),
                 path=db,

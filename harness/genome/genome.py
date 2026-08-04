@@ -17,10 +17,10 @@ from __future__ import annotations
 import os
 import re
 import tomllib
+from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path, PurePosixPath
-from typing import Iterable
 
 DEFAULT_PATH = Path("config/genome.toml")
 

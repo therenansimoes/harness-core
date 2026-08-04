@@ -20,13 +20,13 @@ import pytest
 from harness import cli, quality_baseline, uiverify, vision
 from harness.backends import dom_tools
 
-FAKE_CHROME = '''#!{python}
+FAKE_CHROME = """#!{python}
 import os, sys
 out = next(a.split("=", 1)[1] for a in sys.argv if a.startswith("--screenshot="))
 n = int(os.environ.get("FAKE_SHOT_BYTES", "40000"))
 with open(out, "wb") as fh:
     fh.write(b"\\x89PNG\\r\\n\\x1a\\n" + b"x" * n + b"IEND\\xaeB`\\x82")
-'''
+"""
 
 
 @pytest.fixture(autouse=True)
@@ -114,15 +114,13 @@ def test_http_500_fail_open(tmp_path, cfg_com_vision, monkeypatch, capsys):
     err = capsys.readouterr().err
 
     assert code == 0
-    assert len(chamadas) == 1          # tentou de verdade
+    assert len(chamadas) == 1  # tentou de verdade
     assert vision.UNAVAILABLE in err
 
 
 def test_resposta_ilegivel_fail_open(tmp_path, cfg_com_vision, monkeypatch):
     """Modelo que devolve prosa em vez de JSON não vira nota inventada."""
-    monkeypatch.setattr(
-        vision, "_http_post", fake_post([], resposta("achei bonito, parabéns"))
-    )
+    monkeypatch.setattr(vision, "_http_post", fake_post([], resposta("achei bonito, parabéns")))
     res = vision.judge_image(png(tmp_path / "s.png"))
 
     assert res["nota"] is None and res["ok"] is None
@@ -149,13 +147,15 @@ def test_payload_leva_data_uri_e_config(tmp_path, cfg_com_vision, monkeypatch):
     """A imagem vai como data-URI base64 e o modelo/timeout vêm do [vision]."""
     chamadas: list = []
     monkeypatch.setattr(
-        vision, "_http_post", fake_post(chamadas, resposta('{"nota": 9, "ok": true, "bullets": []}'))
+        vision,
+        "_http_post",
+        fake_post(chamadas, resposta('{"nota": 9, "ok": true, "bullets": []}')),
     )
     vision.judge_image(png(tmp_path / "s.png"))
 
     req = chamadas[0]
     assert req["url"].endswith("/chat/completions")
-    assert req["payload"]["model"] == "fake-vlm"      # prefixo openai: sai no HTTP cru
+    assert req["payload"]["model"] == "fake-vlm"  # prefixo openai: sai no HTTP cru
     assert req["timeout_s"] == 5.0
     imagem = req["payload"]["messages"][0]["content"][1]["image_url"]["url"]
     assert imagem.startswith("data:image/png;base64,")
@@ -276,7 +276,9 @@ def test_compare_reference_parse_a_e_b(tmp_path, cfg_com_vision, monkeypatch):
 
 def test_cli_ref_reprova_quando_b_ganha(tmp_path, cfg_com_vision, monkeypatch, capsys):
     monkeypatch.setattr(
-        vision, "_http_post", fake_post([], resposta('{"melhor": "b", "motivo": "a nova está crua"}'))
+        vision,
+        "_http_post",
+        fake_post([], resposta('{"melhor": "b", "motivo": "a nova está crua"}')),
     )
     make_dist(tmp_path)
     ref = png(tmp_path / "ref.png")
@@ -339,11 +341,11 @@ def test_baseline_grava_e_compara(tmp_path):
     assert path == ws / ".harness" / "quality-baseline.json"
     assert quality_baseline.load_baseline(ws) == {"nota": 6.5, "a11y": 0.9}
 
-    quality_baseline.save_baseline(ws, {"nota": 7.0})   # merge, não sobrescreve tudo
+    quality_baseline.save_baseline(ws, {"nota": 7.0})  # merge, não sobrescreve tudo
     assert quality_baseline.load_baseline(ws) == {"nota": 7.0, "a11y": 0.9}
 
     path.write_text("{isto não é json", encoding="utf-8")
-    assert quality_baseline.load_baseline(ws) is None   # piso ilegível = sem piso
+    assert quality_baseline.load_baseline(ws) is None  # piso ilegível = sem piso
 
 
 def test_min_nota_baseline_regua_relativa(tmp_path, cfg_com_vision, monkeypatch, capsys):
@@ -360,7 +362,7 @@ def test_min_nota_baseline_regua_relativa(tmp_path, cfg_com_vision, monkeypatch,
     monkeypatch.setattr(vision, "_http_post", fake_post([], resposta('{"nota": 5, "ok": true}')))
     assert cli.main(argv) == 1
     assert "FALHA" in capsys.readouterr().err
-    assert quality_baseline.load_baseline(ws) == {"nota": 7.0}   # piso não afrouxa
+    assert quality_baseline.load_baseline(ws) == {"nota": 7.0}  # piso não afrouxa
 
 
 def test_min_nota_absoluto(tmp_path, cfg_com_vision, monkeypatch):

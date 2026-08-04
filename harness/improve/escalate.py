@@ -14,16 +14,17 @@ que ela mede — por isso ela lê o ledger, não o estado do grafo.
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from harness.types import RunRow
 
 # Vocabulário fechado dos motivos. Texto livre aqui viraria motivo diferente a
 # cada nó e ninguém conseguiria agrupar escalação por causa.
-NO_GRADIENT = "no_gradient"           # pick_target não achou o que valha a pena
-GENOME_VIOLATION = "genome_violation" # a regra escolhida toca zona proibida
-DEADLINE = "deadline"                 # estourou o orçamento de tempo do ciclo
-ERROR = "error"                       # falha repetida/inesperada aplicando a regra
+NO_GRADIENT = "no_gradient"  # pick_target não achou o que valha a pena
+GENOME_VIOLATION = "genome_violation"  # a regra escolhida toca zona proibida
+DEADLINE = "deadline"  # estourou o orçamento de tempo do ciclo
+ERROR = "error"  # falha repetida/inesperada aplicando a regra
 
 REASONS = (NO_GRADIENT, GENOME_VIOLATION, DEADLINE, ERROR)
 
@@ -84,9 +85,7 @@ def prior_decisions(kind: str | None, reason: str | None) -> str:
         return ""
 
 
-def intervention_rate(
-    history: Sequence[RunRow], window: int = DEFAULT_WINDOW
-) -> float:
+def intervention_rate(history: Sequence[RunRow], window: int = DEFAULT_WINDOW) -> float:
     """Fração das runs recentes que precisaram de humano. Sem run, 0.0.
 
     Zero por falta de amostra e zero por autonomia são a mesma leitura aqui de

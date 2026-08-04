@@ -74,10 +74,20 @@ def seed_failures(sandbox: Path, n: int = 3) -> None:
     for i in range(n):
         store.record_run(
             RunRow(
-                run_id=f"seed{i}", unit_id="echo", project=None, backend="mock",
-                model=None, tier="t0", kind="code", ok=False,
-                exit_reason="verify_failed", sec_total=10.0, sec_provision=0.0,
-                cost_usd=0.0, intervention=False, created_at=store.now_iso(),
+                run_id=f"seed{i}",
+                unit_id="echo",
+                project=None,
+                backend="mock",
+                model=None,
+                tier="t0",
+                kind="code",
+                ok=False,
+                exit_reason="verify_failed",
+                sec_total=10.0,
+                sec_provision=0.0,
+                cost_usd=0.0,
+                intervention=False,
+                created_at=store.now_iso(),
             ),
             path=db(sandbox),
         )
@@ -91,10 +101,9 @@ def rows(
     kind: str | None = None,
 ) -> list[dict]:
     tag = policy.note_with_action(name, None, kind=kind)
-    return (
-        [{"verdict": "KEEP", "note": tag}] * keep
-        + [{"verdict": other_verdict, "note": tag}] * other
-    )
+    return [{"verdict": "KEEP", "note": tag}] * keep + [
+        {"verdict": other_verdict, "note": tag}
+    ] * other
 
 
 # --- bandit puro ----------------------------------------------------------------
@@ -116,10 +125,7 @@ def test_explora_acao_sem_amostra():
 def test_deterministico_com_rng_seedado():
     # Empate (duas sem amostra): o desempate é do rng, e rng igual → escolha igual.
     history = rows("boa", 9, 1)
-    picks = {
-        policy.select_action(["boa", "x", "y"], history, random.Random(42))
-        for _ in range(10)
-    }
+    picks = {policy.select_action(["boa", "x", "y"], history, random.Random(42)) for _ in range(10)}
     assert len(picks) == 1
     assert picks.pop() in {"x", "y"}
 
@@ -133,8 +139,8 @@ def test_action_stats_conta_so_veredito_concluido():
     history = (
         rows("a", 2, 1)
         + rows("a", 0, 1, other_verdict="INCONCLUSIVE")
-        + [{"verdict": "ABORTED", "note": "action=a;error"}]   # não conta
-        + [{"verdict": "KEEP", "note": None}]                   # sem token: fora
+        + [{"verdict": "ABORTED", "note": "action=a;error"}]  # não conta
+        + [{"verdict": "KEEP", "note": None}]  # sem token: fora
     )
     stats = policy.action_stats(history)
     assert set(stats) == {"a"}
@@ -149,25 +155,26 @@ def test_action_stats_conta_so_veredito_concluido():
 def test_prior_por_kind_escolhe_diferente_por_tipo():
     """`a` paga em code, `b` paga em content: o global empata, a célula decide."""
     history = (
-        rows("a", 8, 1, kind="code") + rows("b", 1, 8, kind="code")
-        + rows("a", 1, 8, kind="content") + rows("b", 8, 1, kind="content")
+        rows("a", 8, 1, kind="code")
+        + rows("b", 1, 8, kind="code")
+        + rows("a", 1, 8, kind="content")
+        + rows("b", 8, 1, kind="content")
     )
     # Global: 9/18 para as duas — sem kind o bandit não tem como diferenciar.
     glob = policy.action_stats(history)
     assert glob["a"]["lower"] == pytest.approx(glob["b"]["lower"])
 
     assert policy.select_action(["a", "b"], history, random.Random(0), kind="code") == "a"
-    assert (
-        policy.select_action(["a", "b"], history, random.Random(0), kind="content") == "b"
-    )
+    assert policy.select_action(["a", "b"], history, random.Random(0), kind="content") == "b"
 
 
 def test_celula_rala_nao_vira_o_jogo():
     """1 amostra na célula pesa 1/5: o agregado global continua mandando."""
     history = (
-        rows("boa", 17, 2) + rows("ruim", 2, 17)
-        + rows("boa", 0, 1, kind="code")      # única amostra em code: DISCARD
-        + rows("ruim", 1, 0, kind="code")     # única amostra em code: KEEP
+        rows("boa", 17, 2)
+        + rows("ruim", 2, 17)
+        + rows("boa", 0, 1, kind="code")  # única amostra em code: DISCARD
+        + rows("ruim", 1, 0, kind="code")  # única amostra em code: KEEP
     )
     cell = policy.action_stats(history, kind="code")
     assert (cell["boa"]["n"], cell["ruim"]["n"]) == (1, 1)
@@ -177,15 +184,10 @@ def test_celula_rala_nao_vira_o_jogo():
 def test_celula_vazia_usa_global_e_acao_virgem_ainda_explora():
     """Kind sem nenhuma amostra: vale o global (não zera, não vira inf)."""
     history = rows("boa", 9, 1, kind="code") + rows("ruim", 1, 9, kind="code")
-    assert (
-        policy.select_action(["boa", "ruim"], history, random.Random(0), kind="content")
-        == "boa"
-    )
+    assert policy.select_action(["boa", "ruim"], history, random.Random(0), kind="content") == "boa"
     # "nova" não tem amostra em lugar nenhum: exploração como sempre.
     assert (
-        policy.select_action(
-            ["boa", "ruim", "nova"], history, random.Random(0), kind="content"
-        )
+        policy.select_action(["boa", "ruim", "nova"], history, random.Random(0), kind="content")
         == "nova"
     )
 
@@ -218,11 +220,14 @@ def test_autopilot_registra_acao_fixada(sandbox):
     """`action=` do chamador vai parar no note da mutação e no result."""
     seed_failures(sandbox)
     report = ag.run_autopilot(
-        sandbox / "data", units=[UNIT], root=sandbox,
-        backend="mock", action="research",
+        sandbox / "data",
+        units=[UNIT],
+        root=sandbox,
+        backend="mock",
+        action="research",
     )
     r = report.results[0]
-    assert r["verdict"] == "INCONCLUSIVE"   # mock empata os braços
+    assert r["verdict"] == "INCONCLUSIVE"  # mock empata os braços
     assert r["action"] == "research"
     linha = store.mutations(path=db(sandbox))[0]
     assert policy.action_of(linha) == "research"
@@ -232,7 +237,10 @@ def test_autopilot_policy_escolhe_e_registra(sandbox):
     """Sem ação fixada, a policy escolhe uma do registry e ela fica no ledger."""
     seed_failures(sandbox)
     report = ag.run_autopilot(
-        sandbox / "data", units=[UNIT], root=sandbox, backend="mock",
+        sandbox / "data",
+        units=[UNIT],
+        root=sandbox,
+        backend="mock",
     )
     r = report.results[0]
     assert r["action"] in actions()
@@ -244,8 +252,11 @@ def test_autopilot_policy_escolhe_e_registra(sandbox):
 
 def apply_state(rule_id: str) -> dict:
     return {
-        "cycle": 1, "cycles": 1, "units": ["echo"],
-        "target": {"rule_id": rule_id}, "mutation": None,
+        "cycle": 1,
+        "cycles": 1,
+        "units": ["echo"],
+        "target": {"rule_id": rule_id},
+        "mutation": None,
         "budget": Budget(),
     }
 
@@ -272,9 +283,7 @@ def _fake_exam(result: bool, calls: list):
         calls.append(kw)
         return result
 
-    return SimpleNamespace(
-        SEALED_DIR=Path("benchmarks/sealed"), run_sealed_exam=run_sealed_exam
-    )
+    return SimpleNamespace(SEALED_DIR=Path("benchmarks/sealed"), run_sealed_exam=run_sealed_exam)
 
 
 def test_default_exame_usa_exam_real_guardado(ruler_sandbox, monkeypatch):
@@ -295,9 +304,10 @@ def test_default_exame_usa_exam_real_guardado(ruler_sandbox, monkeypatch):
     assert len(calls) == 1
     assert calls[0]["sealed_dir"] == ruler_sandbox / "benchmarks" / "sealed"
     # nada aplicado: a régua está intacta
-    assert mutate.read_value(
-        ruler_sandbox / "config" / "ruler.toml", "gate.kpi_regression_tolerance"
-    ) == 0.0
+    assert (
+        mutate.read_value(ruler_sandbox / "config" / "ruler.toml", "gate.kpi_regression_tolerance")
+        == 0.0
+    )
 
 
 def test_default_exame_modulo_ausente_fail_closed(ruler_sandbox, monkeypatch):

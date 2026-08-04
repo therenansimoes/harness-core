@@ -25,3 +25,6 @@ Duas famílias, com regras de path DIFERENTES:
 Falar sobre um arquivo não muda o arquivo. Só `write_file`, `edit_file` e
 `delete` mudam. Se você terminar sem chamar uma delas, a tarefa não foi feita.
 
+Se o projeto tem `AGENTS.md` (ou `AGENTS-exec.md`, que ganha dele), ele é lei
+local: o que estiver lá vence este manual quando os dois discordarem.
+

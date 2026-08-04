@@ -8,6 +8,7 @@ Sem chamada de API/subprocess `claude` — persona roda em PERSONA_MOCK=1.
 
     python3 -m pytest tests/test_judges_build.py -q
 """
+
 from __future__ import annotations
 
 import json
@@ -32,8 +33,16 @@ SEED_DIR = BUILD_DIR / "seed"
 # 7 chaves canônicas de process_metrics.parse_trace (RUBRIC-J2
 # §process_metrics.py) + X1/X2/X3 = 10 (aceite 5 do SPEC-J2 design 2).
 _EXPECTED_10_KEYS = {
-    "n_turns", "n_tool_calls", "n_tool_errors", "n_recovered", "n_thrash",
-    "n_help_requests", "stop_reason", "X1", "X2", "X3",
+    "n_turns",
+    "n_tool_calls",
+    "n_tool_errors",
+    "n_recovered",
+    "n_thrash",
+    "n_help_requests",
+    "stop_reason",
+    "X1",
+    "X2",
+    "X3",
 }
 
 
@@ -59,7 +68,7 @@ def test_dry_run_build_gera_verdict_j2_valido_com_10_chaves_de_metrics(tmp_path,
     process = loaded["process"]
     assert set(process) == {"X1", "X2", "X3", "metrics"}
     all_keys = set(process["metrics"]) | {"X1", "X2", "X3"}
-    assert _EXPECTED_10_KEYS <= all_keys
+    assert all_keys >= _EXPECTED_10_KEYS
     assert len(_EXPECTED_10_KEYS) == 10
 
 
@@ -71,7 +80,15 @@ def test_dry_run_via_cli_imprime_verdict_track_build():
     out_dir = REPO / "attic" / "judges" / "verdicts" / "build_j_b2b"
     try:
         proc = subprocess.run(
-            [sys.executable, str(REPO / "attic" / "judges" / "run_judge.py"), "--track", "build", "--judge", "build_j_b2b", "--dry-run"],
+            [
+                sys.executable,
+                str(REPO / "attic" / "judges" / "run_judge.py"),
+                "--track",
+                "build",
+                "--judge",
+                "build_j_b2b",
+                "--dry-run",
+            ],
             cwd=REPO,
             capture_output=True,
             text=True,
@@ -109,12 +126,30 @@ def test_tamper_accept_py_no_workspace_veto_d2(tmp_path):
     assert deterministic["B1"] == 0
 
     reg = run_judge.read_registry_build_row(BUILD_ID)
-    process = {"X1": 10.0, "X2": run_judge.process_metrics.DISCARDED, "X3": 5.0,
-               "metrics": {"n_turns": 1, "n_tool_calls": 0, "n_tool_errors": 0, "n_recovered": 0,
-                           "n_thrash": 0, "n_help_requests": 0, "stop_reason": "success"}}
+    process = {
+        "X1": 10.0,
+        "X2": run_judge.process_metrics.DISCARDED,
+        "X3": 5.0,
+        "metrics": {
+            "n_turns": 1,
+            "n_tool_calls": 0,
+            "n_tool_errors": 0,
+            "n_recovered": 0,
+            "n_thrash": 0,
+            "n_help_requests": 0,
+            "stop_reason": "success",
+        },
+    }
     verdict = run_judge.build_verdict_build(
-        BUILD_ID, reg, deterministic, process, persona_scored={}, discarded=[],
-        persona_vetoed=False, veto_reason="", cost_usd=0.1,
+        BUILD_ID,
+        reg,
+        deterministic,
+        process,
+        persona_scored={},
+        discarded=[],
+        persona_vetoed=False,
+        veto_reason="",
+        cost_usd=0.1,
     )
     assert verdict["judge_score"] == 0
     assert "D2" in verdict["veto_reason"]
@@ -138,7 +173,7 @@ def test_ingest_verdicts_grava_track_build(tmp_path, monkeypatch):
     verdict = run_judge.run_dry_build()
     run_judge.write_verdict(verdict)
 
-    import graph  # noqa: E402 (import local — evita acoplar módulo no topo do arquivo)
+    import graph
 
     db_path = tmp_path / "g.db"
     n = graph.ingest_verdicts(verdicts_dir=verdicts_dir, db_path=str(db_path))
@@ -146,7 +181,9 @@ def test_ingest_verdicts_grava_track_build(tmp_path, monkeypatch):
 
     conn = graph._connect(str(db_path))
     try:
-        row = conn.execute("SELECT track, process_json FROM judgements WHERE judge_id = ?", (BUILD_ID,)).fetchone()
+        row = conn.execute(
+            "SELECT track, process_json FROM judgements WHERE judge_id = ?", (BUILD_ID,)
+        ).fetchone()
     finally:
         conn.close()
     assert row["track"] == "build"

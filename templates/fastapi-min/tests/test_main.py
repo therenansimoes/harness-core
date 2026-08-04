@@ -1,9 +1,8 @@
 """Testes da API. `TestClient` faz a requisição em processo — sem porta, sem
 uvicorn, sem sleep. É por isso que `httpx` está nas deps de teste."""
 
-from fastapi.testclient import TestClient
-
 from app.main import app
+from fastapi.testclient import TestClient
 
 client = TestClient(app)
 

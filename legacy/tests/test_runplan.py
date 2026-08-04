@@ -24,8 +24,9 @@ import router  # noqa: E402
 import runplan  # noqa: E402
 import safety  # noqa: E402
 
-TIER = router.Tier(name="haiku", rank=0, model="claude-haiku-4-5-20251001",
-                   max_turns=17, est_cost_per_run=0.02)
+TIER = router.Tier(
+    name="haiku", rank=0, model="claude-haiku-4-5-20251001", max_turns=17, est_cost_per_run=0.02
+)
 
 
 def test_tools_subset_of_safety_max():
@@ -79,14 +80,22 @@ def _capture_cmd(monkeypatch, workspace, plan):
 def test_plan_none_matches_legacy_cmd(monkeypatch, tmp_path):
     """plan=None precisa montar o MESMO comando de antes do RunPlan existir."""
     legacy = [
-        "claude", "-p", "prompt qualquer",
-        "--output-format", "stream-json",
+        "claude",
+        "-p",
+        "prompt qualquer",
+        "--output-format",
+        "stream-json",
         "--verbose",
-        "--model", agent._model(),
-        "--max-turns", str(agent._max_turns()),
-        "--allowed-tools", *agent.ALLOWED_TOOLS,
-        "--permission-mode", "bypassPermissions",
-        "--append-system-prompt", agent._system_prompt(tmp_path),
+        "--model",
+        agent._model(),
+        "--max-turns",
+        str(agent._max_turns()),
+        "--allowed-tools",
+        *agent.ALLOWED_TOOLS,
+        "--permission-mode",
+        "bypassPermissions",
+        "--append-system-prompt",
+        agent._system_prompt(tmp_path),
     ]
     assert _capture_cmd(monkeypatch, tmp_path, None) == legacy
 
@@ -100,7 +109,7 @@ def test_plan_drives_cmd(monkeypatch, tmp_path):
     )
     cmd = _capture_cmd(monkeypatch, tmp_path, plan)
     i = cmd.index("--allowed-tools")
-    assert cmd[i + 1:i + 3] == ["Read", "Grep"]
+    assert cmd[i + 1 : i + 3] == ["Read", "Grep"]
     assert cmd[cmd.index("--max-turns") + 1] == "7"
     assert cmd[cmd.index("--append-system-prompt") + 1] == "PROMPT DO PLANO"
     assert "Write" not in cmd and "Bash" not in cmd

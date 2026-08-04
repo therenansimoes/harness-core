@@ -18,7 +18,7 @@ Raiz dos projetos: `$HARNESS_PROJECTS_ROOT`, default `projects/` no cwd.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 NOTES_FILE = "notes.tsv"
@@ -48,7 +48,7 @@ def load_notes(project: str) -> list[dict[str, str]]:
     rows = []
     for ln in lines[1:]:
         cells = (ln.split("\t") + [""] * len(header))[: len(header)]
-        rows.append(dict(zip(header, cells)))
+        rows.append(dict(zip(header, cells, strict=False)))
     return rows
 
 
@@ -64,7 +64,7 @@ def add(project: str, unit_id: str, score: int, tags: str = "", why: str = "") -
     if not path.exists():
         path.write_text("\t".join(HEADER) + "\n", encoding="utf-8")
     row = {
-        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "ts": datetime.now(UTC).isoformat(timespec="seconds"),
         "unit_id": unit_id,
         "score": str(score),
         "tags": tags,

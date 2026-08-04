@@ -50,10 +50,10 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
 from urllib.parse import urljoin
 
 SHOT_NAME = "ui-verify.png"
@@ -63,8 +63,7 @@ ASSET_KINDS = ("css", "js")
 # `rel` de `<link>` que o navegador busca ao pintar a página. `canonical`,
 # `alternate` e afins descrevem o site para robô: morto ali não é tela morta.
 RENDER_RELS = frozenset(
-    {"stylesheet", "icon", "shortcut", "apple-touch-icon", "mask-icon", "preload",
-     "manifest"}
+    {"stylesheet", "icon", "shortcut", "apple-touch-icon", "mask-icon", "preload", "manifest"}
 )
 MISSING_PAGE = "pagina linkada ausente"
 
@@ -164,9 +163,7 @@ def verify(
             if strict_links or ref in assets
         ]
         warnings = [
-            f"{MISSING_PAGE}: {ref}"
-            for ref in dead
-            if not strict_links and ref not in assets
+            f"{MISSING_PAGE}: {ref}" for ref in dead if not strict_links and ref not in assets
         ]
         failures += _check_expected(html, expect, fetched)
         shot_kb, shot_fail = _check_shot(page, shot, min_kb)
@@ -371,7 +368,11 @@ def screenshot(url: str, out: Path, timeout_s: float = SHOT_TIMEOUT_S) -> str | 
             if proc.poll() is not None:
                 # Saiu sem PNG íntegro: mais uma olhada (pode ter escrito no fim)
                 # e então é falha de verdade.
-                return None if _png_ready(out) else f"screenshot: chrome saiu {proc.returncode} sem PNG"
+                return (
+                    None
+                    if _png_ready(out)
+                    else f"screenshot: chrome saiu {proc.returncode} sem PNG"
+                )
             time.sleep(POLL_S)
         return f"screenshot: sem PNG completo em {timeout_s:.0f}s"
     finally:

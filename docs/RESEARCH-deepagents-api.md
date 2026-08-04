@@ -28,7 +28,10 @@ Factory: `create_deep_agent(model, tools, *, system_prompt, middleware, subagent
 - **Limite de turnos** — usar as duas camadas:
   ```python
   from langchain.agents.middleware import ModelCallLimitMiddleware
-  agent = create_deep_agent(..., middleware=[ModelCallLimitMiddleware(thread_limit=10, run_limit=5, exit_behavior="end")])
+
+  agent = create_deep_agent(
+      ..., middleware=[ModelCallLimitMiddleware(thread_limit=10, run_limit=5, exit_behavior="end")]
+  )
   agent.invoke({...}, config={"recursion_limit": 50, "configurable": {"thread_id": "t1"}})
   ```
   `recursion_limit` não propaga a subagents (bug aberto deepagents#1698).
@@ -38,6 +41,7 @@ Factory: `create_deep_agent(model, tools, *, system_prompt, middleware, subagent
 - Nenhum campo de custo/turnos no retorno. Tokens via callback provider-agnostic:
   ```python
   from langchain_core.callbacks import UsageMetadataCallbackHandler
+
   cb = UsageMetadataCallbackHandler()
   res = agent.invoke({"messages": [...]}, config={"callbacks": [cb]})
   cb.usage_metadata  # {"qwen3:4b": {"input_tokens":..,"output_tokens":..}}
@@ -50,10 +54,11 @@ Factory: `create_deep_agent(model, tools, *, system_prompt, middleware, subagent
 Import path inalterado:
 ```python
 from langgraph.checkpoint.sqlite import SqliteSaver
+
 with SqliteSaver.from_conn_string("/abs/state.sqlite") as cp:
     graph = builder.compile(checkpointer=cp)
     cfg = {"configurable": {"thread_id": "run-42"}}
-    graph.invoke(inp, cfg)   # mesmo thread_id = resume
+    graph.invoke(inp, cfg)  # mesmo thread_id = resume
 ```
 Em deepagents: `create_deep_agent(..., checkpointer=cp)`.
 

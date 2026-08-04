@@ -43,16 +43,14 @@ def test_recusa_sintaxe_invalida_sem_escrever(root: Path) -> None:
 
 def test_keep_mantem_e_linhagem_com_parent(root: Path) -> None:
     alvo = root / "plugins" / "kpi_lines.py"
-    m = codegen.propose_code_mutation(
-        alvo, VALID, parent_id="abc123", root=root, genome=GENOME
-    )
+    m = codegen.propose_code_mutation(alvo, VALID, parent_id="abc123", root=root, genome=GENOME)
     veredito = codegen.judge_code_mutation(m, run_exam=lambda: True, root=root)
     assert veredito == codegen.KEEP
     assert alvo.read_text(encoding="utf-8") == VALID
 
     linhas = [
-        json.loads(l)
-        for l in (root / "data" / "lineage.jsonl").read_text(encoding="utf-8").splitlines()
+        json.loads(ln)
+        for ln in (root / "data" / "lineage.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     assert linhas[0] == {
         "id": m.mutation_id,

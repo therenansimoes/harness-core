@@ -48,7 +48,7 @@ def test_load_rejects_duplicated_pattern(tmp_path):
         'immutable = ["harness/ruler/**", "config/*.toml"]\n'
         'mutable = ["config/*.toml", "prompts/**"]\n',
     )
-    with pytest.raises(ValueError, match="config/\\*.toml"):
+    with pytest.raises(ValueError, match=r"config/\*.toml"):
         load(path)
 
 
@@ -160,9 +160,7 @@ def test_symlink_out_of_root_is_escape(tmp_path):
     g = Genome(immutable=("config/*.toml",))
     # sem root, é só um path relativo inocente; com root, o link é visto.
     assert check_patch(g, ["config/link.toml"]) == ["genome:immutable:config/link.toml"]
-    assert check_patch(g, ["config/link.toml"], root=root) == [
-        "genome:escape:config/link.toml"
-    ]
+    assert check_patch(g, ["config/link.toml"], root=root) == ["genome:escape:config/link.toml"]
 
 
 def test_violations_are_deduped_and_ordered():

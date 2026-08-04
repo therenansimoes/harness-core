@@ -14,18 +14,27 @@ from harness.skills.attribution import record_usage
 from harness.types import MutationRow, RunRow
 
 NOW = "2026-08-03T12:00:00+00:00"
-RECENT = "2026-08-03T09:00:00+00:00"   # dentro de 24h
-OLD = "2026-07-01T09:00:00+00:00"      # fora de qualquer janela curta
+RECENT = "2026-08-03T09:00:00+00:00"  # dentro de 24h
+OLD = "2026-07-01T09:00:00+00:00"  # fora de qualquer janela curta
 
-SECTIONS = ("Runs", "Mutações por ação", "Skills por lift", "Linhagem (últimas)",
-            "Escalações")
+SECTIONS = ("Runs", "Mutações por ação", "Skills por lift", "Linhagem (últimas)", "Escalações")
 
 
 def _run(run_id: str, ok: bool, created_at: str, **over) -> RunRow:
     base = dict(
-        run_id=run_id, unit_id="u1", project="p", backend="mock", model=None,
-        tier="local", kind="codegen", ok=ok, exit_reason="done", sec_total=1.0,
-        sec_provision=0.1, cost_usd=0.01, intervention=False,
+        run_id=run_id,
+        unit_id="u1",
+        project="p",
+        backend="mock",
+        model=None,
+        tier="local",
+        kind="codegen",
+        ok=ok,
+        exit_reason="done",
+        sec_total=1.0,
+        sec_provision=0.1,
+        cost_usd=0.01,
+        intervention=False,
         created_at=created_at,
     )
     return RunRow(**{**base, **over})
@@ -33,8 +42,13 @@ def _run(run_id: str, ok: bool, created_at: str, **over) -> RunRow:
 
 def _mut(mid: str, verdict: str, applied_at: str, **over) -> MutationRow:
     base = dict(
-        mutation_id=mid, rule_id="r1", verdict=verdict, arm_a="3/6", arm_b="5/6",
-        applied_at=applied_at, reverted=(verdict != "KEEP"),
+        mutation_id=mid,
+        rule_id="r1",
+        verdict=verdict,
+        arm_a="3/6",
+        arm_b="5/6",
+        applied_at=applied_at,
+        reverted=(verdict != "KEEP"),
     )
     return MutationRow(**{**base, **over})
 
@@ -60,18 +74,16 @@ def test_report_populado(env, capsys):
     lineage = env / "lineage.jsonl"
     lineage.write_text(
         '{"id": "abc12345deadbeef", "parent_id": null, '
-        '"target": "harness/x.py", "ts": "%s", "verdict": "KEEP"}\n' % RECENT,
+        f'"target": "harness/x.py", "ts": "{RECENT}", "verdict": "KEEP"}}\n',
         encoding="utf-8",
     )
 
-    text = report.build_report(
-        since_hours=24, db_path=db, lineage_file=lineage, now=NOW
-    )
+    text = report.build_report(since_hours=24, db_path=db, lineage_file=lineage, now=NOW)
 
     for name in SECTIONS:
         assert f"## {name}" in text
-    assert report.NO_DATA not in text          # tudo tem dado neste caso
-    assert "runs=2 accept=1/2 (50%)" in text   # a run velha ficou fora da janela
+    assert report.NO_DATA not in text  # tudo tem dado neste caso
+    assert "runs=2 accept=1/2 (50%)" in text  # a run velha ficou fora da janela
     assert "usd=0.0200" in text
     assert "| mock | codegen | 2 |" in text
     assert "| tune_toml | 1 | 1 | 1 |" in text
@@ -81,8 +93,12 @@ def test_report_populado(env, capsys):
 
     # E o mesmo relatório pelo CLI, com --out gravando o arquivo.
     out = env / "sub" / "report.md"
-    assert cli.main(["report", "--since", "24", "--db", str(db),
-                     "--file", str(lineage), "--out", str(out)]) == 0
+    assert (
+        cli.main(
+            ["report", "--since", "24", "--db", str(db), "--file", str(lineage), "--out", str(out)]
+        )
+        == 0
+    )
     assert "## Runs" in out.read_text(encoding="utf-8")
     assert str(out) in capsys.readouterr().out
 
@@ -93,7 +109,7 @@ def test_runs_mostra_token_agregado_quando_existe(env):
     db = env / "data" / "runs.sqlite"
     store.record_run(_run("r1", True, RECENT, tokens_in=1000, tokens_out=250), path=db)
     store.record_run(_run("r2", True, RECENT, tokens_in=500, tokens_out=100), path=db)
-    store.record_run(_run("r3", False, RECENT), path=db)   # backend sem usage
+    store.record_run(_run("r3", False, RECENT), path=db)  # backend sem usage
     store.record_run(_run("r-velha", True, OLD, tokens_in=999_999), path=db)
 
     text = report.build_report(since_hours=24, db_path=db, now=NOW)

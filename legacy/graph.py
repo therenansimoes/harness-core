@@ -24,7 +24,7 @@ import json
 import os
 import sqlite3
 import statistics
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).parent.resolve()
@@ -194,16 +194,27 @@ def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, de
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 # ------------------------------------------------------------------- escrita
 
 
-def record_run(task_id: str, harness_version: str, suite: str, success: int,
-               seconds: float, tokens: int, cost_usd: float, notes: str = "",
-               valid: int = 1, proposal_id: str | None = None,
-               ts: str | None = None, kpis: str = "", db_path=None) -> int:
+def record_run(
+    task_id: str,
+    harness_version: str,
+    suite: str,
+    success: int,
+    seconds: float,
+    tokens: int,
+    cost_usd: float,
+    notes: str = "",
+    valid: int = 1,
+    proposal_id: str | None = None,
+    ts: str | None = None,
+    kpis: str = "",
+    db_path=None,
+) -> int:
     """`kpis`: JSON compacto da coluna homônima do results.tsv ({"nome": valor}),
     guardado como texto — quem consulta interpreta; o graph não agrega KPI."""
     ts = ts or _now()
@@ -216,8 +227,20 @@ def record_run(task_id: str, harness_version: str, suite: str, success: int,
                  tokens, cost_usd, notes, valid, proposal_id, kpis)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (ts, task_id, harness_version, suite, success, seconds,
-             tokens, cost_usd, notes, valid, proposal_id, kpis or ""),
+            (
+                ts,
+                task_id,
+                harness_version,
+                suite,
+                success,
+                seconds,
+                tokens,
+                cost_usd,
+                notes,
+                valid,
+                proposal_id,
+                kpis or "",
+            ),
         )
         conn.commit()
         return cur.lastrowid
@@ -225,9 +248,16 @@ def record_run(task_id: str, harness_version: str, suite: str, success: int,
         conn.close()
 
 
-def record_proposal(pid: str, from_version: str, to_version_intended: str,
-                     hypothesis: str, diff_summary: str, path: str,
-                     ts: str | None = None, db_path=None) -> str:
+def record_proposal(
+    pid: str,
+    from_version: str,
+    to_version_intended: str,
+    hypothesis: str,
+    diff_summary: str,
+    path: str,
+    ts: str | None = None,
+    db_path=None,
+) -> str:
     ts = ts or _now()
     conn = _connect(db_path)
     try:
@@ -245,9 +275,15 @@ def record_proposal(pid: str, from_version: str, to_version_intended: str,
         conn.close()
 
 
-def record_decision(proposal_id: str, outcome: str, scores_summary: str,
-                     reason: str, gates_json: str, ts: str | None = None,
-                     db_path=None) -> int:
+def record_decision(
+    proposal_id: str,
+    outcome: str,
+    scores_summary: str,
+    reason: str,
+    gates_json: str,
+    ts: str | None = None,
+    db_path=None,
+) -> int:
     ts = ts or _now()
     conn = _connect(db_path)
     try:
@@ -265,16 +301,25 @@ def record_decision(proposal_id: str, outcome: str, scores_summary: str,
         conn.close()
 
 
-def record_judgement(judge_id: str, harness_version: str, rubric_version: str,
-                      judge_score: float | None, deterministic_json: str = "",
-                      persona_json: str = "", veto: int = 0, persona_vetoed: int = 0,
-                      track: str | None = None, process_json: str | None = None,
-                      ts: str | None = None, db_path=None) -> int:
+def record_judgement(
+    judge_id: str,
+    harness_version: str,
+    rubric_version: str,
+    judge_score: float | None,
+    deterministic_json: str = "",
+    persona_json: str = "",
+    veto: int = 0,
+    persona_vetoed: int = 0,
+    track: str | None = None,
+    process_json: str | None = None,
+    ts: str | None = None,
+    db_path=None,
+) -> int:
     """Upsert idempotente por (judge_id, harness_version, rubric_version, ts)."""
     ts = ts or _now()
     conn = _connect(db_path)
     try:
-        cur = conn.execute(
+        conn.execute(
             """
             INSERT INTO judgements
                 (ts, judge_id, harness_version, rubric_version, judge_score,
@@ -289,8 +334,19 @@ def record_judgement(judge_id: str, harness_version: str, rubric_version: str,
                 track = excluded.track,
                 process_json = excluded.process_json
             """,
-            (ts, judge_id, harness_version, rubric_version, judge_score,
-             deterministic_json, persona_json, veto, persona_vetoed, track, process_json),
+            (
+                ts,
+                judge_id,
+                harness_version,
+                rubric_version,
+                judge_score,
+                deterministic_json,
+                persona_json,
+                veto,
+                persona_vetoed,
+                track,
+                process_json,
+            ),
         )
         conn.commit()
         row = conn.execute(
@@ -312,7 +368,9 @@ def ingest_verdicts(verdicts_dir=None, db_path=None) -> int:
     por judge_id+harness_version+rubric_version+ts via record_judgement).
     Retorna a quantidade de verdicts ingeridos.
     """
-    base = Path(verdicts_dir) if verdicts_dir is not None else ROOT / "attic" / "judges" / "verdicts"
+    base = (
+        Path(verdicts_dir) if verdicts_dir is not None else ROOT / "attic" / "judges" / "verdicts"
+    )
     n = 0
     if not base.is_dir():
         return n
@@ -397,14 +455,18 @@ def judge_history(n: int = 50, db_path=None) -> list[dict]:
 
 
 def _summary_one(conn: sqlite3.Connection, version: str) -> dict:
-    rows = conn.execute(
-        "SELECT * FROM runs WHERE harness_version = ?", (version,)
-    ).fetchall()
+    rows = conn.execute("SELECT * FROM runs WHERE harness_version = ?", (version,)).fetchall()
     n = len(rows)
     if n == 0:
         return {
-            "version": version, "n": 0, "n_valid": 0, "success_rate": 0.0,
-            "trunc_rate": 0.0, "med_s": 0.0, "cost_run": 0.0, "tok_run": 0.0,
+            "version": version,
+            "n": 0,
+            "n_valid": 0,
+            "success_rate": 0.0,
+            "trunc_rate": 0.0,
+            "med_s": 0.0,
+            "cost_run": 0.0,
+            "tok_run": 0.0,
         }
 
     valid_rows = [r for r in rows if r["valid"]]
@@ -419,8 +481,14 @@ def _summary_one(conn: sqlite3.Connection, version: str) -> dict:
     tok_run = (sum(r["tokens"] for r in valid_rows) / n_valid) if n_valid else 0.0
 
     return {
-        "version": version, "n": n, "n_valid": n_valid, "success_rate": success_rate,
-        "trunc_rate": trunc_rate, "med_s": med_s, "cost_run": cost_run, "tok_run": tok_run,
+        "version": version,
+        "n": n,
+        "n_valid": n_valid,
+        "success_rate": success_rate,
+        "trunc_rate": trunc_rate,
+        "med_s": med_s,
+        "cost_run": cost_run,
+        "tok_run": tok_run,
     }
 
 
@@ -442,8 +510,14 @@ def summary_for_ab(version_a: str, version_b: str, db_path=None) -> dict:
 # ligados a elas. Nunca lê nem escreve nas tabelas do eixo harness.
 
 
-def record_session(session_id: str, project: str, brief_path: str,
-                    status: str = "open", ts: str | None = None, db_path=None) -> str:
+def record_session(
+    session_id: str,
+    project: str,
+    brief_path: str,
+    status: str = "open",
+    ts: str | None = None,
+    db_path=None,
+) -> str:
     ts = ts or _now()
     conn = _connect(db_path)
     try:
@@ -465,14 +539,13 @@ def record_session(session_id: str, project: str, brief_path: str,
         conn.close()
 
 
-def update_session_status(session_id: str, status: str,
-                           ts: str | None = None, db_path=None) -> dict:
+def update_session_status(
+    session_id: str, status: str, ts: str | None = None, db_path=None
+) -> dict:
     ts = ts or _now()
     conn = _connect(db_path)
     try:
-        row = conn.execute(
-            "SELECT * FROM sessions WHERE session_id = ?", (session_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
         if row is None:
             raise ValueError(f"session {session_id} não existe")
         conn.execute(
@@ -481,20 +554,29 @@ def update_session_status(session_id: str, status: str,
         )
         conn.commit()
         return dict(
-            conn.execute(
-                "SELECT * FROM sessions WHERE session_id = ?", (session_id,)
-            ).fetchone()
+            conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
         )
     finally:
         conn.close()
 
 
-def record_delivery_event(session_id: str, project: str, kind: str,
-                           delivery_success: int, checks_total: int, checks_passed: int,
-                           regression_passed: int, regression_total: int,
-                           acceptance_passed: int, acceptance_total: int,
-                           next_action: str, notes: str = "", report_path: str = "",
-                           ts: str | None = None, db_path=None) -> int:
+def record_delivery_event(
+    session_id: str,
+    project: str,
+    kind: str,
+    delivery_success: int,
+    checks_total: int,
+    checks_passed: int,
+    regression_passed: int,
+    regression_total: int,
+    acceptance_passed: int,
+    acceptance_total: int,
+    next_action: str,
+    notes: str = "",
+    report_path: str = "",
+    ts: str | None = None,
+    db_path=None,
+) -> int:
     ts = ts or _now()
     conn = _connect(db_path)
     try:
@@ -506,9 +588,22 @@ def record_delivery_event(session_id: str, project: str, kind: str,
                  acceptance_passed, acceptance_total, next_action, notes, report_path)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (ts, session_id, project, kind, delivery_success, checks_total,
-             checks_passed, regression_passed, regression_total,
-             acceptance_passed, acceptance_total, next_action, notes, report_path),
+            (
+                ts,
+                session_id,
+                project,
+                kind,
+                delivery_success,
+                checks_total,
+                checks_passed,
+                regression_passed,
+                regression_total,
+                acceptance_passed,
+                acceptance_total,
+                next_action,
+                notes,
+                report_path,
+            ),
         )
         conn.commit()
         return cur.lastrowid
@@ -519,9 +614,7 @@ def record_delivery_event(session_id: str, project: str, kind: str,
 def session_state(session_id: str, db_path=None) -> dict | None:
     conn = _connect(db_path)
     try:
-        row = conn.execute(
-            "SELECT * FROM sessions WHERE session_id = ?", (session_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
         if row is None:
             return None
         state = dict(row)
@@ -573,8 +666,9 @@ def delivery_history(project: str, n: int = 20, db_path=None) -> list[dict]:
         conn.close()
 
 
-def record_governance_event(project: str, action: str, actor: str, detail: str = "",
-                             ts: str | None = None, db_path=None) -> int:
+def record_governance_event(
+    project: str, action: str, actor: str, detail: str = "", ts: str | None = None, db_path=None
+) -> int:
     ts = ts or _now()
     conn = _connect(db_path)
     try:
@@ -617,8 +711,14 @@ def recent_governance(n: int = 20, db_path=None) -> list[dict]:
 #   confirmed -> cancelled / failed
 
 
-def record_outbound_request(to_addr: str, body: str, requested_by: str,
-                             context: str = "", ts: str | None = None, db_path=None) -> int:
+def record_outbound_request(
+    to_addr: str,
+    body: str,
+    requested_by: str,
+    context: str = "",
+    ts: str | None = None,
+    db_path=None,
+) -> int:
     ts = ts or _now()
     conn = _connect(db_path)
     try:
@@ -637,13 +737,17 @@ def record_outbound_request(to_addr: str, body: str, requested_by: str,
 
 
 def _fetch_outbound(conn: sqlite3.Connection, outbound_id: int) -> sqlite3.Row | None:
-    return conn.execute(
-        "SELECT * FROM outbound_messages WHERE id = ?", (outbound_id,)
-    ).fetchone()
+    return conn.execute("SELECT * FROM outbound_messages WHERE id = ?", (outbound_id,)).fetchone()
 
 
-def confirm_outbound(outbound_id: int, actor: str, source: str = "cli",
-                      note: str = "", ts: str | None = None, db_path=None) -> dict:
+def confirm_outbound(
+    outbound_id: int,
+    actor: str,
+    source: str = "cli",
+    note: str = "",
+    ts: str | None = None,
+    db_path=None,
+) -> dict:
     ts = ts or _now()
     conn = _connect(db_path)
     try:
@@ -651,9 +755,7 @@ def confirm_outbound(outbound_id: int, actor: str, source: str = "cli",
         if row is None:
             raise ValueError(f"outbound {outbound_id} não existe")
         if row["status"] != "pending":
-            raise ValueError(
-                f"outbound {outbound_id} está '{row['status']}', não pode confirmar"
-            )
+            raise ValueError(f"outbound {outbound_id} está '{row['status']}', não pode confirmar")
         conn.execute(
             """
             UPDATE outbound_messages
@@ -675,8 +777,14 @@ def confirm_outbound(outbound_id: int, actor: str, source: str = "cli",
         conn.close()
 
 
-def cancel_outbound(outbound_id: int, actor: str, source: str = "cli",
-                     note: str = "", ts: str | None = None, db_path=None) -> dict:
+def cancel_outbound(
+    outbound_id: int,
+    actor: str,
+    source: str = "cli",
+    note: str = "",
+    ts: str | None = None,
+    db_path=None,
+) -> dict:
     ts = ts or _now()
     conn = _connect(db_path)
     try:
@@ -684,9 +792,7 @@ def cancel_outbound(outbound_id: int, actor: str, source: str = "cli",
         if row is None:
             raise ValueError(f"outbound {outbound_id} não existe")
         if row["status"] not in ("pending", "confirmed"):
-            raise ValueError(
-                f"outbound {outbound_id} está '{row['status']}', não pode cancelar"
-            )
+            raise ValueError(f"outbound {outbound_id} está '{row['status']}', não pode cancelar")
         conn.execute(
             "UPDATE outbound_messages SET status = 'cancelled' WHERE id = ?",
             (outbound_id,),
@@ -704,7 +810,9 @@ def cancel_outbound(outbound_id: int, actor: str, source: str = "cli",
         conn.close()
 
 
-def mark_outbound_sent(outbound_id: int, message_id: str, ts: str | None = None, db_path=None) -> dict:
+def mark_outbound_sent(
+    outbound_id: int, message_id: str, ts: str | None = None, db_path=None
+) -> dict:
     ts = ts or _now()
     conn = _connect(db_path)
     try:
@@ -824,7 +932,9 @@ def _cli(argv) -> None:
     parser = argparse.ArgumentParser(description="graph.py — CLI mínima para judgements.")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_ingest = sub.add_parser("ingest-verdicts", help="varre attic/judges/verdicts/ e grava em judgements")
+    p_ingest = sub.add_parser(
+        "ingest-verdicts", help="varre attic/judges/verdicts/ e grava em judgements"
+    )
     p_ingest.set_defaults(func=_cli_ingest_verdicts)
 
     p_hist = sub.add_parser("judge-history", help="lista judgements recentes")
@@ -846,34 +956,79 @@ if __name__ == "__main__":
 
     import tempfile
 
-    tmp = tempfile.NamedTemporaryFile(prefix="critique_test_", suffix=".db", delete=False)
+    tmp = tempfile.NamedTemporaryFile(prefix="critique_test_", suffix=".db", delete=False)  # noqa: SIM115 - delete=False: o path sobrevive ao close
     tmp.close()
     tmp_db = tmp.name
 
     try:
         pid = record_proposal(
-            pid="p1", from_version="v1", to_version_intended="v2",
+            pid="p1",
+            from_version="v1",
+            to_version_intended="v2",
             hypothesis="reduzir MAX_TURNS melhora custo sem perder success",
-            diff_summary="MAX_TURNS 12 -> 8", path="evolution/proposals/p1",
+            diff_summary="MAX_TURNS 12 -> 8",
+            path="evolution/proposals/p1",
             db_path=tmp_db,
         )
         assert pid == "p1"
 
         # 2 runs válidas em v2 ligadas à proposta
-        record_run("task_01", "v2", "sealed", success=1, seconds=10.0,
-                    tokens=1000, cost_usd=0.10, valid=1, proposal_id="p1", db_path=tmp_db)
-        record_run("task_02", "v2", "sealed", success=1, seconds=20.0,
-                    tokens=2000, cost_usd=0.20, valid=1, proposal_id="p1", db_path=tmp_db)
+        record_run(
+            "task_01",
+            "v2",
+            "sealed",
+            success=1,
+            seconds=10.0,
+            tokens=1000,
+            cost_usd=0.10,
+            valid=1,
+            proposal_id="p1",
+            db_path=tmp_db,
+        )
+        record_run(
+            "task_02",
+            "v2",
+            "sealed",
+            success=1,
+            seconds=20.0,
+            tokens=2000,
+            cost_usd=0.20,
+            valid=1,
+            proposal_id="p1",
+            db_path=tmp_db,
+        )
         # 1 run inválida (truncada) em v2, também ligada à proposta
-        record_run("task_03", "v2", "sealed", success=0, seconds=30.0,
-                    tokens=3000, cost_usd=0.30, valid=0, proposal_id="p1", db_path=tmp_db)
+        record_run(
+            "task_03",
+            "v2",
+            "sealed",
+            success=0,
+            seconds=30.0,
+            tokens=3000,
+            cost_usd=0.30,
+            valid=0,
+            proposal_id="p1",
+            db_path=tmp_db,
+        )
         # 1 run de outra versão (v1), não ligada à proposta
-        record_run("task_01", "v1", "sealed", success=1, seconds=5.0,
-                    tokens=500, cost_usd=0.05, valid=1, db_path=tmp_db)
+        record_run(
+            "task_01",
+            "v1",
+            "sealed",
+            success=1,
+            seconds=5.0,
+            tokens=500,
+            cost_usd=0.05,
+            valid=1,
+            db_path=tmp_db,
+        )
 
         record_decision(
-            proposal_id="p1", outcome="merge", scores_summary="success +0% cost -10%",
-            reason="custo caiu sem perder success", gates_json='{"success_ok": true}',
+            proposal_id="p1",
+            outcome="merge",
+            scores_summary="success +0% cost -10%",
+            reason="custo caiu sem perder success",
+            gates_json='{"success_ok": true}',
             db_path=tmp_db,
         )
 
@@ -923,8 +1078,11 @@ if __name__ == "__main__":
         # ------------------------------------------------- outbound gate
 
         oid = record_outbound_request(
-            to_addr="5511999999999@s.whatsapp.net", body="oi, tudo bem?",
-            requested_by="evolve", context="proposal p1", db_path=tmp_db,
+            to_addr="5511999999999@s.whatsapp.net",
+            body="oi, tudo bem?",
+            requested_by="evolve",
+            context="proposal p1",
+            db_path=tmp_db,
         )
         assert isinstance(oid, int)
 
@@ -936,7 +1094,9 @@ if __name__ == "__main__":
         # gate: sent direto de pending tem que estourar
         try:
             mark_outbound_sent(oid, "wamid.XXX", db_path=tmp_db)
-            assert False, "mark_outbound_sent deveria ter levantado ValueError a partir de pending"
+            raise AssertionError(
+                "mark_outbound_sent deveria ter levantado ValueError a partir de pending"
+            )
         except ValueError:
             pass
 
@@ -951,8 +1111,10 @@ if __name__ == "__main__":
 
         # cancel de pending funciona
         oid2 = record_outbound_request(
-            to_addr="5511777777777@s.whatsapp.net", body="cancela isso",
-            requested_by="cli", db_path=tmp_db,
+            to_addr="5511777777777@s.whatsapp.net",
+            body="cancela isso",
+            requested_by="cli",
+            db_path=tmp_db,
         )
         cancelled = cancel_outbound(oid2, actor="cli", db_path=tmp_db)
         assert cancelled["status"] == "cancelled"
@@ -960,14 +1122,18 @@ if __name__ == "__main__":
         # cancel de item já sent tem que estourar
         try:
             cancel_outbound(oid, actor="cli", db_path=tmp_db)
-            assert False, "cancel_outbound deveria ter levantado ValueError a partir de sent"
+            raise AssertionError(
+                "cancel_outbound deveria ter levantado ValueError a partir de sent"
+            )
         except ValueError:
             pass
 
         # confirm de item já cancelled tem que estourar
         try:
             confirm_outbound(oid2, actor="cli", db_path=tmp_db)
-            assert False, "confirm_outbound deveria ter levantado ValueError a partir de cancelled"
+            raise AssertionError(
+                "confirm_outbound deveria ter levantado ValueError a partir de cancelled"
+            )
         except ValueError:
             pass
 
@@ -986,8 +1152,14 @@ if __name__ == "__main__":
 
         assert session_state("nao-existe", db_path=tmp_db) is None
 
-        record_session("sess-1", project="site-renan", brief_path="briefs/sess-1.md",
-                        status="open", ts="2026-07-30T10:00:00+00:00", db_path=tmp_db)
+        record_session(
+            "sess-1",
+            project="site-renan",
+            brief_path="briefs/sess-1.md",
+            status="open",
+            ts="2026-07-30T10:00:00+00:00",
+            db_path=tmp_db,
+        )
         s1 = session_state("sess-1", db_path=tmp_db)
         assert s1 is not None
         assert s1["project"] == "site-renan"
@@ -996,34 +1168,65 @@ if __name__ == "__main__":
 
         # dois delivery_events na mesma sessão -> session_state traz o mais recente
         record_delivery_event(
-            "sess-1", "site-renan", kind="verify", delivery_success=0,
-            checks_total=5, checks_passed=3, regression_passed=2, regression_total=2,
-            acceptance_passed=1, acceptance_total=3, next_action="corrigir checkout",
-            ts="2026-07-30T11:00:00+00:00", db_path=tmp_db,
+            "sess-1",
+            "site-renan",
+            kind="verify",
+            delivery_success=0,
+            checks_total=5,
+            checks_passed=3,
+            regression_passed=2,
+            regression_total=2,
+            acceptance_passed=1,
+            acceptance_total=3,
+            next_action="corrigir checkout",
+            ts="2026-07-30T11:00:00+00:00",
+            db_path=tmp_db,
         )
         record_delivery_event(
-            "sess-1", "site-renan", kind="post_work", delivery_success=1,
-            checks_total=5, checks_passed=5, regression_passed=2, regression_total=2,
-            acceptance_passed=3, acceptance_total=3, next_action="nenhuma",
-            ts="2026-07-30T12:00:00+00:00", db_path=tmp_db,
+            "sess-1",
+            "site-renan",
+            kind="post_work",
+            delivery_success=1,
+            checks_total=5,
+            checks_passed=5,
+            regression_passed=2,
+            regression_total=2,
+            acceptance_passed=3,
+            acceptance_total=3,
+            next_action="nenhuma",
+            ts="2026-07-30T12:00:00+00:00",
+            db_path=tmp_db,
         )
         s1_after = session_state("sess-1", db_path=tmp_db)
         assert s1_after["last_event"]["kind"] == "post_work"
         assert s1_after["last_event"]["delivery_success"] == 1
 
         # update_session_status muda status e updated
-        updated = update_session_status("sess-1", "done", ts="2026-07-30T13:00:00+00:00", db_path=tmp_db)
+        updated = update_session_status(
+            "sess-1", "done", ts="2026-07-30T13:00:00+00:00", db_path=tmp_db
+        )
         assert updated["status"] == "done"
         assert updated["updated"] == "2026-07-30T13:00:00+00:00"
         # ts original preservado (record_session é idempotente por session_id)
         assert updated["ts"] == "2026-07-30T10:00:00+00:00"
 
         # delivery_history filtra por projeto (2 projetos, sem vazamento)
-        record_session("sess-2", project="crm-cliente-x", brief_path="briefs/sess-2.md", db_path=tmp_db)
+        record_session(
+            "sess-2", project="crm-cliente-x", brief_path="briefs/sess-2.md", db_path=tmp_db
+        )
         record_delivery_event(
-            "sess-2", "crm-cliente-x", kind="verify", delivery_success=1,
-            checks_total=2, checks_passed=2, regression_passed=1, regression_total=1,
-            acceptance_passed=1, acceptance_total=1, next_action="nenhuma", db_path=tmp_db,
+            "sess-2",
+            "crm-cliente-x",
+            kind="verify",
+            delivery_success=1,
+            checks_total=2,
+            checks_passed=2,
+            regression_passed=1,
+            regression_total=1,
+            acceptance_passed=1,
+            acceptance_total=1,
+            next_action="nenhuma",
+            db_path=tmp_db,
         )
         hist_site = delivery_history("site-renan", db_path=tmp_db)
         hist_crm = delivery_history("crm-cliente-x", db_path=tmp_db)
@@ -1038,8 +1241,13 @@ if __name__ == "__main__":
         assert {s["session_id"] for s in recent_sess} == {"sess-1", "sess-2"}
 
         # governança
-        record_governance_event("site-renan", action="approve_deploy", actor="renan",
-                                 detail="ok pra subir", db_path=tmp_db)
+        record_governance_event(
+            "site-renan",
+            action="approve_deploy",
+            actor="renan",
+            detail="ok pra subir",
+            db_path=tmp_db,
+        )
         gov = recent_governance(n=10, db_path=tmp_db)
         assert len(gov) == 1
         assert gov[0]["project"] == "site-renan"

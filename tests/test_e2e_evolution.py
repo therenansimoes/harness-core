@@ -26,7 +26,7 @@ from harness.improve.research import apply_research, propose_research
 from harness.improve.synthesize import synthesize_from_failures
 from harness.ledger import store
 from harness.routing import CONFIG_DIR_ENV
-from harness.skills import load_skills, render_prompt, select_skills
+from harness.skills import render_prompt, select_skills
 from harness.types import RunRow
 
 REPO = Path(__file__).parent.parent
@@ -41,12 +41,27 @@ V1 = "def collect(path):\n    return {'files': 1}\n"
 V2 = "def collect(path):\n    return {'files': 2}\n"
 
 
-def _row(kind: str, ok: bool = False, exit_reason: str = "verify_failed:exit=1",
-         unit_id: str = "u", run_id: str = "r") -> RunRow:
+def _row(
+    kind: str,
+    ok: bool = False,
+    exit_reason: str = "verify_failed:exit=1",
+    unit_id: str = "u",
+    run_id: str = "r",
+) -> RunRow:
     return RunRow(
-        run_id=run_id, unit_id=unit_id, project=None, backend="mock", model=None,
-        tier="t0", kind=kind, ok=ok, exit_reason=exit_reason, sec_total=10.0,
-        sec_provision=0.0, cost_usd=None, intervention=False,
+        run_id=run_id,
+        unit_id=unit_id,
+        project=None,
+        backend="mock",
+        model=None,
+        tier="t0",
+        kind=kind,
+        ok=ok,
+        exit_reason=exit_reason,
+        sec_total=10.0,
+        sec_provision=0.0,
+        cost_usd=None,
+        intervention=False,
         created_at=store.now_iso(),
     )
 
@@ -114,15 +129,15 @@ def test_ciclo_codegen_keep_depois_discard(root: Path):
     # Linhagem: duas propostas (a segunda aponta a primeira como parent)
     # e um evento de veredito por julgamento.
     linhas = [
-        json.loads(l)
-        for l in (root / "data" / "lineage.jsonl").read_text(encoding="utf-8").splitlines()
+        json.loads(ln)
+        for ln in (root / "data" / "lineage.jsonl").read_text(encoding="utf-8").splitlines()
     ]
-    propostas = [l for l in linhas if "target" in l]
-    vereditos = [l for l in linhas if "verdict" in l]
-    assert [l["id"] for l in propostas] == [m1.mutation_id, m2.mutation_id]
+    propostas = [ev for ev in linhas if "target" in ev]
+    vereditos = [ev for ev in linhas if "verdict" in ev]
+    assert [ev["id"] for ev in propostas] == [m1.mutation_id, m2.mutation_id]
     assert propostas[0]["parent_id"] is None
     assert propostas[1]["parent_id"] == m1.mutation_id
-    assert {l["target"] for l in propostas} == {"plugins/kpi_lines.py"}
+    assert {ev["target"] for ev in propostas} == {"plugins/kpi_lines.py"}
     assert {(v["id"], v["verdict"]) for v in vereditos} == {
         (m1.mutation_id, codegen.KEEP),
         (m2.mutation_id, codegen.DISCARD),
@@ -147,15 +162,15 @@ def test_falha_vira_exame_de_quarentena_carregavel(tmp_path):
     units = tmp_path / "held_in"
     (units / "u-falho").mkdir(parents=True)
     (units / "u-falho" / "unit.toml").write_text(
-        'id = "u-falho"\nkind = "code"\n'
-        'prompt = "Conserte o u-falho."\nverify_cmd = "true"\n',
+        'id = "u-falho"\nkind = "code"\nprompt = "Conserte o u-falho."\nverify_cmd = "true"\n',
         encoding="utf-8",
     )
     out = tmp_path / "benchmarks" / "quarantine"
 
     created = synthesize_from_failures(
         [_row("code", unit_id="u-falho", run_id="run-9", exit_reason="verify_failed")],
-        out_dir=out, units_dir=units,
+        out_dir=out,
+        units_dir=units,
     )
 
     assert created == [out / "u-falho"]
@@ -206,5 +221,8 @@ def test_genoma_real_declara_as_zonas_dos_ciclos(tmp_path):
 
     assert mutate.check(_T("skills/x.md"), root=tmp_path, genome=REAL_GENOME) == []
     assert mutate.check(_T("plugins/x.py"), root=tmp_path, genome=REAL_GENOME) == []
-    assert mutate.check(_T("benchmarks/quarantine/u/unit.toml"), root=tmp_path, genome=REAL_GENOME) == []
+    assert (
+        mutate.check(_T("benchmarks/quarantine/u/unit.toml"), root=tmp_path, genome=REAL_GENOME)
+        == []
+    )
     assert mutate.check(_T("harness/ruler/wilson.py"), root=tmp_path, genome=REAL_GENOME) != []

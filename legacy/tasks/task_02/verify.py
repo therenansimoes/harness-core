@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """verify task_02 — summarize.py roda e bate com o golden recomputado. exit 0 = pass."""
+
 import csv
 import subprocess
 import sys
@@ -10,7 +11,8 @@ if not Path("summarize.py").exists():
     print("summarize.py não existe")
     sys.exit(1)
 
-rows = list(csv.DictReader(Path("vendas.csv").open(encoding="utf-8")))
+with Path("vendas.csv").open(encoding="utf-8") as fh:
+    rows = list(csv.DictReader(fh))
 por_produto: dict[str, float] = defaultdict(float)
 for r in rows:
     por_produto[r["produto"]] += float(r["valor"])

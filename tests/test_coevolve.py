@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,6 +20,15 @@ id = "{uid}"
 kind = "code"
 prompt = "escreva a saída"
 verify_cmd = "test -f nao_existe.txt"
+"""
+
+# Só um executor de verdade resolve: sob o mock a unidade sai do screening.
+REAL_TOML = """\
+id = "{uid}"
+kind = "code"
+prompt = "escreva a saída"
+verify_cmd = "test -f nao_existe.txt"
+requires_real_backend = true
 """
 
 
@@ -44,14 +54,26 @@ def test_passa_fica_fora_da_fronteira(tmp_path, data_dir):
     q = tmp_path / "quarantine"
     _mk_unit(q, "q_ok", PASS_TOML)
     frontier_file = tmp_path / "frontier.jsonl"
-    assert coevolve.screen_quarantine(
-        quarantine_dir=q, data_dir=data_dir, frontier_path=frontier_file,
-        clock=lambda: "2026-08-03T00:00:00+00:00",
-    ) == []
-    assert _frontier_rows(frontier_file) == [
-        {"benchmark": "q_ok", "passed": True,
-         "timestamp": "2026-08-03T00:00:00+00:00"}
-    ]
+    assert (
+        coevolve.screen_quarantine(
+            quarantine_dir=q,
+            data_dir=data_dir,
+            frontier_path=frontier_file,
+            clock=lambda: "2026-08-03T00:00:00+00:00",
+        )
+        == []
+    )
+    (row,) = _frontier_rows(frontier_file)
+    sec = row.pop("sec")  # duração real, não determinística
+    assert isinstance(sec, float) and sec >= 0.0
+    assert row == {
+        "benchmark": "q_ok",
+        "passed": True,
+        "timestamp": "2026-08-03T00:00:00+00:00",
+        "backend": "mock",
+        "model": "",
+        "real": False,
+    }
 
 
 def test_falha_entra_na_fronteira(tmp_path, data_dir):
@@ -60,12 +82,15 @@ def test_falha_entra_na_fronteira(tmp_path, data_dir):
     _mk_unit(q, "q_ok", PASS_TOML)
     frontier_file = tmp_path / "frontier.jsonl"
     assert coevolve.screen_quarantine(
-        quarantine_dir=q, data_dir=data_dir, frontier_path=frontier_file,
+        quarantine_dir=q,
+        data_dir=data_dir,
+        frontier_path=frontier_file,
         clock=lambda: "T",
     ) == ["q_bad"]
     rows = _frontier_rows(frontier_file)
     assert [(r["benchmark"], r["passed"]) for r in rows] == [
-        ("q_bad", False), ("q_ok", True)  # ordenado
+        ("q_bad", False),
+        ("q_ok", True),  # ordenado
     ]
 
 
@@ -79,9 +104,10 @@ def test_erro_ao_rodar_e_pulado(tmp_path, data_dir, monkeypatch, capsys):
 
     # coevolve importa run_unit tardiamente: patch no módulo de origem vale.
     monkeypatch.setattr("harness.graph.run_graph.run_unit", boom)
-    assert coevolve.screen_quarantine(
-        quarantine_dir=q, data_dir=data_dir, frontier_path=frontier_file
-    ) == []
+    assert (
+        coevolve.screen_quarantine(quarantine_dir=q, data_dir=data_dir, frontier_path=frontier_file)
+        == []
+    )
     assert "pulado" in capsys.readouterr().err
     assert not frontier_file.exists()  # erro não gera veredito
 
@@ -102,6 +128,67 @@ def test_screen_benchmark_tri_state(tmp_path, data_dir):
     assert coevolve.screen_benchmark(ok, data_dir=data_dir) is True
     assert coevolve.screen_benchmark(bad, data_dir=data_dir) is False
     assert coevolve.screen_benchmark(q / "nao_existe", data_dir=data_dir) is None
+
+
+def test_mock_pula_unidade_que_exige_backend_real(tmp_path, data_dir, capsys):
+    q = tmp_path / "quarantine"
+    unit = _mk_unit(q, "q_real", REAL_TOML)
+    frontier_file = tmp_path / "frontier.jsonl"
+
+    # Sem screening não há veredito: a unidade não vira fronteira por artefato do mock.
+    assert coevolve.screen_benchmark(unit, "mock", "", data_dir) is None
+    assert (
+        coevolve.screen_quarantine(
+            backend="mock", quarantine_dir=q, data_dir=data_dir, frontier_path=frontier_file
+        )
+        == []
+    )
+    assert "exige backend real" in capsys.readouterr().err
+    assert not frontier_file.exists()
+
+
+def test_frontier_usa_backend_da_config_e_registra(tmp_path, data_dir, monkeypatch):
+    from harness.improve import exam
+
+    cfg = tmp_path / "ruler.toml"
+    cfg.write_text('[frontier]\nbackend = "mock2"\nmodel = "m9"\n', encoding="utf-8")
+    monkeypatch.setattr(exam, "EXAM_CONFIG", cfg)
+
+    seen: list[tuple] = []
+
+    def fake_run_unit(unit, backend, model, data, thread_id):
+        seen.append((backend, model))
+        return {"decision": SimpleNamespace(action="accept")}
+
+    monkeypatch.setattr("harness.graph.run_graph.run_unit", fake_run_unit)
+
+    q = tmp_path / "quarantine"
+    _mk_unit(q, "q_cfg", FAIL_TOML)
+    frontier_file = tmp_path / "frontier.jsonl"
+    assert (
+        coevolve.screen_quarantine(
+            quarantine_dir=q, data_dir=data_dir, frontier_path=frontier_file, clock=lambda: "T"
+        )
+        == []
+    )
+    assert seen == [("mock2", "m9")]  # backend do config chegou no run_unit
+    (row,) = _frontier_rows(frontier_file)
+    assert (row["backend"], row["model"], row["real"]) == ("mock2", "m9", True)
+
+
+def test_teto_de_unidades_para_o_screening(tmp_path, data_dir, capsys):
+    q = tmp_path / "quarantine"
+    _mk_unit(q, "q_bad1", FAIL_TOML)
+    _mk_unit(q, "q_bad2", FAIL_TOML)
+    frontier_file = tmp_path / "frontier.jsonl"
+    assert coevolve.screen_quarantine(
+        backend="mock",
+        quarantine_dir=q,
+        data_dir=data_dir,
+        frontier_path=frontier_file,
+        max_units=1,
+    ) == ["q_bad1"]  # o segundo não rodou, logo não é fronteira
+    assert "teto de 1 unidades batido" in capsys.readouterr().err
 
 
 def test_seal_recusa_candidato_fora_da_fronteira(tmp_path, data_dir, monkeypatch, capsys):

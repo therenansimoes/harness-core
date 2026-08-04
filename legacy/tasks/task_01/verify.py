@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """verify task_01 — README com seções obrigatórias. exit 0 = pass."""
+
 import re
 import sys
 from pathlib import Path

@@ -1,4 +1,5 @@
 """Regression: index.html precisa linkar style.css, e o arquivo tem que existir."""
+
 import sys
 from html.parser import HTMLParser
 from pathlib import Path

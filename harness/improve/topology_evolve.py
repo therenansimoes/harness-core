@@ -19,9 +19,10 @@ kind tem corpo próprio e o default continua intocado.
 from __future__ import annotations
 
 import tomllib
+from collections.abc import Mapping
 from pathlib import Path
 from random import Random
-from typing import Any, Mapping
+from typing import Any
 
 from harness.graph import by_kind, topology
 from harness.improve import actions, root_dir
@@ -35,11 +36,7 @@ OPERATORS: frozenset[str] = frozenset(
 
 
 def _load_full(root: Path | str | None, spec_path: Path | str | None) -> dict:
-    p = (
-        Path(spec_path)
-        if spec_path is not None
-        else root_dir(root) / actions.TOPOLOGY_FILE
-    )
+    p = Path(spec_path) if spec_path is not None else root_dir(root) / actions.TOPOLOGY_FILE
     return tomllib.loads(p.read_text(encoding="utf-8"))
 
 
@@ -75,8 +72,8 @@ def _insert_node(
     node = rng.choice(candidates)
     idx = rng.choice(slots)
     src, dst = pairs[idx]
-    new_pairs = pairs[:idx] + [(src, node), (node, dst)] + pairs[idx + 1 :]
-    return nodes + [node], new_pairs, f"insert:{node}@{src}->{dst}"
+    new_pairs = [*pairs[:idx], (src, node), (node, dst), *pairs[idx + 1 :]]
+    return [*nodes, node], new_pairs, f"insert:{node}@{src}->{dst}"
 
 
 def _remove_node(
@@ -84,19 +81,15 @@ def _remove_node(
 ) -> tuple[list[str], list[tuple[str, str]], str] | None:
     """Só insertable com grau 1/1: religar src→dst é inequívoco. Nó de espinha
     ou terminal nunca sai — quem tira `verify` do grafo não está evoluindo."""
-    candidates = [
-        n for n in sorted(set(nodes) & gram.INSERTABLE) if _degrees(pairs, n) == (1, 1)
-    ]
+    candidates = [n for n in sorted(set(nodes) & gram.INSERTABLE) if _degrees(pairs, n) == (1, 1)]
     if not candidates:
         return None
     node = rng.choice(candidates)
     src = next(s for s, d in pairs if d == node)
     dst = next(d for s, d in pairs if s == node)
     new_pairs = [(s, d) for s, d in pairs if node not in (s, d)]
-    idx = next(
-        (i for i, (s, _) in enumerate(new_pairs) if s == src), len(new_pairs)
-    )
-    new_pairs = new_pairs[:idx] + [(src, dst)] + new_pairs[idx:]
+    idx = next((i for i, (s, _) in enumerate(new_pairs) if s == src), len(new_pairs))
+    new_pairs = [*new_pairs[:idx], (src, dst), *new_pairs[idx:]]
     return [n for n in nodes if n != node], new_pairs, f"remove:{node}@{src}->{dst}"
 
 
@@ -121,7 +114,7 @@ def _rewire_edge(
         return None
     idx, dst_new = rng.choice(options)
     src, dst_old = pairs[idx]
-    new_pairs = pairs[:idx] + [(src, dst_new)] + pairs[idx + 1 :]
+    new_pairs = [*pairs[:idx], (src, dst_new), *pairs[idx + 1 :]]
     return nodes, new_pairs, f"rewire:{src}->{dst_new} (era {dst_old})"
 
 
@@ -140,12 +133,8 @@ def _split_parallel(
     n1, n2 = sorted(rng.sample(available, 2))
     idx = rng.choice(slots)
     src, dst = pairs[idx]
-    new_pairs = (
-        pairs[:idx]
-        + [(src, n1), (src, n2), (n1, dst), (n2, dst)]
-        + pairs[idx + 1 :]
-    )
-    return nodes + [n1, n2], new_pairs, f"split:{n1}|{n2}@{src}->{dst}"
+    new_pairs = [*pairs[:idx], (src, n1), (src, n2), (n1, dst), (n2, dst), *pairs[idx + 1 :]]
+    return [*nodes, n1, n2], new_pairs, f"split:{n1}|{n2}@{src}->{dst}"
 
 
 _APPLY = {

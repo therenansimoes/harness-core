@@ -8,6 +8,7 @@ erra na vida real.
 
     python3 -m pytest tests/test_profile.py -q
 """
+
 from __future__ import annotations
 
 import sys
@@ -35,10 +36,13 @@ def _mkrepo(tmp_path: Path, files: dict[str, str]) -> Path:
 
 
 def test_python_pyproject_com_pytest(tmp_path):
-    repo = _mkrepo(tmp_path, {
-        "pyproject.toml": "[project]\nname = \"x\"\n\n[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\n",
-        "tests/test_x.py": "def test_x(): assert True\n",
-    })
+    repo = _mkrepo(
+        tmp_path,
+        {
+            "pyproject.toml": '[project]\nname = "x"\n\n[tool.pytest.ini_options]\ntestpaths = ["tests"]\n',
+            "tests/test_x.py": "def test_x(): assert True\n",
+        },
+    )
     prof = profile_mod.detect(repo)
     assert prof.stack == "python-pytest"
     assert prof.test_cmd == "pytest"
@@ -46,10 +50,13 @@ def test_python_pyproject_com_pytest(tmp_path):
 
 
 def test_node_com_script_e_lockfile(tmp_path):
-    repo = _mkrepo(tmp_path, {
-        "package.json": '{"name": "x", "scripts": {"test": "jest", "lint": "eslint ."}}',
-        "package-lock.json": "{}",
-    })
+    repo = _mkrepo(
+        tmp_path,
+        {
+            "package.json": '{"name": "x", "scripts": {"test": "jest", "lint": "eslint ."}}',
+            "package-lock.json": "{}",
+        },
+    )
     prof = profile_mod.detect(repo)
     assert prof.stack == "npm"
     assert prof.test_cmd == "npm test"
@@ -58,11 +65,14 @@ def test_node_com_script_e_lockfile(tmp_path):
 
 
 def test_node_stub_do_npm_init_nao_conta(tmp_path):
-    repo = _mkrepo(tmp_path, {
-        "package.json": '{"name": "x", "scripts": '
-                        '{"test": "echo \\"Error: no test specified\\" && exit 1"}}',
-        "package-lock.json": "{}",
-    })
+    repo = _mkrepo(
+        tmp_path,
+        {
+            "package.json": '{"name": "x", "scripts": '
+            '{"test": "echo \\"Error: no test specified\\" && exit 1"}}',
+            "package-lock.json": "{}",
+        },
+    )
     prof = profile_mod.detect(repo)
     assert prof.test_cmd is None
     assert prof.stack == "unknown"
@@ -74,11 +84,14 @@ def test_node_script_sem_lockfile_nao_conta(tmp_path):
 
 
 def test_makefile_vence_linguagem(tmp_path):
-    repo = _mkrepo(tmp_path, {
-        "Makefile": "help:\n\t@echo hi\n\ntest:\n\tpytest -q\n",
-        "pyproject.toml": "[tool.pytest.ini_options]\n",
-        "tests/test_x.py": "def test_x(): assert True\n",
-    })
+    repo = _mkrepo(
+        tmp_path,
+        {
+            "Makefile": "help:\n\t@echo hi\n\ntest:\n\tpytest -q\n",
+            "pyproject.toml": "[tool.pytest.ini_options]\n",
+            "tests/test_x.py": "def test_x(): assert True\n",
+        },
+    )
     prof = profile_mod.detect(repo)
     assert prof.stack == "make"
     assert prof.test_cmd == "make test"
@@ -87,10 +100,13 @@ def test_makefile_vence_linguagem(tmp_path):
 
 def test_makefile_sem_alvo_test_nao_conta(tmp_path):
     """Marcador fantasma: Makefile só com `docs:` não implica `make test`."""
-    repo = _mkrepo(tmp_path, {
-        "Makefile": "docs:\n\tsphinx-build docs out\n",
-        "pyproject.toml": "[tool.pytest.ini_options]\n",
-    })
+    repo = _mkrepo(
+        tmp_path,
+        {
+            "Makefile": "docs:\n\tsphinx-build docs out\n",
+            "pyproject.toml": "[tool.pytest.ini_options]\n",
+        },
+    )
     assert profile_mod.detect(repo).test_cmd == "pytest"
 
 
@@ -103,10 +119,13 @@ def test_repo_vazio(tmp_path):
 
 
 def test_uv_lock_vence_pytest_puro(tmp_path):
-    repo = _mkrepo(tmp_path, {
-        "pyproject.toml": "[tool.pytest.ini_options]\n\n[tool.ruff]\nline-length = 100\n",
-        "uv.lock": "version = 1\n",
-    })
+    repo = _mkrepo(
+        tmp_path,
+        {
+            "pyproject.toml": "[tool.pytest.ini_options]\n\n[tool.ruff]\nline-length = 100\n",
+            "uv.lock": "version = 1\n",
+        },
+    )
     prof = profile_mod.detect(repo)
     assert prof.stack == "python-uv"
     assert prof.test_cmd == "uv run pytest"
@@ -114,11 +133,14 @@ def test_uv_lock_vence_pytest_puro(tmp_path):
 
 
 def test_workspace_antes_de_linguagem(tmp_path):
-    repo = _mkrepo(tmp_path, {
-        "pnpm-workspace.yaml": "packages:\n  - 'apps/*'\n",
-        "package.json": '{"scripts": {"test": "jest"}}',
-        "pnpm-lock.yaml": "",
-    })
+    repo = _mkrepo(
+        tmp_path,
+        {
+            "pnpm-workspace.yaml": "packages:\n  - 'apps/*'\n",
+            "package.json": '{"scripts": {"test": "jest"}}',
+            "pnpm-lock.yaml": "",
+        },
+    )
     prof = profile_mod.detect(repo)
     assert prof.stack == "pnpm-workspace"
     assert prof.test_cmd == "pnpm -r test"
@@ -150,10 +172,13 @@ def test_conventions_truncado(tmp_path):
 
 
 def test_write_e_load_profile(tmp_path):
-    repo = _mkrepo(tmp_path, {
-        "pyproject.toml": "[tool.pytest.ini_options]\n",
-        "CLAUDE.md": 'aspas " e \\ barra\nquebra',
-    })
+    repo = _mkrepo(
+        tmp_path,
+        {
+            "pyproject.toml": "[tool.pytest.ini_options]\n",
+            "CLAUDE.md": 'aspas " e \\ barra\nquebra',
+        },
+    )
     out = profile_mod.write_profile(repo)
     assert out == repo / ".harness" / "profile.toml"
 
@@ -187,10 +212,13 @@ def test_prompt_block_vazio_para_unknown(tmp_path):
 def test_agent_injeta_bloco_no_system_prompt(tmp_path):
     import agent
 
-    repo = _mkrepo(tmp_path, {
-        "pyproject.toml": "[tool.pytest.ini_options]\n",
-        "AGENTS.md": "commit em português",
-    })
+    repo = _mkrepo(
+        tmp_path,
+        {
+            "pyproject.toml": "[tool.pytest.ini_options]\n",
+            "AGENTS.md": "commit em português",
+        },
+    )
     sp = agent._system_prompt(repo)
     assert sp.startswith(agent.SYSTEM_PROMPT)
     assert "stack python-pytest" in sp

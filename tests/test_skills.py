@@ -64,10 +64,30 @@ def test_select_by_kind_and_empty_kinds_match_all(tmp_path):
 
 
 def _four_skills(root: Path) -> None:
-    _write(root, "a_html.md", 'name = "html-edit"\nkinds = ["code"]\ndescription = "d"', "Editar template HTML: mexa no markup do arquivo index.")
-    _write(root, "b_ledger.md", 'name = "ledger-sqlite"\nkinds = ["code"]\ndescription = "d"', "Migração de schema sqlite, transação e índice no banco.")
-    _write(root, "c_markup.md", 'name = "markup-css"\nkinds = []\ndescription = "markup e css do template"', "Classe utilitária no css.")
-    _write(root, "d_graph.md", 'name = "langgraph-idioms"\nkinds = ["code"]\ndescription = "d"', "Nó do grafo, checkpoint e reducer de estado.")
+    _write(
+        root,
+        "a_html.md",
+        'name = "html-edit"\nkinds = ["code"]\ndescription = "d"',
+        "Editar template HTML: mexa no markup do arquivo index.",
+    )
+    _write(
+        root,
+        "b_ledger.md",
+        'name = "ledger-sqlite"\nkinds = ["code"]\ndescription = "d"',
+        "Migração de schema sqlite, transação e índice no banco.",
+    )
+    _write(
+        root,
+        "c_markup.md",
+        'name = "markup-css"\nkinds = []\ndescription = "markup e css do template"',
+        "Classe utilitária no css.",
+    )
+    _write(
+        root,
+        "d_graph.md",
+        'name = "langgraph-idioms"\nkinds = ["code"]\ndescription = "d"',
+        "Nó do grafo, checkpoint e reducer de estado.",
+    )
 
 
 def test_select_ranks_by_query_overlap_and_caps(tmp_path):
@@ -353,7 +373,7 @@ def test_backend_extrai_files_do_prompt_e_dispara_path_trigger(monkeypatch, tmp_
         ExecRequest(prompt=prompt, workspace=tmp_path / "ws", max_turns=2, kind="config")
     )
     assert seen["files"] == ["config/genome.toml"]
-    assert seen["query"] == prompt   # o ranking continua recebendo o prompt
+    assert seen["query"] == prompt  # o ranking continua recebendo o prompt
 
     # E com esse `files` a skill versionada de .toml ganha a fila de verdade.
     got = select_skills("config", REPO_SKILLS, query=prompt, files=seen["files"])

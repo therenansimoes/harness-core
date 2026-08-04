@@ -11,8 +11,8 @@ import math
 from dataclasses import dataclass
 from typing import Literal
 
-Z = 1.96      # 95%
-MIN_N = 6     # tentativas por braço para a régua opinar
+Z = 1.96  # 95%
+MIN_N = 6  # tentativas por braço para a régua opinar
 
 AbVerdict = Literal["KEEP", "DISCARD", "INCONCLUSIVE"]
 KEEP, DISCARD, INCONCLUSIVE = "KEEP", "DISCARD", "INCONCLUSIVE"

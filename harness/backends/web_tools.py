@@ -17,7 +17,6 @@ import hashlib
 import html
 import re
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.parse
@@ -59,7 +58,14 @@ BROWSER_UA = (
 DDG_HTML = "https://html.duckduckgo.com/html/?q="
 DDG_LITE = "https://lite.duckduckgo.com/lite/?q="
 
-TEXTUAL = ("text/", "application/json", "application/xml", "application/xhtml", "+xml", "javascript")
+TEXTUAL = (
+    "text/",
+    "application/json",
+    "application/xml",
+    "application/xhtml",
+    "+xml",
+    "javascript",
+)
 
 _busca_ultima = 0.0
 _busca_gastas = 0
@@ -181,7 +187,9 @@ def web_fetch(
         return f"tipo {ctype}, {len(corpo)} bytes"
 
     bruto = corpo.decode("utf-8", "replace")
-    texto = extract_text(bruto) if "html" in ctype or "<html" in bruto[:2048].lower() else bruto.strip()
+    texto = (
+        extract_text(bruto) if "html" in ctype or "<html" in bruto[:2048].lower() else bruto.strip()
+    )
     if truncou:
         texto += f"\n\n[truncado em {MAX_BYTES} bytes baixados]"
     cache = _grava_cache(ws, url, texto)
@@ -284,7 +292,9 @@ def web_search(
                 f"{i}. {r['title']}\n   {r['url']}\n   {r['snippet']}"
                 for i, r in enumerate(resultados, 1)
             ]
-            return f"{UNTRUSTED_HEADER}\nbusca: {q}\n\n" + "\n".join(linhas) + f"\n{UNTRUSTED_FOOTER}"
+            return (
+                f"{UNTRUSTED_HEADER}\nbusca: {q}\n\n" + "\n".join(linhas) + f"\n{UNTRUSTED_FOOTER}"
+            )
         problemas.append(f"{urllib.parse.urlsplit(fonte).netloc}: 0 resultados")
 
     # fail-open: busca vazia não derruba o run, só informa.
@@ -410,7 +420,11 @@ def load_web_tools(workspace: str | Path = ".", config_path: str | Path = CONFIG
             return browse(url, workspace, cfg=cfg)
 
         # `tool` usa o nome da função; o modelo tem que ver web_fetch/web_search/browse.
-        web_fetch_tool.name, web_search_tool.name, browse_tool.name = "web_fetch", "web_search", "browse"
+        web_fetch_tool.name, web_search_tool.name, browse_tool.name = (
+            "web_fetch",
+            "web_search",
+            "browse",
+        )
         tools = [web_fetch_tool, web_search_tool]
         if cfg.browse_enabled:
             tools.append(browse_tool)

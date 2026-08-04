@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 from harness.graph.state import Budget, Decision
 from harness.types import ExecResult, Selection, UnitSpec, Verdict
@@ -46,8 +46,6 @@ def open_checkpointer(data_dir: Path) -> Iterator[object]:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, check_same_thread=False)
     try:
-        yield SqliteSaver(
-            conn, serde=JsonPlusSerializer(allowed_msgpack_modules=ALLOWED_TYPES)
-        )
+        yield SqliteSaver(conn, serde=JsonPlusSerializer(allowed_msgpack_modules=ALLOWED_TYPES))
     finally:
         conn.close()

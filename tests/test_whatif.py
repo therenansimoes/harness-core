@@ -55,10 +55,19 @@ def _unit(root: Path, name: str, template: str) -> None:
 
 def _fail(unit_id: str, **over) -> RunRow:
     base = {
-        "run_id": f"run-{unit_id}", "unit_id": unit_id, "project": None,
-        "backend": "mock", "model": None, "tier": "tier0", "kind": "code",
-        "ok": False, "exit_reason": "verify_failed", "sec_total": 1.0,
-        "sec_provision": 0.1, "cost_usd": 0.0, "intervention": False,
+        "run_id": f"run-{unit_id}",
+        "unit_id": unit_id,
+        "project": None,
+        "backend": "mock",
+        "model": None,
+        "tier": "tier0",
+        "kind": "code",
+        "ok": False,
+        "exit_reason": "verify_failed",
+        "sec_total": 1.0,
+        "sec_provision": 0.1,
+        "cost_usd": 0.0,
+        "intervention": False,
         "created_at": store.now_iso(),
     }
     base.update(over)
@@ -115,7 +124,7 @@ def test_ledger_real_inalterado(data_dir, root):
     report = counterfactual.whatif(root=root)
     depois = len(store.history(limit=1000))
 
-    assert report.rescued == 1          # rodou de verdade
+    assert report.rescued == 1  # rodou de verdade
     assert antes == depois == 2
 
 
@@ -142,9 +151,7 @@ def test_env_data_dir_restaurada(data_dir, root, monkeypatch):
 
 def test_dedupe_por_unidade(data_dir, root):
     """Mesma unidade falha 3x: um caso, não três."""
-    _seed(
-        _fail("u_a", run_id="r1"), _fail("u_a", run_id="r2"), _fail("u_a", run_id="r3")
-    )
+    _seed(_fail("u_a", run_id="r1"), _fail("u_a", run_id="r2"), _fail("u_a", run_id="r3"))
     _unit(root, "u_a", SALVA_TOML)
 
     report = counterfactual.whatif(root=root)

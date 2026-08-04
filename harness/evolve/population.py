@@ -7,8 +7,8 @@ harness). Nada aqui chama backend. `rng` sempre injetado: determinismo em teste.
 from __future__ import annotations
 
 import random
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from harness.ruler.wilson import wilson_interval
 

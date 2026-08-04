@@ -79,17 +79,31 @@ def db(sandbox: Path) -> Path:
 
 def row(exit_reason: str = "verify_failed", sec: float = 10.0) -> RunRow:
     return RunRow(
-        run_id="r", unit_id="u", project=None, backend="mock", model=None,
-        tier="t0", kind="code", ok=False, exit_reason=exit_reason, sec_total=sec,
-        sec_provision=0.0, cost_usd=None, intervention=False,
+        run_id="r",
+        unit_id="u",
+        project=None,
+        backend="mock",
+        model=None,
+        tier="t0",
+        kind="code",
+        ok=False,
+        exit_reason=exit_reason,
+        sec_total=sec,
+        sec_provision=0.0,
+        cost_usd=None,
+        intervention=False,
         created_at=store.now_iso(),
     )
 
 
 def rule(id_: str = "r") -> Rule:
     return Rule(
-        id=id_, target_file="config/models.toml", key=KNOB,
-        from_value=0.50, to_value=0.65, fails_on=("verify_failed",),
+        id=id_,
+        target_file="config/models.toml",
+        key=KNOB,
+        from_value=0.50,
+        to_value=0.65,
+        fails_on=("verify_failed",),
     )
 
 
@@ -98,10 +112,20 @@ def seed_failures(sandbox: Path, n: int = 3) -> None:
     for i in range(n):
         store.record_run(
             RunRow(
-                run_id=f"seed{i}", unit_id="echo", project=None, backend="mock",
-                model=None, tier="t0", kind="code", ok=False,
-                exit_reason="verify_failed", sec_total=10.0, sec_provision=0.0,
-                cost_usd=0.0, intervention=False, created_at=store.now_iso(),
+                run_id=f"seed{i}",
+                unit_id="echo",
+                project=None,
+                backend="mock",
+                model=None,
+                tier="t0",
+                kind="code",
+                ok=False,
+                exit_reason="verify_failed",
+                sec_total=10.0,
+                sec_provision=0.0,
+                cost_usd=0.0,
+                intervention=False,
+                created_at=store.now_iso(),
             ),
             path=db(sandbox),
         )
@@ -114,8 +138,7 @@ def test_symlink_para_o_catalogo_e_self_edit(sandbox):
     """`config/alias.toml -> catalog.toml` casa `config/*.toml` e passaria batido
     se o self_edit comparasse o path escrito no catálogo em vez do resolvido."""
     (sandbox / "config" / "alias.toml").symlink_to("catalog.toml")
-    r = Rule(id="x", target_file="config/alias.toml", key=KNOB,
-             from_value=0.50, to_value=0.65)
+    r = Rule(id="x", target_file="config/alias.toml", key=KNOB, from_value=0.50, to_value=0.65)
 
     violations = mutate.check(r, root=sandbox)
 
@@ -125,8 +148,7 @@ def test_symlink_para_o_catalogo_e_self_edit(sandbox):
 def test_regra_apontada_pro_genoma_e_self_edit(sandbox):
     """O genoma também é `config/*.toml`: quem edita a lista do que pode mudar
     se dá permissão para o que quiser."""
-    r = Rule(id="x", target_file="config/genome.toml", key="immutable",
-             from_value=1, to_value=2)
+    r = Rule(id="x", target_file="config/genome.toml", key="immutable", from_value=1, to_value=2)
 
     violations = mutate.check(r, root=sandbox)
 
@@ -134,8 +156,13 @@ def test_regra_apontada_pro_genoma_e_self_edit(sandbox):
 
 
 def test_path_com_volta_normaliza_antes_do_self_edit(sandbox):
-    r = Rule(id="x", target_file="config/../config/catalog.toml", key=KNOB,
-             from_value=0.50, to_value=0.65)
+    r = Rule(
+        id="x",
+        target_file="config/../config/catalog.toml",
+        key=KNOB,
+        from_value=0.50,
+        to_value=0.65,
+    )
 
     assert mutate.check(r, root=sandbox) == [f"{mutate.SELF_EDIT}:config/catalog.toml"]
 
@@ -162,16 +189,19 @@ def test_dois_inconclusive_derrubam_o_prior_ate_o_alvo_sumir():
     não muda o prior, o ganho não muda, a mesma regra é escolhida de novo."""
     history = [row()] * 4
     catalog = [rule()]
-    cfg = {"min_gain": 0.0004}          # entre o ganho de prior 0.50 e o de 0.25
+    cfg = {"min_gain": 0.0004}  # entre o ganho de prior 0.50 e o de 0.25
 
     assert pick_target(history, catalog, cfg).gain == pytest.approx(
         4 / 4 * 10.0 * DEFAULTS["sec_cost_usd"] * 0.5
     )
 
-    empatou = with_ledger_priors(catalog, [
-        MutationRow("m1", "r", "INCONCLUSIVE", "3/6", "3/6", "t", True),
-        MutationRow("m2", "r", "INCONCLUSIVE", "4/6", "4/6", "t", True),
-    ])
+    empatou = with_ledger_priors(
+        catalog,
+        [
+            MutationRow("m1", "r", "INCONCLUSIVE", "3/6", "3/6", "t", True),
+            MutationRow("m2", "r", "INCONCLUSIVE", "4/6", "4/6", "t", True),
+        ],
+    )
 
     assert (empatou[0].prior_succ, empatou[0].prior_n) == (0, 2)
     assert empatou[0].prior() == pytest.approx(0.25)
@@ -183,8 +213,18 @@ def test_regra_rejeitada_pelo_genoma_sai_da_fila():
     """REJECTED não é veredito da régua: é parede. Insistir bate na mesma."""
     out = with_ledger_priors(
         [rule("barrada"), rule("livre")],
-        [MutationRow("m1", "barrada", "REJECTED", "0/0", "0/0", "t", False,
-                     "genome:self_edit:config/catalog.toml")],
+        [
+            MutationRow(
+                "m1",
+                "barrada",
+                "REJECTED",
+                "0/0",
+                "0/0",
+                "t",
+                False,
+                "genome:self_edit:config/catalog.toml",
+            )
+        ],
     )
 
     assert [r.id for r in out] == ["livre"]
@@ -203,8 +243,12 @@ def crash_after_apply(sandbox: Path, rule_id: str = "floor_up") -> None:
     store.record_node(
         "improve-crash",
         autopilot_graph.APPLY_NODE,
-        {"rule_id": m.rule_id, "mutation_id": m.mutation_id,
-         "target_file": m.target_file, "key": m.key},
+        {
+            "rule_id": m.rule_id,
+            "mutation_id": m.mutation_id,
+            "target_file": m.target_file,
+            "key": m.key,
+        },
         path=db(sandbox),
     )
 
@@ -215,7 +259,7 @@ def test_start_recusa_config_sujo(sandbox):
     crash_after_apply(sandbox)
     assert mutate.read_value(sandbox / "config" / "models.toml", KNOB) == 0.65
 
-    with pytest.raises(ValueError, match="mutação pendente.*floor_up"):
+    with pytest.raises(ValueError, match=r"mutação pendente.*floor_up"):
         run_autopilot(sandbox / "data", units=[UNIT], root=sandbox)
 
 
@@ -227,9 +271,7 @@ def test_start_aceita_to_igual_ao_baseline_sem_rastro_de_apply(sandbox):
     pendente" num repo em que ninguém aplicou nada. Sem marcador de `apply` e
     sem ABORTED no ledger, não há aplicação para acusar.
     """
-    (sandbox / "config" / "catalog.toml").write_text(
-        CATALOG_TO_IGUAL_AO_BASELINE, encoding="utf-8"
-    )
+    (sandbox / "config" / "catalog.toml").write_text(CATALOG_TO_IGUAL_AO_BASELINE, encoding="utf-8")
     assert mutate.read_value(sandbox / "config" / "models.toml", KNOB) == 0.50
 
     rules, _ = load_catalog(root=sandbox)
@@ -250,7 +292,7 @@ def test_start_recusa_aborted_nao_revertida(sandbox):
         path=db(sandbox),
     )
 
-    with pytest.raises(ValueError, match="mutação pendente.*floor_up"):
+    with pytest.raises(ValueError, match=r"mutação pendente.*floor_up"):
         run_autopilot(sandbox / "data", units=[UNIT], root=sandbox)
 
 
@@ -279,8 +321,12 @@ def test_keep_antigo_nao_vira_pendencia_depois_de_500_mutacoes(sandbox):
     store.record_node(
         "improve-antigo",
         autopilot_graph.APPLY_NODE,
-        {"rule_id": m.rule_id, "mutation_id": m.mutation_id,
-         "target_file": m.target_file, "key": m.key},
+        {
+            "rule_id": m.rule_id,
+            "mutation_id": m.mutation_id,
+            "target_file": m.target_file,
+            "key": m.key,
+        },
         path=db(sandbox),
     )
     store.record_mutation(
@@ -289,10 +335,9 @@ def test_keep_antigo_nao_vira_pendencia_depois_de_500_mutacoes(sandbox):
     )
     assert autopilot_graph._pending_rules(rules, sandbox, db(sandbox)) == []
 
-    for i in range(500):                     # experimentos de OUTRA regra depois
+    for i in range(500):  # experimentos de OUTRA regra depois
         store.record_mutation(
-            MutationRow(f"outra-{i:04d}", "outra_regra", "REVERT", "3/6", "3/6",
-                        "t", True),
+            MutationRow(f"outra-{i:04d}", "outra_regra", "REVERT", "3/6", "3/6", "t", True),
             path=db(sandbox),
         )
 
@@ -353,10 +398,19 @@ def test_resume_nao_reimprime_escalacao_ja_respondida(sandbox, capsys):
     assert "escalate no_gradient" in err
     thread = err.split("thread=")[1].split()[0]
 
-    rc = cli.main([
-        "improve", "--unit", str(UNIT), "--backend", "mock",
-        "--resume", thread, "--answer", '{"action":"abort"}',
-    ])
+    rc = cli.main(
+        [
+            "improve",
+            "--unit",
+            str(UNIT),
+            "--backend",
+            "mock",
+            "--resume",
+            thread,
+            "--answer",
+            '{"action":"abort"}',
+        ]
+    )
 
     assert rc == 0
     assert "escalate" not in capsys.readouterr().err
@@ -399,7 +453,7 @@ def test_deadline_no_meio_do_ab_aborta_reverte_e_escala(sandbox, monkeypatch):
     # o ponto do fix: a parada é DENTRO do experimento, não na entrada de um nó
     assert report.escalation["evidence"]["node"] == "fanout_ab"
     assert report.escalation["evidence"]["reverted"] is True
-    assert alvo.read_bytes() == antes          # revert imediato, sem esperar o humano
+    assert alvo.read_bytes() == antes  # revert imediato, sem esperar o humano
 
     runs = [r for r in store.history(path=db(sandbox), limit=100) if r.run_id[:4] != "seed"]
     assert 0 < len(runs) < 12, "o A/B tem que ter começado e não ter terminado"
@@ -409,14 +463,18 @@ def test_deadline_no_meio_do_ab_aborta_reverte_e_escala(sandbox, monkeypatch):
     assert [(m.verdict, m.reverted, m.note) for m in parado] == [("ABORTED", True, "deadline")]
 
     fim = run_autopilot(
-        sandbox / "data", units=[UNIT], root=sandbox, backend="mock",
-        thread_id=report.thread_id, resume={"action": escalate.ABORT},
+        sandbox / "data",
+        units=[UNIT],
+        root=sandbox,
+        backend="mock",
+        thread_id=report.thread_id,
+        resume={"action": escalate.ABORT},
     )
 
-    assert len(store.mutations(path=db(sandbox))) == 1   # o resume não duplica
+    assert len(store.mutations(path=db(sandbox))) == 1  # o resume não duplica
     linha = store.mutations(path=db(sandbox))[0]
     assert (linha.verdict, linha.reverted, linha.note) == ("ABORTED", True, "deadline")
-    assert fim.results[0]["arm_a"] == "0/0"    # braço parcial não vira amostra
+    assert fim.results[0]["arm_a"] == "0/0"  # braço parcial não vira amostra
     assert alvo.read_bytes() == antes
 
 
@@ -428,10 +486,19 @@ def test_deadline_s_zero_nao_e_sem_deadline(sandbox, capsys):
     seed_failures(sandbox)
     antes = (sandbox / "config" / "models.toml").read_bytes()
 
-    rc = cli.main([
-        "improve", "--cycles", "1", "--deadline-s", "0",
-        "--unit", str(UNIT), "--backend", "mock",
-    ])
+    rc = cli.main(
+        [
+            "improve",
+            "--cycles",
+            "1",
+            "--deadline-s",
+            "0",
+            "--unit",
+            str(UNIT),
+            "--backend",
+            "mock",
+        ]
+    )
 
     assert rc == 0
     assert "escalate deadline" in capsys.readouterr().err

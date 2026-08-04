@@ -234,7 +234,7 @@ class SmartFilesystemMiddleware(FilesystemMiddleware):
                 return None
             full = self.backend.read(validate_path(file_path), 0, total)
             size = len(full.file_data["content"].encode("utf-8")) if full.file_data else 0
-        except Exception:  # noqa: BLE001 - guarda de contexto não derruba leitura
+        except Exception:
             return None
         notice = (
             f"\n[guarda de contexto] mostrando as primeiras {min(GUARD_HEAD_LINES, total)} linhas. "
@@ -276,7 +276,7 @@ class SmartFilesystemMiddleware(FilesystemMiddleware):
             total = probe.total_lines or 1
             full = self.backend.read(path, 0, total)
             return full.file_data["content"] if full.file_data else None
-        except Exception:  # noqa: BLE001 - guarda nunca derruba a tool
+        except Exception:
             return None
 
     # ---------------------------------------------------------------- write #

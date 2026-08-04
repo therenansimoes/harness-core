@@ -38,10 +38,20 @@ def sandbox(tmp_path, monkeypatch):
 
 def run_row(unit_id: str, ok: bool = False, reason: str = "verify_failed") -> RunRow:
     return RunRow(
-        run_id=f"r-{unit_id}-{reason}", unit_id=unit_id, project=None,
-        backend="mock", model=None, tier="t0", kind="code", ok=ok,
-        exit_reason=reason, sec_total=10.0, sec_provision=0.0, cost_usd=0.0,
-        intervention=False, created_at=store.now_iso(),
+        run_id=f"r-{unit_id}-{reason}",
+        unit_id=unit_id,
+        project=None,
+        backend="mock",
+        model=None,
+        tier="t0",
+        kind="code",
+        ok=ok,
+        exit_reason=reason,
+        sec_total=10.0,
+        sec_provision=0.0,
+        cost_usd=0.0,
+        intervention=False,
+        created_at=store.now_iso(),
     )
 
 
@@ -115,7 +125,7 @@ def sem_reflect(sandbox: Path) -> Path:
         adapters.render_topology(
             {
                 "nodes": [n for n in spec["nodes"] if n != "reflect"],
-                "edges": [list(e) for e in edges + [("retry", "route")]],
+                "edges": [list(e) for e in [*edges, ("retry", "route")]],
             }
         ),
         encoding="utf-8",
@@ -210,8 +220,11 @@ hypothesis = "sintética: knob comum"
 
 def apply_state(rule_id: str) -> dict:
     return {
-        "cycle": 1, "cycles": 1, "units": ["echo"],
-        "target": {"rule_id": rule_id}, "mutation": None,
+        "cycle": 1,
+        "cycles": 1,
+        "units": ["echo"],
+        "target": {"rule_id": rule_id},
+        "mutation": None,
         "budget": Budget(),
     }
 

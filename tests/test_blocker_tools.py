@@ -32,9 +32,7 @@ def test_detail_vazio_nao_grava(tmp_path):
 
 
 def test_declare_grava_sidecar_sem_deixar_tmp(tmp_path):
-    out = _tool(tmp_path).invoke(
-        {"type": "needs_user_input", "detail": "faltou a chave da API"}
-    )
+    out = _tool(tmp_path).invoke({"type": "needs_user_input", "detail": "faltou a chave da API"})
     assert "needs_user_input" in out
     assert bt.read_blocker(tmp_path) == ("needs_user_input", "faltou a chave da API")
     # tmp irmão + os.replace: nada de arquivo meio escrito sobrando.
@@ -70,9 +68,7 @@ def backend_falso(monkeypatch):
     monkeypatch.setattr(da, "_import_deepagents", lambda: None)
 
     def montar(efeito):
-        monkeypatch.setattr(
-            da, "_build_agent", lambda req: (_FakeAgent(efeito), object())
-        )
+        monkeypatch.setattr(da, "_build_agent", lambda req: (_FakeAgent(efeito), object()))
         return da.DeepagentsBackend()
 
     return montar

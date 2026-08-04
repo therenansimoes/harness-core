@@ -20,7 +20,6 @@ sys.path.insert(0, str(REPO))
 
 import score  # noqa: E402
 
-
 # ---------------------------------------------------------------- intervalo
 
 

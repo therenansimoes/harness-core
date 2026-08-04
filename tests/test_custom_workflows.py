@@ -22,20 +22,36 @@ FIXTURE = Path(__file__).parent / "fixtures" / "echo"
 
 VALID_SPEC = {
     "nodes": [
-        "plan", "route", "provision", "execute", "verify", "measure",
-        "gate", "accept", "retry", "escalate", "revert", "record",
+        "plan",
+        "route",
+        "provision",
+        "execute",
+        "verify",
+        "measure",
+        "gate",
+        "accept",
+        "retry",
+        "escalate",
+        "revert",
+        "record",
     ],
     "edges": [
-        ["START", "plan"], ["plan", "route"], ["route", "provision"],
-        ["provision", "execute"], ["execute", "verify"], ["verify", "measure"],
-        ["measure", "gate"], ["retry", "route"], ["accept", "record"],
-        ["escalate", "record"], ["revert", "record"], ["record", "END"],
+        ["START", "plan"],
+        ["plan", "route"],
+        ["route", "provision"],
+        ["provision", "execute"],
+        ["execute", "verify"],
+        ["verify", "measure"],
+        ["measure", "gate"],
+        ["retry", "route"],
+        ["accept", "record"],
+        ["escalate", "record"],
+        ["revert", "record"],
+        ["record", "END"],
     ],
 }
 
-GENOME_ABERTO = Genome(
-    immutable=("harness/**",), mutable=("config/workflows/*.toml",)
-)
+GENOME_ABERTO = Genome(immutable=("harness/**",), mutable=("config/workflows/*.toml",))
 GENOME_FECHADO = Genome(immutable=("harness/**",), mutable=())
 
 
@@ -70,9 +86,7 @@ def test_load_workflow_inexistente_topology_error():
 
 
 def test_load_workflow_invalido_fail_closed(tmp_path):
-    (tmp_path / "torto.toml").write_text(
-        'nodes = ["plan"]\nedges = []\n', encoding="utf-8"
-    )
+    (tmp_path / "torto.toml").write_text('nodes = ["plan"]\nedges = []\n', encoding="utf-8")
     with pytest.raises(topology.TopologyError):
         custom.load_workflow("torto", dir=tmp_path)
 

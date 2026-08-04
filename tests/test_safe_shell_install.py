@@ -10,7 +10,7 @@ import pytest
 
 pytest.importorskip("deepagents")
 
-from harness.backends.safe_shell import check_command, installer_reason  # noqa: E402
+from harness.backends.safe_shell import check_command, installer_reason
 
 PERMITIDOS = (
     "uv venv",

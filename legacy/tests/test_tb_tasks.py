@@ -8,6 +8,7 @@ passar (exit 0) depois de aplicar a solução de referência do dataset original
 
     python3 -m pytest tests/test_tb_tasks.py -q
 """
+
 from __future__ import annotations
 
 import shutil
@@ -72,7 +73,9 @@ def test_tb_task_green_com_solucao_referencia(task_id, tmp_path):
     ws = _make_workspace(task_id, tmp_path)
     _apply_solution(task_id, ws)
     r = _run_verify(task_id, ws)
-    assert r.returncode == 0, f"{task_id}: verify falhou com a solução de referência: {r.stdout}\n{r.stderr}"
+    assert r.returncode == 0, (
+        f"{task_id}: verify falhou com a solução de referência: {r.stdout}\n{r.stderr}"
+    )
 
 
 def test_tb_suite_tem_tasks():

@@ -38,7 +38,8 @@ def _ws(tmp_path: Path, name: str, lock: str = "left-pad==1\n") -> Path:
 def _git(repo: Path, *args: str) -> None:
     proc = subprocess.run(
         ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     assert proc.returncode == 0, proc.stderr
 
@@ -54,8 +55,7 @@ def _toy_repo(tmp_path: Path) -> Path:
 
 
 def _proj(name: str, cmd: str, timeout: int = 30) -> Project:
-    return Project(name=name, repo=Path("/nao/usado"), setup_cmd=cmd,
-                   setup_timeout=timeout)
+    return Project(name=name, repo=Path("/nao/usado"), setup_cmd=cmd, setup_timeout=timeout)
 
 
 def test_hash_muda_com_lockfile(tmp_path):
@@ -135,10 +135,7 @@ def test_ensures_concorrentes_serializam(tmp_path, data_dir):
     teste não provaria nada sobre o lock.
     """
     sent = tmp_path / "sentinela"
-    cmd = (
-        f"if [ -e {sent} ]; then exit 9; fi; "
-        f"touch {sent}; sleep 0.3; rm {sent}"
-    )
+    cmd = f"if [ -e {sent} ]; then exit 9; fi; touch {sent}; sleep 0.3; rm {sent}"
     proj = _proj("toy", cmd)
     was = [_ws(tmp_path, "ws_a", "a\n"), _ws(tmp_path, "ws_b", "b\n")]
     out: dict[int, dict] = {}
@@ -162,8 +159,13 @@ def test_ensures_concorrentes_serializam(tmp_path, data_dir):
 
 def test_provision_de_projeto_grava_sec_setup(tmp_path, config_dir, data_dir):
     repo = _toy_repo(tmp_path)
-    init_project(repo, "toy", queue_dir=tmp_path / "fila",
-                 setup_cmd="touch dep_instalada.txt", setup_timeout=30)
+    init_project(
+        repo,
+        "toy",
+        queue_dir=tmp_path / "fila",
+        setup_cmd="touch dep_instalada.txt",
+        setup_timeout=30,
+    )
     unit = tmp_path / "unit"
     unit.mkdir()
     (unit / "unit.toml").write_text(
@@ -272,8 +274,13 @@ def test_ponteiro_do_env_e_gravado_e_o_setup_ve_a_var(tmp_path, data_dir):
     ws = _ws(tmp_path, "ws")
     envf = tmp_path / "projeto.env"
     envf.write_text("PRIVATE_INDEX=https://interno/simple\n", encoding="utf-8")
-    proj = Project(name="toy", repo=tmp_path, setup_cmd='echo "idx=$PRIVATE_INDEX"',
-                   setup_timeout=30, env_file=str(envf))
+    proj = Project(
+        name="toy",
+        repo=tmp_path,
+        setup_cmd='echo "idx=$PRIVATE_INDEX"',
+        setup_timeout=30,
+        env_file=str(envf),
+    )
 
     res = setup.ensure(ws, proj)
 

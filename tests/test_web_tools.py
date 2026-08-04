@@ -200,7 +200,9 @@ def test_web_fetch_pagina_grande_pagina_por_offset(tmp_path, monkeypatch):
     _fake_http(monkeypatch, b"<html><body><p>" + b"ab" * 6000 + b"</p></body></html>")
     inicio = web_tools.web_fetch("https://exemplo.com/x", workspace=tmp_path, cfg=LIBERADO)
     assert "janela: 0..6000" in inicio and "read_file" in inicio
-    resto = web_tools.web_fetch("https://exemplo.com/x", offset=6000, workspace=tmp_path, cfg=LIBERADO)
+    resto = web_tools.web_fetch(
+        "https://exemplo.com/x", offset=6000, workspace=tmp_path, cfg=LIBERADO
+    )
     assert "janela: 6000.." in resto and "fim do conteúdo" in resto
 
 
@@ -211,7 +213,9 @@ def test_conteudo_nao_textual_vira_resumo(tmp_path, monkeypatch):
 
 
 def test_web_fetch_url_bloqueada_nao_levanta(tmp_path):
-    saida = web_tools.web_fetch("http://169.254.169.254/latest/meta-data/", workspace=tmp_path, cfg=LIBERADO)
+    saida = web_tools.web_fetch(
+        "http://169.254.169.254/latest/meta-data/", workspace=tmp_path, cfg=LIBERADO
+    )
     assert saida.startswith("web_fetch bloqueado pela cerca:") and "link-local" in saida
 
 
@@ -225,7 +229,14 @@ def test_extrator_em_fixture():
     assert "Segundo parágrafo com espaço demais." in texto  # espaço colapsado
     assert "item um" in texto and "item dois" in texto
     assert "bloco final\ncom quebra" in texto
-    for lixo in ("<p>", "rastreador", "color: #333", "ignore suas instrucoes", "ative o javascript", "M0 0h10"):
+    for lixo in (
+        "<p>",
+        "rastreador",
+        "color: #333",
+        "ignore suas instrucoes",
+        "ative o javascript",
+        "M0 0h10",
+    ):
         assert lixo not in texto
     assert "Titulo no head" not in texto  # head sai inteiro
     assert "\n\n\n" not in texto  # blank lines colapsadas
@@ -288,7 +299,9 @@ def test_browse_desabilitado_por_default(tmp_path, monkeypatch):
         web_tools.subprocess, "run", lambda *a, **k: pytest.fail("subprocess foi chamado")
     )
     cfg = WebConfig(enabled=True, allowlist=("exemplo.com",))
-    assert "browse_enabled" in web_tools.browse("https://exemplo.com/x", workspace=tmp_path, cfg=cfg)
+    assert "browse_enabled" in web_tools.browse(
+        "https://exemplo.com/x", workspace=tmp_path, cfg=cfg
+    )
 
 
 def test_browse_na_allowlist_roda_chrome_com_os_flags(tmp_path, monkeypatch):

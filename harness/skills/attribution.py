@@ -58,8 +58,7 @@ def record_usage(
         n = 0
         for name in skill_names:
             cur = conn.execute(
-                "INSERT OR IGNORE INTO skill_usage (run_id, skill, created_at) "
-                "VALUES (?, ?, ?)",
+                "INSERT OR IGNORE INTO skill_usage (run_id, skill, created_at) VALUES (?, ?, ?)",
                 (run_or_session_id, name, ts),
             )
             n += cur.rowcount
@@ -137,9 +136,7 @@ def prune_candidates(
 # --------------------------------------------------------------------------- ação
 
 
-def propose_prune(
-    db_path: Path | None = None, min_trials: int = DEFAULT_MIN_TRIALS
-) -> list[str]:
+def propose_prune(db_path: Path | None = None, min_trials: int = DEFAULT_MIN_TRIALS) -> list[str]:
     """Candidatos à poda. Lista vazia = sem gradiente, nada a fazer."""
     return prune_candidates(db_path=db_path, min_trials=min_trials)
 

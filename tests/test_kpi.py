@@ -20,7 +20,9 @@ def test_sem_arquivo_nao_quebra_a_run(repo):
 
 
 def test_load_defaults_e_direction(repo):
-    _write_kpis(repo, """
+    _write_kpis(
+        repo,
+        """
 [kpi.testes]
 cmd = "echo 3"
 
@@ -28,7 +30,8 @@ cmd = "echo 3"
 cmd = "echo 10"
 direction = "lower"
 timeout_s = 5
-""")
+""",
+    )
     specs = load_kpis(repo)
     assert set(specs) == {"testes", "linhas"}
     # timeout_s ausente = None: quem roda escolhe o default, ninguém capa o spec.
@@ -37,14 +40,17 @@ timeout_s = 5
 
 
 def test_load_ignora_entrada_sem_cmd_e_direction_invalida(repo, capsys):
-    _write_kpis(repo, """
+    _write_kpis(
+        repo,
+        """
 [kpi.vazio]
 why = "sem cmd"
 
 [kpi.torto]
 cmd = "echo 1"
 direction = "maior"
-""")
+""",
+    )
     specs = load_kpis(repo)
     assert set(specs) == {"torto"}
     assert specs["torto"].direction == "higher"
@@ -67,25 +73,31 @@ def test_parse_value_pega_a_ultima_linha():
 
 def test_collect_roda_no_repo_e_parseia(repo):
     (repo / "src.txt").write_text("a\nb\nc\n", encoding="utf-8")
-    _write_kpis(repo, """
+    _write_kpis(
+        repo,
+        """
 [kpi.linhas]
 cmd = "wc -l < src.txt"
 
 [kpi.ultima_linha]
 cmd = "echo blá; echo 7"
-""")
+""",
+    )
     values = collect(repo)
     assert values == {"linhas": 3.0, "ultima_linha": 7.0}
 
 
 def test_collect_falha_vira_nan_registrado(repo, capsys):
-    _write_kpis(repo, """
+    _write_kpis(
+        repo,
+        """
 [kpi.quebrado]
 cmd = "exit 3"
 
 [kpi.sem_numero]
 cmd = "echo tudo certo"
-""")
+""",
+    )
     values = collect(repo)
     assert math.isnan(values["quebrado"])
     assert math.isnan(values["sem_numero"])
@@ -94,10 +106,13 @@ cmd = "echo tudo certo"
 
 
 def test_collect_timeout_vira_nan(repo):
-    _write_kpis(repo, """
+    _write_kpis(
+        repo,
+        """
 [kpi.lento]
 cmd = "sleep 5; echo 1"
-""")
+""",
+    )
     values = collect(repo, timeout_s=0.3)
     assert math.isnan(values["lento"])
 
@@ -105,20 +120,26 @@ cmd = "sleep 5; echo 1"
 def test_collect_honra_timeout_do_spec_maior_que_o_do_chamador(repo):
     # o default do chamador não capa o spec: capar mataria só o lado lento
     # (o depois) e o gate reverteria uma mudança boa.
-    _write_kpis(repo, """
+    _write_kpis(
+        repo,
+        """
 [kpi.lento]
 cmd = "sleep 0.6; echo 7"
 timeout_s = 5
-""")
+""",
+    )
     assert collect(repo, timeout_s=0.2) == {"lento": 7.0}
 
 
 def test_collect_honra_timeout_menor_do_spec(repo):
-    _write_kpis(repo, """
+    _write_kpis(
+        repo,
+        """
 [kpi.lento]
 cmd = "sleep 5; echo 1"
 timeout_s = 0.3
-""")
+""",
+    )
     assert math.isnan(collect(repo)["lento"])
 
 
@@ -178,15 +199,21 @@ def test_regressed_lista_ordenada_de_todos_os_piores():
 def test_collect_com_specs_do_antes_ignora_kpis_toml_mutado(repo):
     # Buraco de Goodhart: a mudança avaliada reescreve o kpis.toml pra medir
     # outra coisa no "after". Com specs= do ANTES, a régua não muda de dono.
-    _write_kpis(repo, """
+    _write_kpis(
+        repo,
+        """
 [kpi.testes]
 cmd = "echo 3"
-""")
+""",
+    )
     specs_antes = load_kpis(repo)
-    _write_kpis(repo, """
+    _write_kpis(
+        repo,
+        """
 [kpi.facil]
 cmd = "echo 999"
-""")
+""",
+    )
     after = collect(repo, specs=specs_antes)
     assert after == {"testes": 3.0}
     # sem specs=, o buraco existiria: mediria a régua nova.

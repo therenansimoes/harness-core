@@ -100,9 +100,7 @@ def enrich(entries: list[dict], db_path: Path | str | None = None) -> list[dict]
     p = Path(db_path) if db_path is not None else store.db_path()
     verdicts: dict[str, str] = {}
     if p.is_file():
-        verdicts = {
-            m.mutation_id: m.verdict for m in store.mutations(limit=None, path=p)
-        }
+        verdicts = {m.mutation_id: m.verdict for m in store.mutations(limit=None, path=p)}
     for e in entries:
         e["verdict"] = e.get("verdict") or verdicts.get(e["id"])
     return entries
@@ -116,9 +114,7 @@ def render(tree: list[dict]) -> str:
     def walk(node: dict, depth: int) -> None:
         prefix = "  " * depth + ("└─ " if depth else "")
         verdict = node.get("verdict") or "?"
-        lines.append(
-            f"{prefix}{node['id'][:8]} {node['target']} [{verdict}] {node['ts']}"
-        )
+        lines.append(f"{prefix}{node['id'][:8]} {node['target']} [{verdict}] {node['ts']}")
         for child in node["children"]:
             walk(child, depth + 1)
 

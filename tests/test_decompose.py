@@ -18,7 +18,7 @@ from harness.improve.decompose import DecomposeError, apply_decompose, propose_d
 PLAN = [
     {
         "id_slug": "botao-tema",
-        "prompt_md": "# Passo 1\n\nAdicione `<button id=\"tema\">` em `index.html`.",
+        "prompt_md": '# Passo 1\n\nAdicione `<button id="tema">` em `index.html`.',
         "verify_cmd": "grep -q 'id=\"tema\"' index.html || { echo 'falta o botao'; exit 1; }",
         "kind": "code",
     },
@@ -90,8 +90,8 @@ def test_grava_fila_ordenada_e_valida(env):
 @pytest.mark.parametrize(
     "payload",
     [
-        "desculpa, não consegui",                      # sem array
-        json.dumps([PLAN[0]]),                         # uma unit não é decomposição
+        "desculpa, não consegui",  # sem array
+        json.dumps([PLAN[0]]),  # uma unit não é decomposição
         json.dumps([PLAN[0], dict(PLAN[1], verify_cmd="true")]),  # régua trivial
         json.dumps([PLAN[0], dict(PLAN[1], id_slug="botao-tema")]),  # slug repetido
     ],

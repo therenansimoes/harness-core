@@ -290,9 +290,7 @@ def _chat(cfg: dict, messages: list[dict]) -> tuple[int, str]:
         # transforma o subcheck em ruído no score.
         "temperature": 0,
     }
-    return _http_post(
-        f"{base_url()}/chat/completions", payload, float(cfg["timeout_s"])
-    )
+    return _http_post(f"{base_url()}/chat/completions", payload, float(cfg["timeout_s"]))
 
 
 def _http_post(url: str, payload: dict, timeout_s: float) -> tuple[int, str]:

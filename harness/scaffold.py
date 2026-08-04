@@ -156,9 +156,8 @@ def scaffold(kind: str, name: str, ws: str | Path) -> str:
     lista = "\n".join(f"  {name}/{f}" for f in criados)
     proximos = entry.get("next") or []
     passos = "".join(f"\n  $ {c}" for c in proximos)
-    return (
-        f"scaffold ok: {kind} → {name}/ ({len(criados)} arquivos)\n{lista}"
-        + (f"\nPróximo passo (rode na pasta {name}/):{passos}" if passos else "")
+    return f"scaffold ok: {kind} → {name}/ ({len(criados)} arquivos)\n{lista}" + (
+        f"\nPróximo passo (rode na pasta {name}/):{passos}" if passos else ""
     )
 
 
@@ -231,14 +230,12 @@ def palette(ws: str | Path) -> dict[str, str]:
 # asset_gen
 # --------------------------------------------------------------------------- #
 
+
 # Ícones: geometria em coordenadas da grade 24, traço aberto (nada de fill), o
 # que faz o mesmo desenho funcionar em 16px e em 64px.
 def _icon_body(shape: str) -> str:
     if shape == "seta":
-        return (
-            '  <path d="M4 12 H19" />\n'
-            '  <path d="M13 6 L19 12 L13 18" />\n'
-        )
+        return '  <path d="M4 12 H19" />\n  <path d="M13 6 L19 12 L13 18" />\n'
     if shape == "check":
         return '  <path d="M4.5 13 L9.5 18 L19.5 6.5" />\n'
     if shape == "x":
@@ -251,7 +248,9 @@ def _icon_body(shape: str) -> str:
             f'transform="rotate({ang} 12 12)" />\n'
             for ang in range(0, 360, 45)
         )
-        return f'{dentes}  <circle cx="12" cy="12" r="6.6" />\n  <circle cx="12" cy="12" r="2.6" />\n'
+        return (
+            f'{dentes}  <circle cx="12" cy="12" r="6.6" />\n  <circle cx="12" cy="12" r="2.6" />\n'
+        )
     if shape == "casa":
         return (
             '  <path d="M3.5 10.5 L12 4 L20.5 10.5 V20 H3.5 Z" />\n'
@@ -351,7 +350,9 @@ def _logo_svg(spec: str, pal: dict) -> tuple[str, str, str]:
         )
         fundo = f'  <polygon points="{pts}" fill="{xml_escape(pal["accent"], q)}" />\n'
     else:
-        fundo = f'  <circle cx="{c}" cy="{c}" r="{r:.2f}" fill="{xml_escape(pal["accent"], q)}" />\n'
+        fundo = (
+            f'  <circle cx="{c}" cy="{c}" r="{r:.2f}" fill="{xml_escape(pal["accent"], q)}" />\n'
+        )
     svg = (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {s} {s}" width="{s}" '
         f'height="{s}" role="img" aria-label="{xml_escape(mono, q)}">\n'
@@ -404,7 +405,7 @@ def asset_gen(kind: str, spec: str, ws: str | Path) -> str:
     path.write_text(svg, encoding="utf-8")
     return (
         f"asset_gen ok: {ASSETS_DIR}/{path.name} ({kind}, {dims}, "
-        f"cor {pal['accent']}). Use com <img src=\"{ASSETS_DIR}/{path.name}\" alt=\"...\">."
+        f'cor {pal["accent"]}). Use com <img src="{ASSETS_DIR}/{path.name}" alt="...">.'
     )
 
 

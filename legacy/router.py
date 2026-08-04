@@ -18,6 +18,7 @@ zero silencioso é pior que crash.
 
     python3 router.py --project website-faz-rogers [--unit 0001] [--json]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -29,7 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-import score  # noqa: E402
+import score
 
 ROOT = Path(__file__).parent.resolve()
 MODELS_TOML = ROOT / "evolution" / "models.toml"
@@ -98,7 +99,9 @@ def load_models(path: Path | str | None = None) -> dict:
         if key not in names:
             raise RouterError(f"[thresholds].{key} não é um tier: {names}")
         if key == top:
-            raise RouterError(f"[thresholds].{key} é o tier de maior rank — ele é o 'resto', não uma faixa")
+            raise RouterError(
+                f"[thresholds].{key} é o tier de maior rank — ele é o 'resto', não uma faixa"
+            )
 
     for sig in cfg.get("signal", []):
         if sig.get("kind") not in KINDS:
@@ -111,7 +114,13 @@ def load_models(path: Path | str | None = None) -> dict:
 def tiers(cfg: dict) -> list[Tier]:
     return sorted(
         (
-            Tier(t["name"], int(t["rank"]), t["model"], int(t["max_turns"]), float(t["est_cost_per_run"]))
+            Tier(
+                t["name"],
+                int(t["rank"]),
+                t["model"],
+                int(t["max_turns"]),
+                float(t["est_cost_per_run"]),
+            )
             for t in cfg["tier"]
         ),
         key=lambda t: t.rank,
@@ -194,7 +203,9 @@ def _succ_n(rows: list[dict], task_class: str, tier_name: str) -> tuple[int, int
     return succ, n
 
 
-def history_prior(rows: list[dict], task_class: str, tier_name: str, cfg: dict) -> tuple[str, str | None]:
+def history_prior(
+    rows: list[dict], task_class: str, tier_name: str, cfg: dict
+) -> tuple[str, str | None]:
     """Corrige o tier pelo histórico do projeto. Sobe se o tier corrente vem
     falhando nessa classe; desce se o tier de baixo vem dando conta. Nunca os
     dois — e nunca com amostra menor que min_n (Wilson não opina no vazio)."""
@@ -220,8 +231,14 @@ def history_prior(rows: list[dict], task_class: str, tier_name: str, cfg: dict) 
 # ------------------------------------------------------------------- seleção
 
 
-def select(prompt: str, verify_src: str = "", notes: str = "", attempt: int = 0,
-           rows: list[dict] | None = None, cfg: dict | None = None) -> Selection:
+def select(
+    prompt: str,
+    verify_src: str = "",
+    notes: str = "",
+    attempt: int = 0,
+    rows: list[dict] | None = None,
+    cfg: dict | None = None,
+) -> Selection:
     cfg = cfg or load_models()
     feats = task_features(prompt, verify_src, notes)
     sc, reasons = score_task(feats, cfg)
@@ -237,8 +254,12 @@ def select(prompt: str, verify_src: str = "", notes: str = "", attempt: int = 0,
         reasons.append(f"attempt+{attempt}")
     tier = tier_by_rank(cfg, base_rank + attempt)
     return Selection(
-        tier=tier, task_class=task_class, score=sc, reasons=reasons,
-        attempt=attempt, escalated_from=tier_name if attempt else None,
+        tier=tier,
+        task_class=task_class,
+        score=sc,
+        reasons=reasons,
+        attempt=attempt,
+        escalated_from=tier_name if attempt else None,
     )
 
 
@@ -284,10 +305,23 @@ def main(argv: list[str] | None = None) -> int:
         verify_path = proj_dir / (r.get("verify") or "")
         prompt = prompt_path.read_text(errors="replace") if prompt_path.is_file() else ""
         verify_src = verify_path.read_text(errors="replace") if verify_path.is_file() else ""
-        sel = select(prompt, verify_src, r.get("notes", ""),
-                     attempt=int(r.get("attempts") or 0), rows=rows, cfg=cfg)
-        out.append({"id": r["id"], "tier": sel.tier.name, "score": sel.score,
-                    "class": sel.task_class, "reasons": sel.reasons})
+        sel = select(
+            prompt,
+            verify_src,
+            r.get("notes", ""),
+            attempt=int(r.get("attempts") or 0),
+            rows=rows,
+            cfg=cfg,
+        )
+        out.append(
+            {
+                "id": r["id"],
+                "tier": sel.tier.name,
+                "score": sel.score,
+                "class": sel.task_class,
+                "reasons": sel.reasons,
+            }
+        )
 
     if args.json:
         print(json.dumps(out, ensure_ascii=False, indent=2))

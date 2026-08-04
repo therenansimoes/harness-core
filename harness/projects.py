@@ -177,7 +177,7 @@ def load_env_file(path: Path | str | None) -> dict[str, str]:
         if not linha or linha.startswith("#") or "=" not in linha:
             continue
         if linha.startswith("export "):
-            linha = linha[len("export "):].lstrip()
+            linha = linha[len("export ") :].lstrip()
         nome, _, valor = linha.partition("=")
         nome = nome.strip()
         if not nome:
@@ -202,9 +202,7 @@ def queue_counts(proj: Project) -> tuple[int, int, int]:
     fila = sum(
         1
         for p in q.iterdir()
-        if p.is_dir()
-        and p.name not in (QUEUE_DONE, QUEUE_STUCK)
-        and (p / UNIT_FILE).is_file()
+        if p.is_dir() and p.name not in (QUEUE_DONE, QUEUE_STUCK) and (p / UNIT_FILE).is_file()
     )
     return (fila, _bucket(q / QUEUE_DONE), _bucket(q / QUEUE_STUCK))
 
@@ -250,17 +248,17 @@ def milestones(proj: Project) -> list[dict]:
         name = str(entry.get("name", "")).strip() if isinstance(entry, dict) else ""
         units = entry.get("units") if isinstance(entry, dict) else None
         if not name:
-            print(f"milestones: [[{MILESTONE_TABLE}]] #{i + 1} sem 'name', ignorado "
-                  f"({path})", file=sys.stderr)
+            print(
+                f"milestones: [[{MILESTONE_TABLE}]] #{i + 1} sem 'name', ignorado ({path})",
+                file=sys.stderr,
+            )
             continue
         if not isinstance(units, list):
-            print(f"milestones: {name!r} sem lista 'units', ignorado ({path})",
-                  file=sys.stderr)
+            print(f"milestones: {name!r} sem lista 'units', ignorado ({path})", file=sys.stderr)
             continue
         ids = [str(u).strip() for u in units if str(u).strip()]
         if not ids:
-            print(f"milestones: {name!r} com 'units' vazio, ignorado ({path})",
-                  file=sys.stderr)
+            print(f"milestones: {name!r} com 'units' vazio, ignorado ({path})", file=sys.stderr)
             continue
         out.append({"name": name, "units": ids})
     return out
@@ -278,10 +276,7 @@ def milestone_progress(proj: Project) -> list[tuple[str, int, int]]:
         d = proj.queue_dir / QUEUE_DONE
         if d.is_dir():
             done = {p.name for p in d.iterdir() if p.is_dir()}
-    return [
-        (m["name"], sum(1 for u in m["units"] if u in done), len(m["units"]))
-        for m in marcos
-    ]
+    return [(m["name"], sum(1 for u in m["units"] if u in done), len(m["units"])) for m in marcos]
 
 
 # --- entrega em branch --------------------------------------------------------
@@ -318,8 +313,16 @@ def deliver(
             f"harness: {unit_id}\n\nrun_id={run_id}\n"
             f"cost_usd={f'{cost_usd:.4f}' if cost_usd is not None else 'desconhecido'}"
         )
-        proc = _git(ws, "-c", "user.name=harness",
-                    "-c", "user.email=harness@harness.local", "commit", "-m", msg)
+        proc = _git(
+            ws,
+            "-c",
+            "user.name=harness",
+            "-c",
+            "user.email=harness@harness.local",
+            "commit",
+            "-m",
+            msg,
+        )
         if proc.returncode != 0:
             raise RuntimeError(f"accept: git commit falhou — {proc.stderr.strip()}")
         commit = _git(ws, "rev-parse", "HEAD").stdout.strip()
@@ -392,8 +395,7 @@ def integrate(project: Project | str, unit_id: str, path: Path | None = None) ->
     dirty = _git(repo, "status", "--porcelain", "--untracked-files=no").stdout.strip()
     if dirty:
         raise IntegrateError(
-            f"integrate: working tree de {repo} suja — commite ou limpe antes:\n"
-            + dirty
+            f"integrate: working tree de {repo} suja — commite ou limpe antes:\n" + dirty
         )
 
     target = default_branch(repo)
@@ -404,8 +406,16 @@ def integrate(project: Project | str, unit_id: str, path: Path | None = None) ->
         )
 
     proc = _git(
-        repo, "-c", "user.name=harness", "-c", "user.email=harness@harness.local",
-        "merge", "--no-ff", "-m", f"harness: integrate {unit_id}", branch,
+        repo,
+        "-c",
+        "user.name=harness",
+        "-c",
+        "user.email=harness@harness.local",
+        "merge",
+        "--no-ff",
+        "-m",
+        f"harness: integrate {unit_id}",
+        branch,
     )
     if proc.returncode != 0:
         detalhe = (proc.stdout + proc.stderr).strip()
@@ -430,9 +440,7 @@ def _bucket(root: Path) -> int:
 
 
 def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", "-C", str(cwd), *args], capture_output=True, text=True
-    )
+    return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True)
 
 
 def _write(projs: dict[str, Project], path: Path) -> None:

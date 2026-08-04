@@ -11,11 +11,12 @@ do loop — nunca este módulo.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from random import Random
-from typing import Callable
 
 from harness.genome.genome import Genome
 from harness.improve import mutate, root_dir
@@ -57,12 +58,12 @@ class PromptMutation:
 def _split_sections(text: str) -> tuple[str, list[str]]:
     """Preâmbulo (tudo antes do primeiro `## `) + lista de seções."""
     lines = text.splitlines(keepends=True)
-    idx = [i for i, l in enumerate(lines) if l.startswith(_SECTION_MARK)]
+    idx = [i for i, ln in enumerate(lines) if ln.startswith(_SECTION_MARK)]
     if not idx:
         return text, []
     pre = "".join(lines[: idx[0]])
-    bounds = idx + [len(lines)]
-    sections = ["".join(lines[a:b]) for a, b in zip(bounds, bounds[1:])]
+    bounds = [*idx, len(lines)]
+    sections = ["".join(lines[a:b]) for a, b in itertools.pairwise(bounds)]
     return pre, sections
 
 
@@ -87,7 +88,7 @@ def _drop_directive(text: str, rng: Random) -> str:
     if not present:
         return text
     chosen = rng.choice(present)
-    lines = [l for l in text.splitlines() if l != chosen]
+    lines = [ln for ln in text.splitlines() if ln != chosen]
     return "\n".join(lines) + "\n"
 
 
@@ -134,7 +135,7 @@ def propose_prompt_mutation(
     before = (base / rel).read_text(encoding="utf-8")
     after = OPERATORS[operator](before, rng)
     ts = store.now_iso()
-    mid = hashlib.sha256(f"{rel}\0{ts}\0{after}".encode("utf-8")).hexdigest()[:12]
+    mid = hashlib.sha256(f"{rel}\0{ts}\0{after}".encode()).hexdigest()[:12]
     return PromptMutation(
         mutation_id=mid,
         target=rel,
@@ -153,9 +154,7 @@ def apply_prompt_mutation(
     return mutation
 
 
-def revert_prompt_mutation(
-    mutation: PromptMutation, root: Path | str | None = None
-) -> None:
+def revert_prompt_mutation(mutation: PromptMutation, root: Path | str | None = None) -> None:
     """Restaura o texto anterior byte a byte — o DISCARD do A/B chama aqui."""
     _write(root_dir(root) / mutation.target, mutation.before_text)
 

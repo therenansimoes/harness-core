@@ -35,17 +35,17 @@ from harness.ruler.gate import Decision, gate
 from harness.ruler.kpi import collect, load_kpis
 from harness.ruler.verify import VERIFY_CHECK_NAME, log_tail, run_log_dir, run_verify
 from harness.ruler.wilson import MIN_N, Arm, decide_ab, wilson_interval
-from harness.workspace import cache_gc
 from harness.types import Check, ExecRequest, ExecResult, RunRow, Selection, UnitSpec
 from harness.uiverify import ASSET_KINDS, DEFAULT_MIN_KB, SHOT_NAME
+from harness.workspace import cache_gc
 from harness.workspace.provision import dispose, provision
 from harness.workspace.sealing import is_verifier, verifier_visible
 
 UNIT_FILE = "unit.toml"
-SCRATCH_DIR = ".harness"   # log do verify; não conta como sujeira do repo-alvo
+SCRATCH_DIR = ".harness"  # log do verify; não conta como sujeira do repo-alvo
 DEFAULT_MAX_TURNS = 30
-HELD_IN = Path("benchmarks/held_in")   # unidades default do `harness improve`
-WEBHOOK_PORT = 8787   # porta default do `harness webhook` (loopback)
+HELD_IN = Path("benchmarks/held_in")  # unidades default do `harness improve`
+WEBHOOK_PORT = 8787  # porta default do `harness webhook` (loopback)
 # Resposta default do `--resume`: abortar. Retomar um loop sem dizer o que
 # fazer não pode significar "continua sozinho" — quem foi chamado tem que
 # escolher explicitamente continuar.
@@ -102,7 +102,7 @@ def _load_checks(unit_file: Path, raw: object) -> tuple[Check, ...]:
     """
     if raw is None:
         return ()
-    from harness.add import AddError, validate_verify_cmd   # lazy: igual ao resto do cli
+    from harness.add import AddError, validate_verify_cmd  # lazy: igual ao resto do cli
 
     if not isinstance(raw, dict):
         raise ValueError(f"{unit_file}: [checks] precisa ser tabela nome -> tabela")
@@ -112,8 +112,7 @@ def _load_checks(unit_file: Path, raw: object) -> tuple[Check, ...]:
             raise ValueError(f"{unit_file}: [checks.{name}] é nome reservado")
         if not CHECK_NAME_RE.fullmatch(name):
             raise ValueError(
-                f"{unit_file}: nome de check inválido: {name!r} "
-                f"(esperado [a-z0-9_-]{{1,32}})"
+                f"{unit_file}: nome de check inválido: {name!r} (esperado [a-z0-9_-]{{1,32}})"
             )
         if any(c.name == name for c in out):
             raise ValueError(f"{unit_file}: check duplicado: {name}")
@@ -123,11 +122,11 @@ def _load_checks(unit_file: Path, raw: object) -> tuple[Check, ...]:
             weight = float(body.get("weight", 1.0))
         except (TypeError, ValueError):
             raise ValueError(f"{unit_file}: [checks.{name}] weight não é número") from None
-        if not weight > 0 or math.isinf(weight):   # NaN já cai no `not > 0`
+        if not weight > 0 or math.isinf(weight):  # NaN já cai no `not > 0`
             raise ValueError(f"{unit_file}: [checks.{name}] weight precisa ser > 0")
         cmd = str(body["cmd"]).strip()
         try:
-            validate_verify_cmd(cmd)   # mesma régua do `harness add`
+            validate_verify_cmd(cmd)  # mesma régua do `harness add`
         except AddError as exc:
             raise ValueError(f"{unit_file}: [checks.{name}] {exc}") from None
         out.append(Check(name=name, cmd=cmd, weight=weight))
@@ -155,9 +154,7 @@ def seed_workspace(unit: UnitSpec, ws: Path) -> list[str]:
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args], capture_output=True, text=True
-    )
+    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
 
 
 def _dirty(repo: Path) -> list[str]:
@@ -167,7 +164,8 @@ def _dirty(repo: Path) -> list[str]:
         raise ValueError(f"{repo} não é um repo git: {proc.stderr.strip()}")
     prefix = SCRATCH_DIR + "/"
     return [
-        ln for ln in proc.stdout.splitlines()
+        ln
+        for ln in proc.stdout.splitlines()
         if ln.strip() and not ln[3:].strip('"').startswith(prefix)
     ]
 
@@ -181,8 +179,7 @@ def _revert(repo: Path) -> None:
     for cmd in (("checkout", "--", "."), ("clean", "-fdq")):
         proc = _git(repo, *cmd)
         if proc.returncode != 0:
-            print(f"revert: git {' '.join(cmd)} falhou — {proc.stderr.strip()}",
-                  file=sys.stderr)
+            print(f"revert: git {' '.join(cmd)} falhou — {proc.stderr.strip()}", file=sys.stderr)
 
 
 @contextlib.contextmanager
@@ -212,12 +209,12 @@ def _workspace(repo: str | None, run_id: str) -> Iterator[Path]:
 def _exit_reason(result: ExecResult, decision: Decision) -> str:
     """Vocabulário do ledger: a decisão da régua manda, o executor complementa."""
     if decision.action == "accept":
-        return "done"               # mesmo que o executor tenha estourado turnos
+        return "done"  # mesmo que o executor tenha estourado turnos
     if decision.reason.startswith("backend_"):
-        return result.exit_reason   # nem chegou a executar (blocked/error)
+        return result.exit_reason  # nem chegou a executar (blocked/error)
     if decision.action == "retry":
-        return "verify_failed"      # única outra causa de retry no gate
-    return decision.reason          # revert carrega kpi_regression:… / tamper:…
+        return "verify_failed"  # única outra causa de retry no gate
+    return decision.reason  # revert carrega kpi_regression:… / tamper:…
 
 
 class PreflightError(RuntimeError):
@@ -326,7 +323,7 @@ def run_once(
         else:
             decision = Decision("retry", f"backend_{result.exit_reason}")
         if decision.action == "revert" and repo is not None:
-            _revert(ws)   # no tmpdir o revert é o próprio descarte
+            _revert(ws)  # no tmpdir o revert é o próprio descarte
 
     sec_total = time.monotonic() - t0
     row = RunRow(
@@ -382,9 +379,7 @@ def _resolve_route(args: argparse.Namespace, unit: UnitSpec) -> Selection:
 
 def _last_event(final: dict, node: str) -> dict:
     """Último evento de `node` no trace do grafo (vazio se o nó não rodou)."""
-    return next(
-        (e for e in reversed(final.get("events", [])) if e.get("node") == node), {}
-    )
+    return next((e for e in reversed(final.get("events", [])) if e.get("node") == node), {})
 
 
 def _run_via_graph(args: argparse.Namespace, unit: UnitSpec, sel: Selection) -> int:
@@ -498,9 +493,7 @@ def _arm(text: str) -> Arm:
     """`sucessos/tentativas` -> Arm. É o formato de `harness ab --a 5/6`."""
     succ_raw, sep, n_raw = text.partition("/")
     if not sep:
-        raise argparse.ArgumentTypeError(
-            f"esperado sucessos/tentativas (ex.: 5/6), veio {text!r}"
-        )
+        raise argparse.ArgumentTypeError(f"esperado sucessos/tentativas (ex.: 5/6), veio {text!r}")
     try:
         succ, n = int(succ_raw), int(n_raw)
     except ValueError:
@@ -625,22 +618,54 @@ def _pending_escalation(thread_id: str) -> dict:
         return {}
 
 
+def _decision_terms(kind, reason, evidence: dict) -> str:
+    """Cabeçalho de termos ESTÁVEIS do contexto gravado — o índice do caso.
+
+    É por estes termos que a tentativa seguinte acha este caso: `kind`, motivo,
+    `check:<nome>` de cada check reprovado e a classe de saída. Mesma lista que
+    `run_graph._prior_query` monta na leitura; se um lado mudar sem o outro, o
+    recall volta a ser vazio silencioso.
+
+    A evidência é chave livre (cada nó põe a sua), então os nomes de check são
+    procurados nas grafias que os nós usam hoje e nada mais — chave ausente
+    simplesmente não contribui termo.
+    """
+    terms = [str(kind or ""), str(reason or "")]
+    for key in ("failed", "failed_checks", "checks_failed"):
+        raw = evidence.get(key)
+        if isinstance(raw, str):
+            raw = [raw]
+        for name in raw or ():
+            if name:
+                terms.append(f"check:{name}")
+    terms.append(str(evidence.get("exit_reason") or ""))
+    return " ".join(t for t in terms if t)
+
+
 def _record_human_decision(pending: dict, answer: dict | None) -> None:
     """Grava na memória de casos o par (escalação, resposta do humano).
 
     `context` é a evidência SEM o `prior_decisions`: o bloco de precedentes já é
     memória renderizada, e regravá-lo faria cada resposta carregar a anterior
     inteira — em três escalações o caso viraria só histórico do histórico.
+
+    Na frente da evidência vai o cabeçalho de `_decision_terms`: o JSON sozinho
+    guarda o caso mas não o torna encontrável, porque quem procura na tentativa
+    seguinte não tem o texto da evidência — tem só kind, check reprovado e classe
+    de saída.
     """
     from harness.memory import decisions
 
-    evidence = dict((pending.get("evidence") or {}))
+    evidence = dict(pending.get("evidence") or {})
     evidence.pop("prior_decisions", None)
     kind = evidence.pop("kind", None)
+    reason = pending.get("reason")
+    body = json.dumps(evidence, sort_keys=True, default=str, ensure_ascii=False)
+    terms = _decision_terms(kind, reason, evidence)
     decisions.record_decision(
         kind,
-        pending.get("reason"),
-        json.dumps(evidence, sort_keys=True, default=str, ensure_ascii=False),
+        reason,
+        f"{terms} {body}" if terms else body,
         json.dumps(answer, sort_keys=True, default=str, ensure_ascii=False),
     )
 
@@ -735,18 +760,14 @@ def _attribution_lines(att) -> list[str]:
     """
     chave = " ".join(
         f"{name}={value}"
-        for name, value in zip(("kind", "tier", "backend"), att.key)
+        for name, value in zip(("kind", "tier", "backend"), att.key, strict=False)
         if value
     )
     delta = "n/a" if att.delta is None else f"{att.delta:+.2f}"
     leitura = (
-        "sem amostra" if att.delta is None
-        else "separados" if att.separated
-        else "sobrepostos"
+        "sem amostra" if att.delta is None else "separados" if att.separated else "sobrepostos"
     )
-    nomes = " ".join(
-        f"{c.mutation_id}:{c.rule_id}@{c.applied_at}" for c in att.confounders
-    )
+    nomes = " ".join(f"{c.mutation_id}:{c.rule_id}@{c.applied_at}" for c in att.confounders)
     return [
         f"mut {att.mutation_id} {att.rule_id} {att.verdict} "
         f"{'revertida' if att.reverted else 'mantida'} "
@@ -776,8 +797,7 @@ def cmd_replay(args: argparse.Namespace) -> int:
             print(
                 f"{m.mutation_id} {m.applied_at} {m.rule_id} {m.verdict} "
                 f"a={m.arm_a} b={m.arm_b} "
-                f"{'revertida' if m.reverted else 'mantida'}"
-                + (f" ({m.note})" if m.note else "")
+                f"{'revertida' if m.reverted else 'mantida'}" + (f" ({m.note})" if m.note else "")
             )
         # No teto, `mutações=N` seria lido como "o ledger tem N": dizer que a
         # lista bateu no limite é a diferença entre truncar e mentir.
@@ -806,9 +826,7 @@ def cmd_whatif(args: argparse.Namespace) -> int:
     """
     from harness.improve.counterfactual import run_whatif
 
-    run_whatif(
-        kind=args.kind, limit=args.limit, backend=args.backend, model=args.model
-    )
+    run_whatif(kind=args.kind, limit=args.limit, backend=args.backend, model=args.model)
     return 0
 
 
@@ -827,7 +845,7 @@ def cmd_lineage(args: argparse.Namespace) -> int:
     lineage.enrich(entries, db_path=args.db)
     tree = lineage.build_tree(entries)
     if args.limit is not None:
-        tree = tree[-args.limit:]
+        tree = tree[-args.limit :]
     print(lineage.render(tree))
     return 0
 
@@ -968,9 +986,8 @@ def _pid_vivo(pid: object) -> bool:
 
 def cmd_actions(args: argparse.Namespace) -> int:
     """Lista as ações do registry e, havendo mutações, o placar KEEP/DISCARD."""
-    from harness.improve.target import actions
-
     from harness.improve.policy import action_of
+    from harness.improve.target import actions
 
     acts = actions()
     muts = store.mutations(limit=None)
@@ -1073,9 +1090,7 @@ def cmd_vision_judge(args: argparse.Namespace) -> int:
         melhor = res["melhor"]
         if melhor != "a":
             print(f"vision-judge FALHA a referência está melhor: {res['motivo']}", file=sys.stderr)
-        print(
-            f"vision-judge shot={shot} ({kb:.1f}kb) ref={args.ref} melhor={melhor}"
-        )
+        print(f"vision-judge shot={shot} ({kb:.1f}kb) ref={args.ref} melhor={melhor}")
         return 0 if melhor == "a" else 1
 
     res = vision.judge_image(shot, question=args.question)
@@ -1116,7 +1131,7 @@ def _min_nota(args: argparse.Namespace, ws: Path) -> tuple[float | None, bool]:
         return float(bruto), False
     except ValueError:
         args.parser.error(f"--min-nota: esperado número ou 'baseline', veio {bruto!r}")
-        raise AssertionError  # pragma: no cover - error() já saiu
+        raise AssertionError from None  # pragma: no cover - error() já saiu
 
 
 def _pct(values: list[float], q: int) -> float:
@@ -1134,10 +1149,7 @@ def cmd_bench(args: argparse.Namespace) -> int:
         ws = provision(repo, f"bench-{uuid.uuid4().hex[:8]}")
         secs.append(time.monotonic() - t0)
         dispose(ws, keep=False)
-    print(
-        f"provision n={len(secs)} "
-        f"p50={_pct(secs, 50):.3f}s p95={_pct(secs, 95):.3f}s"
-    )
+    print(f"provision n={len(secs)} p50={_pct(secs, 50):.3f}s p95={_pct(secs, 95):.3f}s")
     return 0
 
 
@@ -1220,13 +1232,17 @@ def cmd_seal(args: argparse.Namespace) -> int:
     # Currículo na fronteira: exame que a versão atual já passa não ensina nada.
     if not args.force:
         from harness.improve import coevolve
+        from harness.improve.exam import frontier_backend
 
-        passed = coevolve.screen_benchmark(src)
+        # Backend explícito na mensagem: "fora da fronteira" só vale tanto quanto
+        # o executor que screenou, e quem lê precisa saber qual foi.
+        backend, model = frontier_backend()
+        passed = coevolve.screen_benchmark(src, backend, model)
         if passed is True:
             print(
                 f"seal: '{args.name}' fora da fronteira — o harness atual já passa "
-                "nesse exame, selar não ensina nada. Use --force para selar mesmo "
-                "assim; nada foi movido.",
+                f"nesse exame sob backend={backend} model={model or '-'}, selar não "
+                "ensina nada. Use --force para selar mesmo assim; nada foi movido.",
                 file=sys.stderr,
             )
             return 1
@@ -1244,13 +1260,34 @@ def cmd_seal(args: argparse.Namespace) -> int:
 
 def cmd_frontier(args: argparse.Namespace) -> int:
     """Lista a fronteira: os candidatos da quarentena em que o harness atual
-    falha. Fronteira vazia é resposta, não erro — sai 0 sempre."""
-    from harness.improve import coevolve
+    falha. Fronteira vazia é resposta, não erro — sai 0 sempre.
 
-    names = coevolve.screen_quarantine(backend=args.backend, model=args.model)
+    `--backend`/`--model` vazios (default) leem `[frontier]`/`[exam]` do
+    `config/ruler.toml`: o screening acompanha o executor da prova sem flag.
+    """
+    from harness.improve import coevolve
+    from harness.improve.exam import MOCK_BACKEND, frontier_backend
+
+    backend, model = frontier_backend()
+    backend = args.backend or backend
+    model = args.model or model
+    names = coevolve.screen_quarantine(
+        backend=backend,
+        model=model,
+        max_units=args.max_units,
+        deadline_s=args.deadline,
+    )
     for name in names:
         print(name)
-    print(f"frontier={len(names)}")
+    real = backend != MOCK_BACKEND
+    print(f"frontier={len(names)} real={'true' if real else 'false'}")
+    if not real:
+        print(
+            "frontier: screening mock não discrimina dificuldade — o mock falha em "
+            "quase tudo, então esta fronteira satura. Aponte [frontier] em "
+            "config/ruler.toml (ou --backend) para o executor da prova.",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -1348,16 +1385,9 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     for name in sorted(projs):
         fila, done, stuck = queue_counts(projs[name])
-        rows = (
-            store.history(project=name, limit=100_000)
-            if store.db_path().is_file()
-            else []
-        )
+        rows = store.history(project=name, limit=100_000) if store.db_path().is_file() else []
         usd = sum(r.cost_usd or 0.0 for r in rows)
-        print(
-            f"{name}: fila={fila} done={done} stuck={stuck} "
-            f"runs={len(rows)} usd={usd:.2f}"
-        )
+        print(f"{name}: fila={fila} done={done} stuck={stuck} runs={len(rows)} usd={usd:.2f}")
         for marco, feitas, total in milestone_progress(projs[name]):
             print(f"  {'✔' if feitas == total else '○'} {marco} ({feitas}/{total})")
     return 0
@@ -1411,9 +1441,7 @@ def cmd_report(args: argparse.Namespace) -> int:
     """Auto-relatório do loop em markdown. Fail-open: sempre exit 0."""
     from harness import report as report_mod
 
-    text = report_mod.build_report(
-        since_hours=args.since, db_path=args.db, lineage_file=args.file
-    )
+    text = report_mod.build_report(since_hours=args.since, db_path=args.db, lineage_file=args.file)
     if args.out:
         out = Path(args.out)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -1432,35 +1460,52 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--unit", required=True, help="diretório (ou arquivo) com unit.toml")
     run.add_argument("--backend", default=None, help="obrigatório sem --route auto")
     run.add_argument("--model", default=None)
-    run.add_argument("--route", choices=list(ROUTE_MODES), default=ROUTE_MANUAL,
-                     help="auto: o router escolhe tier/backend/model pelo kind da "
-                          "unidade e pelo histórico do ledger (exclui --backend/--model)")
+    run.add_argument(
+        "--route",
+        choices=list(ROUTE_MODES),
+        default=ROUTE_MANUAL,
+        help="auto: o router escolhe tier/backend/model pelo kind da "
+        "unidade e pelo histórico do ledger (exclui --backend/--model)",
+    )
     run.add_argument("--project", default=None)
-    run.add_argument("--repo", default=None,
-                     help="repo-alvo (git, limpo): vira o workspace e é onde os KPIs "
-                          "são medidos; sem ele o run roda num tmpdir vazio")
+    run.add_argument(
+        "--repo",
+        default=None,
+        help="repo-alvo (git, limpo): vira o workspace e é onde os KPIs "
+        "são medidos; sem ele o run roda num tmpdir vazio",
+    )
     # default None (e não DEFAULT_MAX_TURNS): é assim que `--route auto` sabe
     # distinguir "o usuário não pediu turnos" de "o usuário pediu 8".
     run.add_argument("--max-turns", type=int, default=None, dest="max_turns")
     run.set_defaults(func=cmd_run, parser=run)
 
     ab = sub.add_parser("ab", help="veredito de Wilson entre dois braços")
-    ab.add_argument("--a", type=_arm, metavar="SUCC/N",
-                    help="braço A (baseline) já contado, ex.: 5/6")
-    ab.add_argument("--b", type=_arm, metavar="SUCC/N",
-                    help="braço B (candidata) já contado, ex.: 6/6")
-    ab.add_argument("--min-n", type=int, default=MIN_N, dest="min_n",
-                    help=f"tentativas por braço para a régua opinar (default {MIN_N})")
+    ab.add_argument(
+        "--a", type=_arm, metavar="SUCC/N", help="braço A (baseline) já contado, ex.: 5/6"
+    )
+    ab.add_argument(
+        "--b", type=_arm, metavar="SUCC/N", help="braço B (candidata) já contado, ex.: 6/6"
+    )
+    ab.add_argument(
+        "--min-n",
+        type=int,
+        default=MIN_N,
+        dest="min_n",
+        help=f"tentativas por braço para a régua opinar (default {MIN_N})",
+    )
     # Modo de execução: o harness roda o experimento em vez de só contar.
-    ab.add_argument("--dim", choices=["backend"], default=None,
-                    help="dimensão testada; roda a mesma unidade nos dois braços")
+    ab.add_argument(
+        "--dim",
+        choices=["backend"],
+        default=None,
+        help="dimensão testada; roda a mesma unidade nos dois braços",
+    )
     ab.add_argument("--unit", default=None, help="diretório (ou arquivo) com unit.toml")
     ab.add_argument("--a-backend", default=None, dest="a_backend")
     ab.add_argument("--b-backend", default=None, dest="b_backend")
     ab.add_argument("--a-model", default=None, dest="a_model")
     ab.add_argument("--b-model", default=None, dest="b_model")
-    ab.add_argument("--n", type=int, default=MIN_N,
-                    help=f"tentativas por braço (default {MIN_N})")
+    ab.add_argument("--n", type=int, default=MIN_N, help=f"tentativas por braço (default {MIN_N})")
     ab.add_argument("--project", default=None)
     # `parser` no namespace: erro de combinação de flag sai como erro de
     # argparse (uso + exit 2), não como exceção no meio do experimento.
@@ -1471,65 +1516,110 @@ def build_parser() -> argparse.ArgumentParser:
     )
     init.add_argument("repo", help="path do repositório git do projeto")
     init.add_argument("--name", required=True)
-    init.add_argument("--build", default=None,
-                      help="comando de build do projeto; roda antes do verify_cmd "
-                           "da unidade, no worktree")
-    init.add_argument("--verify-default", default=None, dest="verify_default",
-                      help="verify_cmd default para unidade do projeto que não declara um")
-    init.add_argument("--queue-dir", default=None, dest="queue_dir",
-                      help="fila do projeto (default projects/<nome>/queue)")
-    init.add_argument("--setup-cmd", default=None, dest="setup_cmd",
-                      help="comando de setup (instalar dependência) do workspace; "
-                           "roda antes do executor, cacheado por lockfile. Sem ele, "
-                           "detecção automática (npm ci / uv sync)")
-    init.add_argument("--setup-timeout", type=int, default=SETUP_TIMEOUT,
-                      dest="setup_timeout",
-                      help=f"teto em segundos do setup (default {SETUP_TIMEOUT})")
-    init.add_argument("--env-file", default=None, dest="env_file",
-                      help="env do projeto (ex.: .env), path RELATIVO ao repo; entra "
-                           "no env dos subprocessos do run. Valor de segredo é "
-                           "redigido dos logs")
+    init.add_argument(
+        "--build",
+        default=None,
+        help="comando de build do projeto; roda antes do verify_cmd da unidade, no worktree",
+    )
+    init.add_argument(
+        "--verify-default",
+        default=None,
+        dest="verify_default",
+        help="verify_cmd default para unidade do projeto que não declara um",
+    )
+    init.add_argument(
+        "--queue-dir",
+        default=None,
+        dest="queue_dir",
+        help="fila do projeto (default projects/<nome>/queue)",
+    )
+    init.add_argument(
+        "--setup-cmd",
+        default=None,
+        dest="setup_cmd",
+        help="comando de setup (instalar dependência) do workspace; "
+        "roda antes do executor, cacheado por lockfile. Sem ele, "
+        "detecção automática (npm ci / uv sync)",
+    )
+    init.add_argument(
+        "--setup-timeout",
+        type=int,
+        default=SETUP_TIMEOUT,
+        dest="setup_timeout",
+        help=f"teto em segundos do setup (default {SETUP_TIMEOUT})",
+    )
+    init.add_argument(
+        "--env-file",
+        default=None,
+        dest="env_file",
+        help="env do projeto (ex.: .env), path RELATIVO ao repo; entra "
+        "no env dos subprocessos do run. Valor de segredo é "
+        "redigido dos logs",
+    )
     init.set_defaults(func=cmd_init, parser=init)
 
-    status = sub.add_parser(
-        "status", help="por projeto: fila/done/stuck + gasto total do ledger"
-    )
+    status = sub.add_parser("status", help="por projeto: fila/done/stuck + gasto total do ledger")
     status.set_defaults(func=cmd_status, parser=status)
 
-    from harness import queue as queue_mod   # defaults do driver, num só lugar
+    from harness import queue as queue_mod  # defaults do driver, num só lugar
 
     queue = sub.add_parser(
         "queue", help="consome a fila do projeto pelo grafo, uma unidade por vez"
     )
-    queue.add_argument("--project", default=queue_mod.DEFAULT_PROJECT,
-                       help="nome do projeto registrado (harness init)")
+    queue.add_argument(
+        "--project",
+        default=queue_mod.DEFAULT_PROJECT,
+        help="nome do projeto registrado (harness init)",
+    )
     queue.add_argument("--backend", default=queue_mod.DEFAULT_BACKEND)
-    queue.add_argument("--model", default=queue_mod.DEFAULT_MODEL,
-                       help="vazio ('') usa o default do backend")
-    queue.add_argument("--deadline-s", type=float, dest="deadline_s",
-                       default=queue_mod.DEFAULT_DEADLINE_S,
-                       help="teto de tempo do loop inteiro")
-    queue.add_argument("--attempts", type=int, default=None,
-                       help="tentativas por unidade (default: teto de config/graph.toml)")
-    queue.add_argument("--move", action=argparse.BooleanOptionalAction, default=True,
-                       help="--no-move é ensaio: roda e não mexe na fila")
-    queue.add_argument("--integrate", action=argparse.BooleanOptionalAction,
-                       default=True,
-                       help="merge da entrega aceita no branch default (default: "
-                            "ligado). --no-integrate quebra a fila progressiva: a "
-                            "unidade seguinte sai do HEAD e não vê a anterior")
-    queue.add_argument("--regression", action=argparse.BooleanOptionalAction,
-                       default=True,
-                       help="re-roda o verify das unidades de done/ no repo depois "
-                            "de cada integração (default: ligado). --no-regression "
-                            "deixa conflito semântico passar silencioso")
-    queue.add_argument("--zpd", action="store_true",
-                       help="começa pela unidade com nota histórica na zona de "
-                            "desenvolvimento proximal (0.4-0.8) em vez da ordem de "
-                            "nome (default: desligado). Em fila de PROJETO a ordem "
-                            "de nome é a dependência e reordenar quebra a fila; use "
-                            "só em fila de prática/benchmark, onde as unidades são "
-                            "independentes")
+    queue.add_argument(
+        "--model", default=queue_mod.DEFAULT_MODEL, help="vazio ('') usa o default do backend"
+    )
+    queue.add_argument(
+        "--deadline-s",
+        type=float,
+        dest="deadline_s",
+        default=queue_mod.DEFAULT_DEADLINE_S,
+        help="teto de tempo do loop inteiro",
+    )
+    queue.add_argument(
+        "--attempts",
+        type=int,
+        default=None,
+        help="tentativas por unidade (default: teto de config/graph.toml)",
+    )
+    queue.add_argument(
+        "--move",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="--no-move é ensaio: roda e não mexe na fila",
+    )
+    queue.add_argument(
+        "--integrate",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="merge da entrega aceita no branch default (default: "
+        "ligado). --no-integrate quebra a fila progressiva: a "
+        "unidade seguinte sai do HEAD e não vê a anterior",
+    )
+    queue.add_argument(
+        "--regression",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="re-roda o verify das unidades de done/ no repo depois "
+        "de cada integração (default: ligado). --no-regression "
+        "deixa conflito semântico passar silencioso",
+    )
+    queue.add_argument(
+        "--zpd",
+        action="store_true",
+        help="começa pela unidade com nota histórica na zona de "
+        "desenvolvimento proximal (0.4-0.8) em vez da ordem de "
+        "nome (default: desligado). Em fila de PROJETO a ordem "
+        "de nome é a dependência e reordenar quebra a fila; use "
+        "só em fila de prática/benchmark, onde as unidades são "
+        "independentes",
+    )
     queue.set_defaults(func=cmd_queue, parser=queue)
 
     backends = sub.add_parser("backends", help="lista backends registrados + preflight")
@@ -1537,69 +1627,123 @@ def build_parser() -> argparse.ArgumentParser:
 
     improve = sub.add_parser("improve", help="ciclo de auto-melhoria: muta config e testa em A/B")
     improve.add_argument("--cycles", type=int, default=1)
-    improve.add_argument("--deadline-s", type=float, default=None, dest="deadline_s",
-                         help="teto de tempo do loop; estourou, escala pro humano")
-    improve.add_argument("--unit", action="append", default=[],
-                         help="unidade de avaliação (repetível); default: benchmarks/held_in/*")
-    improve.add_argument("--backend", default=None,
-                         help="fixa o executor dos DOIS braços; default: quem escolhe é o "
-                              "router, lendo o config que a mutação acabou de mexer")
+    improve.add_argument(
+        "--deadline-s",
+        type=float,
+        default=None,
+        dest="deadline_s",
+        help="teto de tempo do loop; estourou, escala pro humano",
+    )
+    improve.add_argument(
+        "--unit",
+        action="append",
+        default=[],
+        help="unidade de avaliação (repetível); default: benchmarks/held_in/*",
+    )
+    improve.add_argument(
+        "--backend",
+        default=None,
+        help="fixa o executor dos DOIS braços; default: quem escolhe é o "
+        "router, lendo o config que a mutação acabou de mexer",
+    )
     improve.add_argument("--model", default=None)
-    improve.add_argument("--n", type=int, default=None,
-                         help="tentativas por braço (default: [improve].n_per_arm do catalog)")
-    improve.add_argument("--resume", default=None, metavar="THREAD_ID",
-                         help="responde a escalação pendente da thread (o id sai no "
-                              "`escalate ... thread=` do stderr)")
-    improve.add_argument("--answer", default=None, metavar="JSON",
-                         help=f"resposta do humano ao interrupt, só com --resume "
-                              f"(default: {IMPROVE_ANSWER})")
+    improve.add_argument(
+        "--n",
+        type=int,
+        default=None,
+        help="tentativas por braço (default: [improve].n_per_arm do catalog)",
+    )
+    improve.add_argument(
+        "--resume",
+        default=None,
+        metavar="THREAD_ID",
+        help="responde a escalação pendente da thread (o id sai no "
+        "`escalate ... thread=` do stderr)",
+    )
+    improve.add_argument(
+        "--answer",
+        default=None,
+        metavar="JSON",
+        help=f"resposta do humano ao interrupt, só com --resume (default: {IMPROVE_ANSWER})",
+    )
     improve.set_defaults(func=cmd_improve, parser=improve)
 
     replay = sub.add_parser("replay", help="atribui delta do histórico a uma mutação")
-    replay.add_argument("--mutation", default=None, metavar="ID",
-                        help="id da mutação (os ids saem no --list)")
-    replay.add_argument("--list", action="store_true",
-                        help="lista as mutações do ledger com veredito")
-    replay.add_argument("--limit", type=int, default=DEFAULT_LIMIT, metavar="N",
-                        help=f"teto de linhas lidas do ledger, nos DOIS modos "
-                             f"(default {DEFAULT_LIMIT})")
+    replay.add_argument(
+        "--mutation", default=None, metavar="ID", help="id da mutação (os ids saem no --list)"
+    )
+    replay.add_argument(
+        "--list", action="store_true", help="lista as mutações do ledger com veredito"
+    )
+    replay.add_argument(
+        "--limit",
+        type=int,
+        default=DEFAULT_LIMIT,
+        metavar="N",
+        help=f"teto de linhas lidas do ledger, nos DOIS modos (default {DEFAULT_LIMIT})",
+    )
     replay.set_defaults(func=cmd_replay, parser=replay)
 
-    whatif = sub.add_parser(
-        "whatif", help="re-roda os fracassos do ledger com a config de hoje"
+    whatif = sub.add_parser("whatif", help="re-roda os fracassos do ledger com a config de hoje")
+    whatif.add_argument(
+        "--kind", default=None, metavar="K", help="só fracassos deste kind (default: todos)"
     )
-    whatif.add_argument("--kind", default=None, metavar="K",
-                        help="só fracassos deste kind (default: todos)")
-    whatif.add_argument("--limit", type=int, default=WHATIF_LIMIT, metavar="N",
-                        help=f"quantas unidades re-rodar (default {WHATIF_LIMIT})")
-    whatif.add_argument("--backend", default=MOCK_BACKEND, metavar="B",
-                        help=f"executor do replay (default {MOCK_BACKEND})")
-    whatif.add_argument("--model", default=None, metavar="M",
-                        help="modelo do backend")
+    whatif.add_argument(
+        "--limit",
+        type=int,
+        default=WHATIF_LIMIT,
+        metavar="N",
+        help=f"quantas unidades re-rodar (default {WHATIF_LIMIT})",
+    )
+    whatif.add_argument(
+        "--backend",
+        default=MOCK_BACKEND,
+        metavar="B",
+        help=f"executor do replay (default {MOCK_BACKEND})",
+    )
+    whatif.add_argument("--model", default=None, metavar="M", help="modelo do backend")
     whatif.set_defaults(func=cmd_whatif)
 
-    lineage = sub.add_parser(
-        "lineage", help="árvore genealógica das mutações de código"
+    lineage = sub.add_parser("lineage", help="árvore genealógica das mutações de código")
+    lineage.add_argument(
+        "--file",
+        default=None,
+        metavar="PATH",
+        help="jsonl de linhagem (default data/lineage.jsonl)",
     )
-    lineage.add_argument("--file", default=None, metavar="PATH",
-                         help="jsonl de linhagem (default data/lineage.jsonl)")
-    lineage.add_argument("--db", default=None, metavar="PATH",
-                         help="banco do ledger p/ veredito (default data/runs.sqlite)")
-    lineage.add_argument("--limit", type=int, default=None, metavar="N",
-                         help="mostra só as N últimas raízes")
+    lineage.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="banco do ledger p/ veredito (default data/runs.sqlite)",
+    )
+    lineage.add_argument(
+        "--limit", type=int, default=None, metavar="N", help="mostra só as N últimas raízes"
+    )
     lineage.set_defaults(func=cmd_lineage)
 
     report = sub.add_parser(
         "report", help="auto-relatório do loop (runs, mutações, skills, linhagem)"
     )
-    report.add_argument("--since", type=float, default=REPORT_SINCE, metavar="HORAS",
-                        help=f"janela de tempo (default {REPORT_SINCE:g}h)")
-    report.add_argument("--out", default=None, metavar="PATH",
-                        help="grava o markdown no arquivo em vez do stdout")
-    report.add_argument("--file", default=None, metavar="PATH",
-                        help="jsonl de linhagem (default data/lineage.jsonl)")
-    report.add_argument("--db", default=None, metavar="PATH",
-                        help="banco do ledger (default data/runs.sqlite)")
+    report.add_argument(
+        "--since",
+        type=float,
+        default=REPORT_SINCE,
+        metavar="HORAS",
+        help=f"janela de tempo (default {REPORT_SINCE:g}h)",
+    )
+    report.add_argument(
+        "--out", default=None, metavar="PATH", help="grava o markdown no arquivo em vez do stdout"
+    )
+    report.add_argument(
+        "--file",
+        default=None,
+        metavar="PATH",
+        help="jsonl de linhagem (default data/lineage.jsonl)",
+    )
+    report.add_argument(
+        "--db", default=None, metavar="PATH", help="banco do ledger (default data/runs.sqlite)"
+    )
     report.set_defaults(func=cmd_report)
 
     ui = sub.add_parser(
@@ -1607,24 +1751,50 @@ def build_parser() -> argparse.ArgumentParser:
         help="verify de UI: serve o dist, confere os assets e olha o screenshot",
     )
     ui.add_argument("dist", help="diretório buildado a servir (ex.: dist)")
-    ui.add_argument("--url-path", default="/", dest="url_path",
-                    help="página a abrir dentro do dist (default: /)")
-    ui.add_argument("--min-kb", type=float, default=DEFAULT_MIN_KB, dest="min_kb",
-                    help=f"tamanho mínimo do PNG em kb (default {DEFAULT_MIN_KB:.0f}; "
-                         "tela em branco mede ~11kb, página com conteúdo ~28kb)")
-    ui.add_argument("--expect-asset", action="append", choices=list(ASSET_KINDS),
-                    dest="expect_asset", metavar="KIND",
-                    help=f"exige ≥1 asset do tipo CARREGÁVEL (repetível): "
-                         f"{'|'.join(ASSET_KINDS)}")
-    ui.add_argument("--strict-links", action="store_true", dest="strict_links",
-                    help="<a href> local morto REPROVA em vez de avisar (gate de "
-                         "completude: use na unidade que fecha o site)")
-    ui.add_argument("--shot-out", default=None, dest="shot_out", metavar="PATH",
-                    help=f"onde gravar o screenshot (default: ./{SHOT_NAME}, que "
-                         "sobrevive com --keep-ws para review humano)")
-    ui.add_argument("--ask", default=None, metavar="PERGUNTA",
-                    help="opt-in que GASTA (~$0.01): manda o screenshot para o "
-                         "claude CLI em haiku e exige JSON {\"ok\",\"motivo\"}")
+    ui.add_argument(
+        "--url-path",
+        default="/",
+        dest="url_path",
+        help="página a abrir dentro do dist (default: /)",
+    )
+    ui.add_argument(
+        "--min-kb",
+        type=float,
+        default=DEFAULT_MIN_KB,
+        dest="min_kb",
+        help=f"tamanho mínimo do PNG em kb (default {DEFAULT_MIN_KB:.0f}; "
+        "tela em branco mede ~11kb, página com conteúdo ~28kb)",
+    )
+    ui.add_argument(
+        "--expect-asset",
+        action="append",
+        choices=list(ASSET_KINDS),
+        dest="expect_asset",
+        metavar="KIND",
+        help=f"exige ≥1 asset do tipo CARREGÁVEL (repetível): {'|'.join(ASSET_KINDS)}",
+    )
+    ui.add_argument(
+        "--strict-links",
+        action="store_true",
+        dest="strict_links",
+        help="<a href> local morto REPROVA em vez de avisar (gate de "
+        "completude: use na unidade que fecha o site)",
+    )
+    ui.add_argument(
+        "--shot-out",
+        default=None,
+        dest="shot_out",
+        metavar="PATH",
+        help=f"onde gravar o screenshot (default: ./{SHOT_NAME}, que "
+        "sobrevive com --keep-ws para review humano)",
+    )
+    ui.add_argument(
+        "--ask",
+        default=None,
+        metavar="PERGUNTA",
+        help="opt-in que GASTA (~$0.01): manda o screenshot para o "
+        'claude CLI em haiku e exige JSON {"ok","motivo"}',
+    )
     ui.set_defaults(func=cmd_ui_verify, parser=ui)
 
     vj = sub.add_parser(
@@ -1632,29 +1802,52 @@ def build_parser() -> argparse.ArgumentParser:
         help="subcheck de UI: um VLM local olha o screenshot e dá nota (fail-open)",
     )
     alvo = vj.add_mutually_exclusive_group(required=True)
-    alvo.add_argument("--port", type=int, default=None,
-                      help="porta de um servidor registrado nesta run (start_server)")
-    alvo.add_argument("--dist", default=None, metavar="PATH",
-                      help="diretório buildado a servir em loopback (ex.: dist)")
-    vj.add_argument("--question", default=None, metavar="PERGUNTA",
-                    help="foca o olhar do juiz (ex.: 'o menu está alinhado?')")
-    vj.add_argument("--min-nota", default="6.0", dest="min_nota", metavar="N|baseline",
-                    help="piso da nota 0-10 (default 6.0). `baseline` usa a nota "
-                         "aceita da última vez — régua relativa, anti-platô")
-    vj.add_argument("--ref", default=None, metavar="PNG",
-                    help="compara PAREADO com esta referência em vez de dar nota "
-                         "absoluta (mais confiável em VLM pequeno): passa se a tela "
-                         "nova ganhar")
-    vj.add_argument("--ws", default=None, metavar="PATH",
-                    help="workspace (default: diretório atual) — onde ficam "
-                         "procs.json, os shots e o baseline")
+    alvo.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="porta de um servidor registrado nesta run (start_server)",
+    )
+    alvo.add_argument(
+        "--dist",
+        default=None,
+        metavar="PATH",
+        help="diretório buildado a servir em loopback (ex.: dist)",
+    )
+    vj.add_argument(
+        "--question",
+        default=None,
+        metavar="PERGUNTA",
+        help="foca o olhar do juiz (ex.: 'o menu está alinhado?')",
+    )
+    vj.add_argument(
+        "--min-nota",
+        default="6.0",
+        dest="min_nota",
+        metavar="N|baseline",
+        help="piso da nota 0-10 (default 6.0). `baseline` usa a nota "
+        "aceita da última vez — régua relativa, anti-platô",
+    )
+    vj.add_argument(
+        "--ref",
+        default=None,
+        metavar="PNG",
+        help="compara PAREADO com esta referência em vez de dar nota "
+        "absoluta (mais confiável em VLM pequeno): passa se a tela "
+        "nova ganhar",
+    )
+    vj.add_argument(
+        "--ws",
+        default=None,
+        metavar="PATH",
+        help="workspace (default: diretório atual) — onde ficam procs.json, os shots e o baseline",
+    )
     vj.set_defaults(func=cmd_vision_judge, parser=vj)
 
     export = sub.add_parser(
         "export", help="empacota skills + prior de roteamento em um bundle .tgz"
     )
-    export.add_argument("--out", required=True, metavar="PATH",
-                        help="destino do bundle (tar.gz)")
+    export.add_argument("--out", required=True, metavar="PATH", help="destino do bundle (tar.gz)")
     export.set_defaults(func=cmd_export)
 
     # `import` é keyword: o parser aceita o nome, o dest do handler não pode ser.
@@ -1669,56 +1862,71 @@ def build_parser() -> argparse.ArgumentParser:
     )
     doctor.set_defaults(func=cmd_doctor, parser=doctor)
 
-    skills = sub.add_parser(
-        "skills", help="lista as skills carregadas (nome, kinds, descrição)"
+    skills = sub.add_parser("skills", help="lista as skills carregadas (nome, kinds, descrição)")
+    skills.add_argument(
+        "--lift",
+        action="store_true",
+        help="anexa o lift por skill (atribuição do ledger; sem amostra num braço = traço)",
     )
-    skills.add_argument("--lift", action="store_true",
-                        help="anexa o lift por skill (atribuição do ledger; "
-                             "sem amostra num braço = traço)")
     skills.set_defaults(func=cmd_skills)
 
-    actions = sub.add_parser(
-        "actions", help="lista as ações do registry + KEEP/DISCARD do ledger"
-    )
+    actions = sub.add_parser("actions", help="lista as ações do registry + KEEP/DISCARD do ledger")
     actions.set_defaults(func=cmd_actions)
 
-    procs_cmd = sub.add_parser(
-        "procs", help="lista servidores registrados nos workspaces dos runs"
+    procs_cmd = sub.add_parser("procs", help="lista servidores registrados nos workspaces dos runs")
+    procs_cmd.add_argument(
+        "--reap",
+        action="store_true",
+        help="mata os processos cujo run já morreu (órfãos); run vivo nunca é tocado",
     )
-    procs_cmd.add_argument("--reap", action="store_true",
-                           help="mata os processos cujo run já morreu (órfãos); "
-                                "run vivo nunca é tocado")
     procs_cmd.set_defaults(func=cmd_procs)
 
     cache = sub.add_parser(
         "cache-gc", help="poda o cache de dependência (uv/npm) até caber no teto"
     )
-    cache.add_argument("--max-gb", type=float, default=cache_gc.DEFAULT_MAX_GB,
-                       dest="max_gb",
-                       help=f"teto em GB (default {cache_gc.DEFAULT_MAX_GB:g})")
-    cache.add_argument("--dry-run", action="store_true",
-                       help="só reporta o uso atual, não remove nada")
+    cache.add_argument(
+        "--max-gb",
+        type=float,
+        default=cache_gc.DEFAULT_MAX_GB,
+        dest="max_gb",
+        help=f"teto em GB (default {cache_gc.DEFAULT_MAX_GB:g})",
+    )
+    cache.add_argument(
+        "--dry-run", action="store_true", help="só reporta o uso atual, não remove nada"
+    )
     cache.set_defaults(func=cmd_cache_gc)
 
     add_cmd = sub.add_parser(
         "add", help="autora uma unit a partir de uma tarefa em linguagem natural"
     )
     add_cmd.add_argument("task", help="a tarefa, escrita em português")
-    add_cmd.add_argument("--project", required=True,
-                         help="projeto registrado em config/projects.toml")
-    add_cmd.add_argument("--dry", action="store_true",
-                         help="mostra a unit autorada sem gravar nada")
-    add_cmd.add_argument("--ui", action="store_true",
-                         help="tarefa de frontend: gruda `harness ui-verify dist "
-                              "--expect-asset css` no verify_cmd autorado")
-    add_cmd.add_argument("--model", default=None,
-                         help="modelo da autoria (default: haiku)")
-    add_cmd.add_argument("--max-usd", type=float, default=None, dest="max_usd",
-                         help="teto de custo da chamada de autoria (default: 0.25)")
-    add_cmd.add_argument("--projects", default=None,
-                         help="registro de projetos alternativo")
-    add_cmd.add_argument("--out-dir", default=None, dest="out_dir",
-                         help="destino da unit (default: benchmarks/quarantine)")
+    add_cmd.add_argument(
+        "--project", required=True, help="projeto registrado em config/projects.toml"
+    )
+    add_cmd.add_argument(
+        "--dry", action="store_true", help="mostra a unit autorada sem gravar nada"
+    )
+    add_cmd.add_argument(
+        "--ui",
+        action="store_true",
+        help="tarefa de frontend: gruda `harness ui-verify dist "
+        "--expect-asset css` no verify_cmd autorado",
+    )
+    add_cmd.add_argument("--model", default=None, help="modelo da autoria (default: haiku)")
+    add_cmd.add_argument(
+        "--max-usd",
+        type=float,
+        default=None,
+        dest="max_usd",
+        help="teto de custo da chamada de autoria (default: 0.25)",
+    )
+    add_cmd.add_argument("--projects", default=None, help="registro de projetos alternativo")
+    add_cmd.add_argument(
+        "--out-dir",
+        default=None,
+        dest="out_dir",
+        help="destino da unit (default: benchmarks/quarantine)",
+    )
     add_cmd.set_defaults(func=cmd_add)
 
     # Import tardio como no cmd_decompose: só o teto do plano é preciso aqui, e
@@ -1730,38 +1938,63 @@ def build_parser() -> argparse.ArgumentParser:
         help="quebra uma tarefa grande numa fila ordenada de sub-units atômicas",
     )
     dec.add_argument("task", help="a tarefa grande, escrita em português")
-    dec.add_argument("--project", required=True,
-                     help="projeto registrado em config/projects.toml")
-    dec.add_argument("--n-max", type=int, default=DEFAULT_N_MAX, dest="n_max",
-                     help=f"teto de passos do plano (default {DEFAULT_N_MAX})")
-    dec.add_argument("--dry", action="store_true",
-                     help="mostra a fila planejada sem gravar nada")
-    dec.add_argument("--model", default=None,
-                     help="modelo do planejamento (default: haiku)")
-    dec.add_argument("--max-usd", type=float, default=None, dest="max_usd",
-                     help="teto de custo da chamada de planejamento")
-    dec.add_argument("--projects", default=None,
-                     help="registro de projetos alternativo")
-    dec.add_argument("--queue-dir", default=None, dest="queue_dir",
-                     help="fila destino (default: a do projeto no registro)")
+    dec.add_argument("--project", required=True, help="projeto registrado em config/projects.toml")
+    dec.add_argument(
+        "--n-max",
+        type=int,
+        default=DEFAULT_N_MAX,
+        dest="n_max",
+        help=f"teto de passos do plano (default {DEFAULT_N_MAX})",
+    )
+    dec.add_argument("--dry", action="store_true", help="mostra a fila planejada sem gravar nada")
+    dec.add_argument("--model", default=None, help="modelo do planejamento (default: haiku)")
+    dec.add_argument(
+        "--max-usd",
+        type=float,
+        default=None,
+        dest="max_usd",
+        help="teto de custo da chamada de planejamento",
+    )
+    dec.add_argument("--projects", default=None, help="registro de projetos alternativo")
+    dec.add_argument(
+        "--queue-dir",
+        default=None,
+        dest="queue_dir",
+        help="fila destino (default: a do projeto no registro)",
+    )
     dec.set_defaults(func=cmd_decompose)
 
-    seal = sub.add_parser(
-        "seal", help="promove um exame da quarentena para benchmarks/sealed"
-    )
+    seal = sub.add_parser("seal", help="promove um exame da quarentena para benchmarks/sealed")
     seal.add_argument("name", help="nome do dir em benchmarks/quarantine")
-    seal.add_argument("--force", action="store_true",
-                      help="sela mesmo que o harness atual já passe no exame "
-                           "(fora da fronteira de dificuldade)")
-    seal.add_argument("--yes", action="store_true",
-                      help="confirmação humana; sem isto o comando recusa")
+    seal.add_argument(
+        "--force",
+        action="store_true",
+        help="sela mesmo que o harness atual já passe no exame (fora da fronteira de dificuldade)",
+    )
+    seal.add_argument(
+        "--yes", action="store_true", help="confirmação humana; sem isto o comando recusa"
+    )
     seal.set_defaults(func=cmd_seal)
 
     frontier = sub.add_parser(
         "frontier", help="lista os exames da quarentena em que o harness atual falha"
     )
-    frontier.add_argument("--backend", default="mock", help="backend do screening (default mock)")
-    frontier.add_argument("--model", default="", help="modelo do backend (default vazio)")
+    frontier.add_argument(
+        "--backend",
+        default="",
+        help="backend do screening (default: [frontier]/[exam] de config/ruler.toml)",
+    )
+    frontier.add_argument("--model", default="", help="modelo do backend (default: o do config)")
+    frontier.add_argument(
+        "--max-units",
+        type=int,
+        default=0,
+        dest="max_units",
+        help="teto de candidatos screenados (0 = sem teto)",
+    )
+    frontier.add_argument(
+        "--deadline", type=float, default=0.0, help="teto de segundos do screening (0 = sem teto)"
+    )
     frontier.set_defaults(func=cmd_frontier)
 
     evolve = sub.add_parser(
@@ -1769,20 +2002,41 @@ def build_parser() -> argparse.ArgumentParser:
     )
     evolve.add_argument("--steps", type=int, default=1, help="gerações (default 1)")
     evolve.add_argument("--pop", type=int, default=4, help="tamanho da população (default 4)")
-    evolve.add_argument("--n", type=int, default=1,
-                        help="runs por indivíduo POR unidade (default 1)")
-    evolve.add_argument("--unit", action="append", default=[],
-                        help="unidade de avaliação (repetível); default: benchmarks/held_in/*")
-    evolve.add_argument("--backend", default="mock",
-                        help="executor de TODA a população; default mock ($0, "
-                             "determinístico) — a evolução é o laço que roda mais vezes")
+    evolve.add_argument(
+        "--n", type=int, default=1, help="runs por indivíduo POR unidade (default 1)"
+    )
+    evolve.add_argument(
+        "--unit",
+        action="append",
+        default=[],
+        help="unidade de avaliação (repetível); default: benchmarks/held_in/*",
+    )
+    evolve.add_argument(
+        "--backend",
+        default="mock",
+        help="executor de TODA a população; default mock ($0, "
+        "determinístico) — a evolução é o laço que roda mais vezes",
+    )
     evolve.add_argument("--model", default=None)
-    evolve.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS, dest="max_turns",
-                        help=f"knob mutável do genoma (default {DEFAULT_MAX_TURNS})")
-    evolve.add_argument("--seed", type=int, default=0,
-                        help="semente do PBT: mesma semente, mesma população (default 0)")
-    evolve.add_argument("--archive", default=None, metavar="PATH",
-                        help="sqlite do MAP-Elites (default data/archive.sqlite)")
+    evolve.add_argument(
+        "--max-turns",
+        type=int,
+        default=DEFAULT_MAX_TURNS,
+        dest="max_turns",
+        help=f"knob mutável do genoma (default {DEFAULT_MAX_TURNS})",
+    )
+    evolve.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="semente do PBT: mesma semente, mesma população (default 0)",
+    )
+    evolve.add_argument(
+        "--archive",
+        default=None,
+        metavar="PATH",
+        help="sqlite do MAP-Elites (default data/archive.sqlite)",
+    )
     evolve.add_argument("--project", default=None)
     evolve.set_defaults(func=cmd_evolve, parser=evolve)
 
@@ -1790,9 +2044,12 @@ def build_parser() -> argparse.ArgumentParser:
         "webhook",
         help="sobe a porta HTTP (loopback) que deposita eventos no inbox",
     )
-    webhook.add_argument("--port", type=int, default=WEBHOOK_PORT,
-                         help=f"porta em 127.0.0.1 (default {WEBHOOK_PORT}; "
-                              "0 = efêmera, o bind é impresso)")
+    webhook.add_argument(
+        "--port",
+        type=int,
+        default=WEBHOOK_PORT,
+        help=f"porta em 127.0.0.1 (default {WEBHOOK_PORT}; 0 = efêmera, o bind é impresso)",
+    )
     webhook.set_defaults(func=cmd_webhook)
 
     bench = sub.add_parser("bench", help="mede o custo de uma operação do harness")

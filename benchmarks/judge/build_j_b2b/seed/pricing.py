@@ -12,6 +12,7 @@ Formato da resposta:
               "total_cents": int}}
   erro    -> {"status": 400, "body": {"error": str}}
 """
+
 from __future__ import annotations
 
 # regra: 5% de desconto no subtotal se a soma de qty >= 50; 10% se >= 100.

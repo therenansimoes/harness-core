@@ -69,11 +69,16 @@ def load_kpis(repo_path) -> dict[str, dict]:
             timeout_s = float(DEFAULT_TIMEOUT_S)
         direction = str(spec.get("direction", DEFAULT_DIRECTION)).strip().lower()
         if direction not in (UP, DOWN):
-            print(f"kpi: [kpi.{name}] direction={spec.get('direction')!r} desconhecido, "
-                  f"usando {DEFAULT_DIRECTION!r} ({path})", file=sys.stderr)
+            print(
+                f"kpi: [kpi.{name}] direction={spec.get('direction')!r} desconhecido, "
+                f"usando {DEFAULT_DIRECTION!r} ({path})",
+                file=sys.stderr,
+            )
             direction = DEFAULT_DIRECTION
         out[str(name)] = {
-            "cmd": str(spec["cmd"]), "timeout_s": timeout_s, "direction": direction,
+            "cmd": str(spec["cmd"]),
+            "timeout_s": timeout_s,
+            "direction": direction,
         }
     return out
 
@@ -110,7 +115,12 @@ def run_kpi(cmd: str, cwd, timeout_s: float = DEFAULT_TIMEOUT_S) -> float:
     partir do workspace copiado."""
     try:
         p = subprocess.run(
-            cmd, cwd=str(cwd), shell=True, capture_output=True, text=True, timeout=timeout_s,
+            cmd,
+            cwd=str(cwd),
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
             env={**os.environ, "HARNESS_ROOT": str(ROOT)},
         )
     except (subprocess.TimeoutExpired, OSError):

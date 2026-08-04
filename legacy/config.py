@@ -23,8 +23,8 @@ USER_CONFIG = Path(os.environ.get("HARNESS_CONFIG_HOME", Path.home() / ".config"
 DEFAULTS = {
     "whatsapp": {
         "service_url": "http://127.0.0.1:8787",
-        "allowlist": [],          # JIDs autorizados. VAZIO = nada entra, nada sai.
-        "owner": "",              # JID do dono, para comandos de assist
+        "allowlist": [],  # JIDs autorizados. VAZIO = nada entra, nada sai.
+        "owner": "",  # JID do dono, para comandos de assist
         # Política de outbound. FALSE por default e é assim que tem que ficar:
         # com auto-reply ligado, qualquer bug no parser de comandos vira mensagem
         # enviada sozinha. Ligue só conscientemente.
@@ -33,15 +33,15 @@ DEFAULTS = {
         "timeout_s": 20,
     },
     "harness": {
-        "version_pin": "",        # .harness/ de um projeto pode pinar uma versão
+        "version_pin": "",  # .harness/ de um projeto pode pinar uma versão
         "results_dir": "",
         # autopilot (D6): tetos do loop sem supervisão. Os três primeiros são
         # o freio — o loop para no PRIMEIRO que estourar, não no último.
         "autopilot_wall_clock_s": 1200,
         "autopilot_budget_usd": 1.00,
         "autopilot_max_iterations": 30,
-        "autopilot_self_every": 3,       # a cada N passos de fila, 1 passo de auto-evolução
-        "autopilot_probation_runs": 3,   # runs de observação depois de um merge
+        "autopilot_self_every": 3,  # a cada N passos de fila, 1 passo de auto-evolução
+        "autopilot_probation_runs": 3,  # runs de observação depois de um merge
         # Escrita fora da raiz do repo é a única forma de o autopilot estragar
         # algo que não é dele. FALSE por default e é assim que tem que ficar.
         "autopilot_allow_external_work_path": False,
@@ -65,7 +65,7 @@ def _read_toml(p: Path) -> dict:
     try:
         return tomllib.loads(p.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as e:
-        raise SystemExit(f"config inválido em {p}: {e}")
+        raise SystemExit(f"config inválido em {p}: {e}") from e
 
 
 def load(repo: Path | None = None) -> dict:
@@ -77,13 +77,19 @@ def load(repo: Path | None = None) -> dict:
     if os.environ.get("HARNESS_WA_URL"):
         wa["service_url"] = os.environ["HARNESS_WA_URL"]
     if os.environ.get("HARNESS_WA_ALLOWLIST"):
-        wa["allowlist"] = [s.strip() for s in os.environ["HARNESS_WA_ALLOWLIST"].split(",") if s.strip()]
+        wa["allowlist"] = [
+            s.strip() for s in os.environ["HARNESS_WA_ALLOWLIST"].split(",") if s.strip()
+        ]
     if os.environ.get("HARNESS_WA_OWNER"):
         wa["owner"] = os.environ["HARNESS_WA_OWNER"]
     if os.environ.get("HARNESS_WA_INBOX"):
         wa["inbox_path"] = os.environ["HARNESS_WA_INBOX"]
     if os.environ.get("HARNESS_WA_AUTO_REPLY"):
-        wa["allow_auto_reply_to_owner"] = os.environ["HARNESS_WA_AUTO_REPLY"].lower() in ("1", "true", "yes")
+        wa["allow_auto_reply_to_owner"] = os.environ["HARNESS_WA_AUTO_REPLY"].lower() in (
+            "1",
+            "true",
+            "yes",
+        )
 
     h = cfg["harness"]
     if os.environ.get("HARNESS_AP_MINUTES"):
@@ -114,5 +120,7 @@ if __name__ == "__main__":
     c = load()
     c_show = _merge(c, {})
     print(json.dumps(c_show, indent=2, ensure_ascii=False))
-    print(f"\n(user config: {USER_CONFIG / 'config.toml'} "
-          f"{'existe' if (USER_CONFIG / 'config.toml').exists() else 'NÃO existe'})")
+    print(
+        f"\n(user config: {USER_CONFIG / 'config.toml'} "
+        f"{'existe' if (USER_CONFIG / 'config.toml').exists() else 'NÃO existe'})"
+    )

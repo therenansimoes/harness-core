@@ -15,9 +15,9 @@ import ast
 import hashlib
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 from harness.genome.genome import Genome
 from harness.improve import lineage, mutate, root_dir
@@ -80,7 +80,7 @@ def propose_code_mutation(
     before = path.read_text(encoding="utf-8") if path.is_file() else None
     ts = store.now_iso()
     # determinístico como mutation_id do mutate: retomada não duplica id
-    mid = hashlib.sha256(f"{rel}\0{ts}\0{new_source}".encode("utf-8")).hexdigest()[:12]
+    mid = hashlib.sha256(f"{rel}\0{ts}\0{new_source}".encode()).hexdigest()[:12]
 
     _write(path, new_source)
     _append_lineage(base, {"id": mid, "parent_id": parent_id, "target": rel, "ts": ts})
@@ -113,9 +113,7 @@ def judge_code_mutation(
             path.unlink(missing_ok=True)
         else:
             _write(path, mutation.before_source)
-    _append_lineage(
-        base, {"id": mutation.mutation_id, "verdict": verdict, "ts": store.now_iso()}
-    )
+    _append_lineage(base, {"id": mutation.mutation_id, "verdict": verdict, "ts": store.now_iso()})
     return verdict
 
 

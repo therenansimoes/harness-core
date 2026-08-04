@@ -18,7 +18,7 @@ from harness.cli import load_unit, main
 
 FIXED = {
     "id_slug": "ajusta-titulo",
-    "prompt_md": "# Tarefa\n\nEdite `index.html`: troque o título por \"Fazenda\".",
+    "prompt_md": '# Tarefa\n\nEdite `index.html`: troque o título por "Fazenda".',
     "verify_cmd": "grep -q 'Fazenda' index.html",
     "kind": "content",
 }
@@ -48,14 +48,17 @@ def env(tmp_path, monkeypatch):
 
     e = Env()
     e.repo, e.projects_file, e.out_dir, e.calls, e.fake = (
-        repo, projects_file, out_dir, calls, fake_call
+        repo,
+        projects_file,
+        out_dir,
+        calls,
+        fake_call,
     )
     return e
 
 
 def _add(env, task="tarefa", project="faz", **kw):
-    return add(task, project, projects_file=env.projects_file,
-               out_dir=env.out_dir, **kw)
+    return add(task, project, projects_file=env.projects_file, out_dir=env.out_dir, **kw)
 
 
 def test_add_writes_loadable_unit(env):
@@ -99,8 +102,9 @@ def test_dry_shows_without_writing(env, capsys):
     assert FIXED["verify_cmd"] in shown
 
 
-@pytest.mark.parametrize("bad", ["", "   ", "true", "review manually the page",
-                                 "npm build && confira se ficou bom"])
+@pytest.mark.parametrize(
+    "bad", ["", "   ", "true", "review manually the page", "npm build && confira se ficou bom"]
+)
 def test_bad_verify_cmd_rejected_nothing_written(env, bad):
     env.fake.payload = {**FIXED, "verify_cmd": bad}
     with pytest.raises(AddError):
@@ -145,8 +149,9 @@ def test_ui_flag_appends_ui_verify(env):
     plain = _add(env)
     assert load_unit(plain).verify_cmd == FIXED["verify_cmd"]
 
-    with_ui = add("tarefa", "faz", projects_file=env.projects_file,
-                  out_dir=env.out_dir / "ui", ui=True)
+    with_ui = add(
+        "tarefa", "faz", projects_file=env.projects_file, out_dir=env.out_dir / "ui", ui=True
+    )
     data = tomllib.loads((with_ui / "unit.toml").read_text())  # TOML segue válido
     assert data["verify_cmd"] == FIXED["verify_cmd"] + add_mod.UI_VERIFY_SUFFIX
     assert load_unit(with_ui).verify_cmd == data["verify_cmd"]
@@ -154,16 +159,27 @@ def test_ui_flag_appends_ui_verify(env):
 
 def test_cli_add_ui_flag(env, tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
-    rc = main(["add", "arruma o layout", "--project", "faz", "--dry", "--ui",
-               "--projects", str(env.projects_file)])
+    rc = main(
+        [
+            "add",
+            "arruma o layout",
+            "--project",
+            "faz",
+            "--dry",
+            "--ui",
+            "--projects",
+            str(env.projects_file),
+        ]
+    )
     assert rc == 0
     assert add_mod.UI_VERIFY_SUFFIX in capsys.readouterr().out
 
 
 def test_cli_add_dry(env, tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
-    rc = main(["add", "põe o título", "--project", "faz", "--dry",
-               "--projects", str(env.projects_file)])
+    rc = main(
+        ["add", "põe o título", "--project", "faz", "--dry", "--projects", str(env.projects_file)]
+    )
     assert rc == 0
     assert 'id = "ajusta-titulo"' in capsys.readouterr().out
     assert not (tmp_path / "benchmarks").exists()
@@ -172,7 +188,6 @@ def test_cli_add_dry(env, tmp_path, monkeypatch, capsys):
 def test_cli_add_error_exit_1(env, tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     env.fake.payload = {**FIXED, "verify_cmd": ""}
-    rc = main(["add", "tarefa", "--project", "faz",
-               "--projects", str(env.projects_file)])
+    rc = main(["add", "tarefa", "--project", "faz", "--projects", str(env.projects_file)])
     assert rc == 1
     assert "add falhou" in capsys.readouterr().err

@@ -6,6 +6,7 @@ Nenhuma chamada real ao `claude` — run_task.run_agent é monkeypatchado.
 
     python3 -m pytest tests/test_kpi.py -q
 """
+
 from __future__ import annotations
 
 import json
@@ -129,7 +130,9 @@ def test_cli_imprime_o_dict(tmp_path):
 
     p = subprocess.run(
         [sys.executable, str(REPO / "kpi.py"), str(tmp_path)],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     assert p.returncode == 0, p.stderr
     assert json.loads(p.stdout.strip()) == {"linhas": 2.0}
@@ -152,8 +155,14 @@ def _make_task(tmp_path: Path, with_kpi: bool) -> Path:
 def _patch_agent(monkeypatch):
     def fake_run_agent(prompt, ws):
         return AgentResult(
-            ok=True, seconds=1.0, tokens=10, cost_usd=0.01, turns=1,
-            notes="", trace_path="", trace_lines=0,
+            ok=True,
+            seconds=1.0,
+            tokens=10,
+            cost_usd=0.01,
+            turns=1,
+            notes="",
+            trace_path="",
+            trace_lines=0,
         )
 
     monkeypatch.setattr(run_task, "run_agent", fake_run_agent)
@@ -162,7 +171,7 @@ def _patch_agent(monkeypatch):
 def _rows(path: Path) -> list[dict]:
     lines = path.read_text().splitlines()
     header = lines[0].split("\t")
-    return [dict(zip(header, ln.split("\t"))) for ln in lines[1:] if ln.strip()]
+    return [dict(zip(header, ln.split("\t"), strict=False)) for ln in lines[1:] if ln.strip()]
 
 
 def test_run_grava_coluna_kpis(monkeypatch, tmp_path):
@@ -192,8 +201,18 @@ def test_linha_antiga_sem_coluna_kpis_ainda_parseia(tmp_path, monkeypatch):
     Quem lê (score.load) precisa continuar parseando com default vazio."""
     old_header = [c for c in run_task.HEADER if c != "kpis"]
     old_line = [
-        "2026-08-01T12:00:00+00:00", "v0.4", "cli", "claude-haiku-4-5", "fixed",
-        "task_01", "1", "12.3", "1000", "0.0100", "3", "",
+        "2026-08-01T12:00:00+00:00",
+        "v0.4",
+        "cli",
+        "claude-haiku-4-5",
+        "fixed",
+        "task_01",
+        "1",
+        "12.3",
+        "1000",
+        "0.0100",
+        "3",
+        "",
     ]
     path = tmp_path / "results.tsv"
     path.write_text("\t".join(old_header) + "\n" + "\t".join(old_line) + "\n")
@@ -212,8 +231,17 @@ def test_linha_antiga_sem_coluna_kpis_ainda_parseia(tmp_path, monkeypatch):
 
 def test_graph_guarda_kpis(tmp_path):
     db = tmp_path / "critique.db"
-    graph.record_run("task_01", "v0.4", "fixed", success=1, seconds=1.0, tokens=10,
-                     cost_usd=0.01, kpis='{"linhas":4.0}', db_path=db)
+    graph.record_run(
+        "task_01",
+        "v0.4",
+        "fixed",
+        success=1,
+        seconds=1.0,
+        tokens=10,
+        cost_usd=0.01,
+        kpis='{"linhas":4.0}',
+        db_path=db,
+    )
 
     rows = graph.runs_for_version("v0.4", db_path=db)
     assert json.loads(rows[0]["kpis"]) == {"linhas": 4.0}
@@ -243,10 +271,19 @@ def test_graph_migra_db_antigo_sem_coluna_kpis(tmp_path):
     conn.commit()
     conn.close()
 
-    graph.record_run("task_01", "v0.3", "fixed", success=1, seconds=1.0, tokens=10,
-                     cost_usd=0.01, kpis='{"a":1.0}', db_path=db)
+    graph.record_run(
+        "task_01",
+        "v0.3",
+        "fixed",
+        success=1,
+        seconds=1.0,
+        tokens=10,
+        cost_usd=0.01,
+        kpis='{"a":1.0}',
+        db_path=db,
+    )
 
     rows = {r["task_id"]: r for r in graph.runs_for_version("v0.3", db_path=db)}
     assert set(rows) == {"task_00", "task_01"}
-    assert rows["task_00"]["kpis"] in ("", None)   # linha pré-migração
+    assert rows["task_00"]["kpis"] in ("", None)  # linha pré-migração
     assert json.loads(rows["task_01"]["kpis"]) == {"a": 1.0}

@@ -49,8 +49,11 @@ LangChain, CLI, HTTP nem nome de provider:
 ```python
 class Backend(Protocol):
     name: ClassVar[str]
-    def capabilities(self) -> Capabilities: ...   # resumable, reports_cost, model_selectable, tools, streaming
-    def preflight(self) -> Preflight: ...         # (ok, reason) — determinístico, ZERO chamada de LLM
+
+    def capabilities(
+        self,
+    ) -> Capabilities: ...  # resumable, reports_cost, model_selectable, tools, streaming
+    def preflight(self) -> Preflight: ...  # (ok, reason) — determinístico, ZERO chamada de LLM
     def execute(self, req: ExecRequest) -> ExecResult: ...
 ```
 
@@ -69,8 +72,9 @@ plugin não instalado. Backend de terceiro não toca no núcleo.
 ```python
 class AuthAdapter(Protocol):
     name: ClassVar[str]
-    def env(self) -> Mapping[str, str]: ...   # injetado no processo do backend, nunca persistido
-    def check(self) -> Preflight: ...         # checagem local, ZERO chamada de LLM
+
+    def env(self) -> Mapping[str, str]: ...  # injetado no processo do backend, nunca persistido
+    def check(self) -> Preflight: ...  # checagem local, ZERO chamada de LLM
 ```
 
 O repo shippa só `NullAuth` (autenticação nativa da ferramenta). Adapter de

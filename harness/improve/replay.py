@@ -30,9 +30,9 @@ e sem timezone misturado a ordem lexicográfica é a ordem cronológica.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
 from harness.ledger import store
 from harness.ruler.wilson import KEEP, wilson_interval
@@ -191,17 +191,11 @@ def attribute(
     veredito, se voltou) — o número sai das janelas que o chamador montou.
     """
     if mutation is not None and mutation.mutation_id != mutation_id:
-        raise ReplayError(
-            f"mutação {mutation.mutation_id} não é {mutation_id}"
-        )
+        raise ReplayError(f"mutação {mutation.mutation_id} não é {mutation_id}")
     succ_before = sum(1 for r in before if r.ok)
     succ_after = sum(1 for r in after if r.ok)
     n_before, n_after = len(before), len(after)
-    delta = (
-        succ_after / n_after - succ_before / n_before
-        if n_before and n_after
-        else None
-    )
+    delta = succ_after / n_after - succ_before / n_before if n_before and n_after else None
     return Attribution(
         mutation_id=mutation_id,
         rule_id=mutation.rule_id if mutation else "",
@@ -220,9 +214,7 @@ def attribute(
     )
 
 
-def replay(
-    mutation_id: str, path: Path | None = None, limit: int = DEFAULT_LIMIT
-) -> Attribution:
+def replay(mutation_id: str, path: Path | None = None, limit: int = DEFAULT_LIMIT) -> Attribution:
     """Atribuição de uma mutação do ledger. `limit` é o teto de runs lidas."""
     rows = store.mutations(limit=limit, path=path)
     mutation = next((m for m in rows if m.mutation_id == mutation_id), None)

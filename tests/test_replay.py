@@ -49,10 +49,20 @@ def ts(minute: int) -> str:
 
 def run(minute: int, ok: bool, **over) -> RunRow:
     base = dict(
-        run_id=f"r{minute}", unit_id="echo", project=None, backend="mock",
-        model=None, tier="t0", kind="code", ok=ok,
-        exit_reason="done" if ok else "verify_failed", sec_total=1.0,
-        sec_provision=0.0, cost_usd=0.0, intervention=False, created_at=ts(minute),
+        run_id=f"r{minute}",
+        unit_id="echo",
+        project=None,
+        backend="mock",
+        model=None,
+        tier="t0",
+        kind="code",
+        ok=ok,
+        exit_reason="done" if ok else "verify_failed",
+        sec_total=1.0,
+        sec_provision=0.0,
+        cost_usd=0.0,
+        intervention=False,
+        created_at=ts(minute),
     )
     base.update(over)
     return RunRow(**base)
@@ -60,8 +70,14 @@ def run(minute: int, ok: bool, **over) -> RunRow:
 
 def mutation(**over) -> MutationRow:
     base = dict(
-        mutation_id=MID, rule_id=RULE, verdict="KEEP", arm_a="1/6", arm_b="4/6",
-        applied_at=ts(10), reverted=False, note=None,
+        mutation_id=MID,
+        rule_id=RULE,
+        verdict="KEEP",
+        arm_a="1/6",
+        arm_b="4/6",
+        applied_at=ts(10),
+        reverted=False,
+        note=None,
     )
     base.update(over)
     return MutationRow(**base)
@@ -70,11 +86,11 @@ def mutation(**over) -> MutationRow:
 def seed(data_dir: Path, *, after_ok: int = 5, **over) -> MutationRow:
     """Escreve a linha do tempo do docstring e devolve a mutação gravada."""
     path = db(data_dir)
-    for minute in range(0, 6):                      # antes: 2 de 6
+    for minute in range(0, 6):  # antes: 2 de 6
         store.record_run(run(minute, minute < 2), path=path)
-    for minute in range(10, 22):                    # o experimento: 12 runs
+    for minute in range(10, 22):  # o experimento: 12 runs
         store.record_run(run(minute, minute % 3 == 0), path=path)
-    for i, minute in enumerate(range(30, 36)):      # depois: 5 de 6
+    for i, minute in enumerate(range(30, 36)):  # depois: 5 de 6
         store.record_run(run(minute, i < after_ok), path=path)
     row = mutation(**over)
     store.record_mutation(row, path=path)
@@ -135,7 +151,7 @@ def test_sem_janela_depois_o_delta_e_none(data_dir):
     # tudo que existe é passado: as 24 runs caíram antes do `applied_at`
     assert (att.n_before, att.n_after) == (24, 0)
     assert att.delta is None
-    assert att.ci_after == (0.0, 1.0)      # a ignorância inteira
+    assert att.ci_after == (0.0, 1.0)  # a ignorância inteira
 
 
 def test_mutacao_desconhecida(data_dir):
@@ -158,9 +174,7 @@ def test_confounder_e_a_segunda_keep_no_meio(data_dir):
 
     att = replay(MID)
 
-    assert [(c.mutation_id, c.rule_id) for c in att.confounders] == [
-        ("bbbbbbbbbbbb", "turns_up")
-    ]
+    assert [(c.mutation_id, c.rule_id) for c in att.confounders] == [("bbbbbbbbbbbb", "turns_up")]
 
 
 def test_nao_e_confounder_o_que_nao_sobreviveu_nem_o_que_ficou_fora(data_dir):
@@ -235,12 +249,9 @@ def test_cli_replay_imprime_delta_ic_e_confounders(data_dir, capsys):
     assert cli.main(["replay", "--mutation", MID]) == 0
 
     linhas = capsys.readouterr().out.strip().splitlines()
-    assert linhas[0] == (
-        f"mut {MID} {RULE} KEEP mantida exp=12 kind=code tier=t0 backend=mock"
-    )
+    assert linhas[0] == (f"mut {MID} {RULE} KEEP mantida exp=12 kind=code tier=t0 backend=mock")
     assert linhas[1] == (
-        "antes 2/6 [0.10,0.70] depois 5/6 [0.44,0.97] "
-        "delta=+0.50 intervalos=sobrepostos"
+        "antes 2/6 [0.10,0.70] depois 5/6 [0.44,0.97] delta=+0.50 intervalos=sobrepostos"
     )
     assert linhas[2] == f"confounders=1 bbbbbbbbbbbb:turns_up@{ts(25)}"
 

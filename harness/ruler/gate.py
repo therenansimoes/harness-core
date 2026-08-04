@@ -15,10 +15,11 @@ o gate não escala sozinho.
 from __future__ import annotations
 
 import tomllib
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from math import isnan, nan
 from pathlib import Path
-from typing import Literal, Mapping, Sequence
+from typing import Literal
 
 from harness.ruler.kpi import KpiSpec, regressed
 from harness.types import Verdict
@@ -95,4 +96,4 @@ def gate(
 
 def _tamper_name(entry: str) -> str:
     """`tamper/detect` já devolve entradas prefixadas; não duplica o prefixo."""
-    return entry[len(TAMPER_PREFIX):] if entry.startswith(TAMPER_PREFIX) else entry
+    return entry[len(TAMPER_PREFIX) :] if entry.startswith(TAMPER_PREFIX) else entry

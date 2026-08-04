@@ -51,14 +51,16 @@ def run_cli(args: list[str], timeout: int = 30) -> subprocess.CompletedProcess:
     prova paralelismo/lock de verdade nos aceites 2/3/4. Herda o env do
     processo de teste (HARNESS_MOCK_AGENT=1 incluso)."""
     return subprocess.run(
-        [sys.executable, PROJECT_PY, *args], cwd=REPO,
-        capture_output=True, text=True, timeout=timeout,
+        [sys.executable, PROJECT_PY, *args],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
     )
 
 
 DEFAULT_VERIFY = (
-    "import pathlib, sys\n"
-    "sys.exit(0 if pathlib.Path('AGENT_OUTPUT.txt').exists() else 1)\n"
+    "import pathlib, sys\nsys.exit(0 if pathlib.Path('AGENT_OUTPUT.txt').exists() else 1)\n"
 )
 ALWAYS_FAIL_VERIFY = "import sys\nsys.exit(1)\n"
 
@@ -86,10 +88,25 @@ def _add_project(name: str, priority: int = 1, extra_files=None) -> Path:
     return wp
 
 
-def _enqueue(name: str, title: str, prompt_text: str, verify_text: str = DEFAULT_VERIFY, priority: int = 1) -> str:
+def _enqueue(
+    name: str, title: str, prompt_text: str, verify_text: str = DEFAULT_VERIFY, priority: int = 1
+) -> str:
     prompt_f = _mkfile(f"{name}_{title}_prompt.md", prompt_text)
     verify_f = _mkfile(f"{name}_{title}_verify.py", verify_text)
-    r = run_cli(["queue", name, "add", title, "--prompt", str(prompt_f), "--verify", str(verify_f), "--priority", str(priority)])
+    r = run_cli(
+        [
+            "queue",
+            name,
+            "add",
+            title,
+            "--prompt",
+            str(prompt_f),
+            "--verify",
+            str(verify_f),
+            "--priority",
+            str(priority),
+        ]
+    )
     assert r.returncode == 0, r.stdout + r.stderr
     rows = project.read_queue(project.PROJECTS_ROOT / name)
     return rows[-1]["id"]
@@ -120,11 +137,17 @@ def test_aceite2_dois_run_once_em_paralelo_projetos_diferentes():
 
     proc1 = subprocess.Popen(
         [sys.executable, PROJECT_PY, "run", "--once", "--project", "a2_p1"],
-        cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        cwd=REPO,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
     )
     proc2 = subprocess.Popen(
         [sys.executable, PROJECT_PY, "run", "--once", "--project", "a2_p2"],
-        cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        cwd=REPO,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
     )
     out1, err1 = proc1.communicate(timeout=30)
     out2, err2 = proc2.communicate(timeout=30)
@@ -139,7 +162,9 @@ def test_aceite2_dois_run_once_em_paralelo_projetos_diferentes():
         assert len(results) == 2  # header + 1 linha
 
     ws_root = project.WS_ROOT
-    leftover = [p for p in ws_root.iterdir() if p.name.startswith("a2_")] if ws_root.is_dir() else []
+    leftover = (
+        [p for p in ws_root.iterdir() if p.name.startswith("a2_")] if ws_root.is_dir() else []
+    )
     assert leftover == [], f"workspace remanescente: {leftover}"
 
 
@@ -148,12 +173,15 @@ def test_aceite2_dois_run_once_em_paralelo_projetos_diferentes():
 
 def test_aceite3_dois_run_once_mesmo_projeto_so_um_executa():
     _add_project("a3_p1")
-    unit_id = _enqueue("a3_p1", "u1", "faça algo\nMOCK_SLEEP: 0.8\n")
+    _enqueue("a3_p1", "u1", "faça algo\nMOCK_SLEEP: 0.8\n")
     proj_dir = project.PROJECTS_ROOT / "a3_p1"
 
     proc1 = subprocess.Popen(
         [sys.executable, PROJECT_PY, "run", "--once", "--project", "a3_p1"],
-        cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        cwd=REPO,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
     )
 
     # Espera proc1 ter de fato reivindicado a unidade (claimed_at preenchido)
@@ -171,7 +199,10 @@ def test_aceite3_dois_run_once_mesmo_projeto_so_um_executa():
 
     proc2 = subprocess.Popen(
         [sys.executable, PROJECT_PY, "run", "--once", "--project", "a3_p1"],
-        cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        cwd=REPO,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
     )
 
     out1, err1 = proc1.communicate(timeout=30)
@@ -243,7 +274,7 @@ def test_aceite5_agente_edita_verify_gera_tamper():
 
     results = proj_dir.joinpath("results.tsv").read_text().splitlines()
     header, row = results[0].split("\t"), results[1].split("\t")
-    row_map = dict(zip(header, row))
+    row_map = dict(zip(header, row, strict=False))
     assert row_map["success"] == "0"
     assert "tamper:" in row_map["notes"]
 
@@ -298,7 +329,7 @@ def test_execute_grava_tier_e_class_nas_notes():
     assert r.returncode == 0, r.stdout + r.stderr
 
     results = (project.PROJECTS_ROOT / "d7_notes" / "results.tsv").read_text().splitlines()
-    row_map = dict(zip(results[0].split("\t"), results[1].split("\t")))
+    row_map = dict(zip(results[0].split("\t"), results[1].split("\t"), strict=False))
     assert "tier:" in row_map["notes"], row_map["notes"]
     assert "class:" in row_map["notes"], row_map["notes"]
     assert row_map["model"], row_map

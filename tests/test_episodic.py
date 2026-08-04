@@ -28,8 +28,7 @@ def _unit(tmp_path: Path, name: str, kind: str) -> Path:
     unit = tmp_path / name
     unit.mkdir()
     (unit / "unit.toml").write_text(
-        f'id = "{name}"\nkind = "{kind}"\nprompt = "x"\n'
-        f'verify_cmd = "{VERIFY_LOUD}"\n',
+        f'id = "{name}"\nkind = "{kind}"\nprompt = "x"\nverify_cmd = "{VERIFY_LOUD}"\n',
         encoding="utf-8",
     )
     return unit
@@ -55,8 +54,9 @@ def test_run_once_verify_failure_is_recalled(data_dir, tmp_path):
 
 def test_recall_is_keyed_by_kind(data_dir, tmp_path):
     """Caso de outro kind não contamina o prompt de quem não pediu."""
-    run_unit(_unit(tmp_path, "bad", "code"), "mock", None, data_dir,
-             thread_id="t-kind", max_attempts=1)
+    run_unit(
+        _unit(tmp_path, "bad", "code"), "mock", None, data_dir, thread_id="t-kind", max_attempts=1
+    )
 
     assert episodic.recall("code", BOOM)
     assert episodic.recall("docs", BOOM) == []

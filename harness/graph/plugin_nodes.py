@@ -109,9 +109,7 @@ def load_approvals(data_dir: Path | str | None = None) -> dict[str, set[str]]:
     return out
 
 
-def record_approval(
-    name: str, digest: str, data_dir: Path | str | None = None
-) -> Path:
+def record_approval(name: str, digest: str, data_dir: Path | str | None = None) -> Path:
     """Appenda o ack. Só a ação `node` (com ack humano) chama isto."""
     path = approvals_path(data_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -209,9 +207,7 @@ def _try_register(path: Path, name: str, approvals: dict[str, set[str]], topolog
 
 def _guard(tree: ast.Module) -> str | None:
     """Estático e conservador: o que não dá para provar aqui, recusa."""
-    if not any(
-        isinstance(n, ast.FunctionDef) and n.name == NODE_FUNC for n in tree.body
-    ):
+    if not any(isinstance(n, ast.FunctionDef) and n.name == NODE_FUNC for n in tree.body):
         return f"não define {NODE_FUNC}() no topo do módulo"
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -226,9 +222,8 @@ def _guard(tree: ast.Module) -> str | None:
         elif isinstance(node, ast.Name):
             if node.id in FORBIDDEN_NAMES:
                 return f"nome proibido: {node.id}"
-        elif isinstance(node, ast.Attribute):
-            if node.attr in FORBIDDEN_NAMES:
-                return f"nome proibido: .{node.attr}"
+        elif isinstance(node, ast.Attribute) and node.attr in FORBIDDEN_NAMES:
+            return f"nome proibido: .{node.attr}"
     return None
 
 
@@ -266,8 +261,7 @@ def _wrap(name: str, fn):
         out = fn(state, config)
         if not isinstance(out, dict):
             print(
-                f"plugin_nodes: nó {name} devolveu {type(out).__name__}, "
-                f"esperado dict — ignorado",
+                f"plugin_nodes: nó {name} devolveu {type(out).__name__}, esperado dict — ignorado",
                 file=sys.stderr,
             )
             return {}

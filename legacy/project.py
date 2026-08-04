@@ -24,6 +24,7 @@ Overrides de teste (nunca usados em produção):
                             MOCK_NOTES:) para simular tamper, falha, corrida
                             de lock e notes nos testes sem backend real.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -33,38 +34,59 @@ import os
 import shutil
 import subprocess
 import sys
-import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-import graph  # noqa: E402
-import kpi  # noqa: E402
-import router  # noqa: E402
-import runplan  # noqa: E402
+import graph
+import kpi
+import router
+import runplan
 
 ROOT = Path(__file__).parent.resolve()
 PROJECTS_ROOT = Path(os.environ.get("HARNESS_PROJECTS_ROOT", ROOT / "projects"))
 WS_ROOT = Path(os.environ.get("HARNESS_WS_ROOT", ROOT / ".harness_ws"))
-WS_IGNORE = shutil.ignore_patterns("node_modules", ".git", "__pycache__", "dist", ".astro", ".vercel", "*.pyc")
+WS_IGNORE = shutil.ignore_patterns(
+    "node_modules", ".git", "__pycache__", "dist", ".astro", ".vercel", "*.pyc"
+)
 
 # `attempts`/`tier` entraram no fim (D7, router): read_queue faz padding, então
 # queue.tsv legado de 8 colunas continua carregando — write_queue reescreve com 10.
-QUEUE_HEADER = ["id", "state", "priority", "created", "claimed_at", "prompt_file", "verify", "notes",
-                "attempts", "tier"]
+QUEUE_HEADER = [
+    "id",
+    "state",
+    "priority",
+    "created",
+    "claimed_at",
+    "prompt_file",
+    "verify",
+    "notes",
+    "attempts",
+    "tier",
+]
 # Mesmo schema do results.tsv global (run_task.py); cada projeto grava no SEU
 # results.tsv, não no da raiz. `kpis` é a ÚNICA coluna que o KPI por projeto
 # usa (JSON compacto) — KPI novo no alvo não vira coluna nova aqui.
 RESULTS_HEADER = [
-    "timestamp", "harness_version", "backend", "model", "suite",
-    "task_id", "success", "seconds", "tokens", "cost_usd", "turns", "notes",
+    "timestamp",
+    "harness_version",
+    "backend",
+    "model",
+    "suite",
+    "task_id",
+    "success",
+    "seconds",
+    "tokens",
+    "cost_usd",
+    "turns",
+    "notes",
     "kpis",
 ]
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def harness_version() -> str:
@@ -92,7 +114,9 @@ def read_config(proj_dir: Path) -> dict:
     return data.get("project", {})
 
 
-def write_config(proj_dir: Path, name: str, work_path: str, priority: int, enabled: bool = True) -> None:
+def write_config(
+    proj_dir: Path, name: str, work_path: str, priority: int, enabled: bool = True
+) -> None:
     cfg_path = proj_dir / ".harness" / "config.toml"
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg_path.write_text(
@@ -111,12 +135,12 @@ def read_queue(proj_dir: Path) -> list[dict]:
     path = proj_dir / "queue.tsv"
     if not path.exists():
         return []
-    lines = [l for l in path.read_text().splitlines() if l.strip()]
+    lines = [ln for ln in path.read_text().splitlines() if ln.strip()]
     rows = []
     for line in lines[1:]:
         parts = line.split("\t")
         parts += [""] * (len(QUEUE_HEADER) - len(parts))
-        rows.append(dict(zip(QUEUE_HEADER, parts)))
+        rows.append(dict(zip(QUEUE_HEADER, parts, strict=False)))
     return rows
 
 
@@ -135,7 +159,7 @@ def _last_activity(proj_dir: Path) -> str:
     path = proj_dir / "results.tsv"
     if not path.exists():
         return ""
-    lines = [l for l in path.read_text().splitlines() if l.strip()]
+    lines = [ln for ln in path.read_text().splitlines() if ln.strip()]
     if len(lines) <= 1:
         return ""
     return lines[-1].split("\t", 1)[0]
@@ -147,14 +171,14 @@ def _rows_of(proj_dir: Path) -> list[dict]:
     path = proj_dir / "results.tsv"
     if not path.exists():
         return []
-    lines = [l for l in path.read_text(errors="replace").splitlines() if l.strip()]
+    lines = [ln for ln in path.read_text(errors="replace").splitlines() if ln.strip()]
     if len(lines) < 2:
         return []
     header = lines[0].split("\t")
     rows = []
     for ln in lines[1:]:
         cells = (ln.split("\t") + [""] * len(header))[: len(header)]
-        rows.append(dict(zip(header, cells)))
+        rows.append(dict(zip(header, cells, strict=False)))
     return rows
 
 
@@ -162,7 +186,9 @@ def _append_result(proj_dir: Path, row: dict) -> None:
     path = proj_dir / "results.tsv"
     if not path.exists():
         path.write_text("\t".join(RESULTS_HEADER) + "\n")
-    line = "\t".join(str(row.get(c, "")).replace("\t", " ").replace("\n", " ") for c in RESULTS_HEADER)
+    line = "\t".join(
+        str(row.get(c, "")).replace("\t", " ").replace("\n", " ") for c in RESULTS_HEADER
+    )
     with path.open("a") as fh:
         fh.write(line + "\n")
 
@@ -249,7 +275,9 @@ def _call_agent(prompt: str, ws: Path, plan=None):
 LAST_RUN: dict = {}
 
 
-def _execute(proj_dir: Path, project_name: str, row: dict, all_rows: list[dict], keep: bool) -> bool:
+def _execute(
+    proj_dir: Path, project_name: str, row: dict, all_rows: list[dict], keep: bool
+) -> bool:
     cfg = read_config(proj_dir)
     work_path = Path(cfg["work_path"]).expanduser()
     unit_id = row["id"]
@@ -285,7 +313,11 @@ def _execute(proj_dir: Path, project_name: str, row: dict, all_rows: list[dict],
     plan = runplan.build("default", sel.tier, ws, project_name)
 
     run_id = f"{project_name}_{unit_id}_{uuid.uuid4().hex[:6]}"
-    overrides = {"HARNESS_RUN_ID": run_id, "HARNESS_TRACE_ROOT": str(proj_dir / "runs"), **router.env_for(sel)}
+    overrides = {
+        "HARNESS_RUN_ID": run_id,
+        "HARNESS_TRACE_ROOT": str(proj_dir / "runs"),
+        **router.env_for(sel),
+    }
     prev_env = {k: os.environ.get(k) for k in overrides}
     os.environ.update(overrides)
     try:
@@ -302,7 +334,11 @@ def _execute(proj_dir: Path, project_name: str, row: dict, all_rows: list[dict],
 
     try:
         v = subprocess.run(
-            [sys.executable, str(verify_path)], cwd=ws, capture_output=True, text=True, timeout=120,
+            [sys.executable, str(verify_path)],
+            cwd=ws,
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
         verify_ok = v.returncode == 0
         vnote = "" if verify_ok else f"verify:{(v.stdout + v.stderr).strip()[-160:]}"
@@ -368,11 +404,17 @@ def _execute(proj_dir: Path, project_name: str, row: dict, all_rows: list[dict],
     write_queue(proj_dir, all_rows)
 
     LAST_RUN.clear()
-    LAST_RUN.update({
-        "unit": unit_id, "tier": sel.tier.name, "class": sel.task_class,
-        "score": sel.score, "attempt": sel.attempt,
-        "success": bool(success), "escalated": escalated,
-    })
+    LAST_RUN.update(
+        {
+            "unit": unit_id,
+            "tier": sel.tier.name,
+            "class": sel.task_class,
+            "score": sel.score,
+            "attempt": sel.attempt,
+            "success": bool(success),
+            "escalated": escalated,
+        }
+    )
 
     if not keep:
         shutil.rmtree(ws, ignore_errors=True)
@@ -445,7 +487,9 @@ def cmd_add(a: argparse.Namespace) -> int:
     write_config(proj_dir, a.name, str(work_path), a.priority, enabled=True)
     (proj_dir / "queue.tsv").write_text("\t".join(QUEUE_HEADER) + "\n")
     (proj_dir / "spec" / "SPEC.md").write_text(f"---\nprojeto: {a.name}\n---\n\n# {a.name}\n")
-    (proj_dir / "regression" / "MANIFEST.json").write_text(json.dumps({"checks": []}, indent=2) + "\n")
+    (proj_dir / "regression" / "MANIFEST.json").write_text(
+        json.dumps({"checks": []}, indent=2) + "\n"
+    )
     (proj_dir / "MEMORY.md").write_text(f"# MEMORY — {a.name}\n")
     print(f"projeto {a.name} criado em {proj_dir} (work_path={work_path})")
     return 0
@@ -530,10 +574,15 @@ def cmd_status(a: argparse.Namespace) -> int:
     if not PROJECTS_ROOT.is_dir():
         print("nenhum projeto")
         return 0
-    names = [a.name] if a.name else [
-        p.name for p in sorted(PROJECTS_ROOT.iterdir())
-        if (p / ".harness" / "config.toml").exists()
-    ]
+    names = (
+        [a.name]
+        if a.name
+        else [
+            p.name
+            for p in sorted(PROJECTS_ROOT.iterdir())
+            if (p / ".harness" / "config.toml").exists()
+        ]
+    )
     if not names:
         print("nenhum projeto")
         return 0
@@ -547,7 +596,9 @@ def cmd_status(a: argparse.Namespace) -> int:
         for r in rows:
             counts[r["state"]] = counts.get(r["state"], 0) + 1
         lock = "locked" if lock_is_live(proj_dir) else "free"
-        print(f"{name}: {counts or '{}'}  lock={lock}  last_activity={_last_activity(proj_dir) or '—'}")
+        print(
+            f"{name}: {counts or '{}'}  lock={lock}  last_activity={_last_activity(proj_dir) or '—'}"
+        )
     return 0
 
 

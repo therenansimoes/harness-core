@@ -39,7 +39,7 @@ import sys
 import tempfile
 import time
 import tomllib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).parent.resolve()
@@ -54,8 +54,18 @@ EXPERIMENTS_DIR = ROOT / "evolution" / "experiments"
 # em project.py) — hardcoded aqui em vez de importado para não puxar agent.py
 # (e suas dependências de backend) só para ler uma lista de colunas.
 RESULTS_HEADER = [
-    "timestamp", "harness_version", "backend", "model", "suite",
-    "task_id", "success", "seconds", "tokens", "cost_usd", "turns", "notes",
+    "timestamp",
+    "harness_version",
+    "backend",
+    "model",
+    "suite",
+    "task_id",
+    "success",
+    "seconds",
+    "tokens",
+    "cost_usd",
+    "turns",
+    "notes",
     "kpis",
 ]
 
@@ -81,7 +91,7 @@ def parse_experiment(path: Path) -> dict:
         try:
             cfg = tomllib.loads(text)
         except tomllib.TOMLDecodeError as e:
-            raise ExperimentError(f"{path.name}: TOML inválido — {e}")
+            raise ExperimentError(f"{path.name}: TOML inválido — {e}") from e
 
     for field in ("name", "mutation", "task", "n_per_arm", "budget_usd"):
         if field not in cfg:
@@ -114,7 +124,10 @@ def create_worktree(dest: Path) -> None:
     """git worktree add --detach <dest> HEAD — cópia descartável do HEAD atual."""
     subprocess.run(
         ["git", "worktree", "add", "--detach", str(dest), "HEAD"],
-        cwd=ROOT, check=True, capture_output=True, text=True,
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
     )
 
 
@@ -123,7 +136,9 @@ def remove_worktree(dest: Path) -> None:
     o resto da limpeza se o worktree nem chegou a ser criado."""
     subprocess.run(
         ["git", "worktree", "remove", "--force", str(dest)],
-        cwd=ROOT, capture_output=True, text=True,
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
     )
     shutil.rmtree(dest, ignore_errors=True)
 
@@ -138,7 +153,9 @@ def apply_mutation(worktree: Path, mutation: dict) -> str:
     if n == 0:
         raise ExperimentError(f"mutation.old não encontrado em {mutation['file']}")
     if n > 1:
-        raise ExperimentError(f"mutation.old aparece {n}x em {mutation['file']} — precisa ser único")
+        raise ExperimentError(
+            f"mutation.old aparece {n}x em {mutation['file']} — precisa ser único"
+        )
     target.write_text(src.replace(old, new), encoding="utf-8")
     return f"{mutation['file']}: -{len(old.splitlines())} linhas / +{len(new.splitlines())} linhas"
 
@@ -146,8 +163,9 @@ def apply_mutation(worktree: Path, mutation: dict) -> str:
 def run_setup(worktree: Path, task: str) -> None:
     setup = worktree / task / "setup.sh"
     if setup.exists():
-        subprocess.run(["bash", str(setup)], cwd=worktree / task, check=True,
-                        capture_output=True, text=True)
+        subprocess.run(
+            ["bash", str(setup)], cwd=worktree / task, check=True, capture_output=True, text=True
+        )
 
 
 # -------------------------------------------------------------------- runs
@@ -163,7 +181,7 @@ def collect_result(results_path: Path, origin: str) -> dict:
         raise ExperimentError(f"results.tsv em {origin} sem linha de dado após a run")
     header = lines[0].split("\t")
     values = lines[-1].split("\t")
-    row = dict(zip(header, values))
+    row = dict(zip(header, values, strict=False))
     row["success"] = int(row.get("success") or 0)
     row["cost_usd"] = float(row.get("cost_usd") or 0.0)
     row["tokens"] = int(row.get("tokens") or 0)
@@ -179,7 +197,9 @@ def run_task_once(worktree: Path, task: str) -> dict:
     braço não corre risco de colisão de append."""
     subprocess.run(
         [sys.executable, str(worktree / "run_task.py"), task],
-        cwd=worktree, capture_output=True, text=True,
+        cwd=worktree,
+        capture_output=True,
+        text=True,
     )
     return collect_result(worktree / "results.tsv", str(worktree))
 
@@ -196,7 +216,10 @@ def run_task_launch(worktree: Path, task: str, run_id: str, results_path: Path) 
     env["HARNESS_RUN_ID"] = run_id
     return subprocess.Popen(
         [sys.executable, str(worktree / "run_task.py"), task],
-        cwd=worktree, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        cwd=worktree,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
 
 
@@ -235,8 +258,12 @@ def task_directions(task: str) -> dict[str, str]:
     return kpi.load_directions(ROOT / task / "fixtures")
 
 
-def decide(agg: dict, decision_rule: dict, runs: list[dict] | None = None,
-           directions: dict[str, str] | None = None) -> dict:
+def decide(
+    agg: dict,
+    decision_rule: dict,
+    runs: list[dict] | None = None,
+    directions: dict[str, str] | None = None,
+) -> dict:
     """Veredito do experimento — quem decide é a régua de Wilson do score.py.
 
     O runner não tem juiz próprio (nem LLM, nem diferença bruta de sucessos):
@@ -249,8 +276,10 @@ def decide(agg: dict, decision_rule: dict, runs: list[dict] | None = None,
     apagar essa leitura); quem muda é `outcome`.
     """
     w = score.decide_ab(
-        agg["A"]["successes"], agg["A"]["n"],
-        agg["B"]["successes"], agg["B"]["n"],
+        agg["A"]["successes"],
+        agg["A"]["n"],
+        agg["B"]["successes"],
+        agg["B"]["n"],
     )
     runs = runs or []
     kpis = score.kpi_report(
@@ -262,8 +291,10 @@ def decide(agg: dict, decision_rule: dict, runs: list[dict] | None = None,
     if kpis["blocked"]:
         outcome = "rejeitar"
         rule = "wilson+kpi"
-        reason = (f"regressão de KPI ({', '.join(kpis['worse'])}) — "
-                  f"bloqueia promoção; Wilson sobre success: {w['reason']}")
+        reason = (
+            f"regressão de KPI ({', '.join(kpis['worse'])}) — "
+            f"bloqueia promoção; Wilson sobre success: {w['reason']}"
+        )
     return {
         "outcome": outcome,
         "verdict": w["verdict"],
@@ -295,7 +326,7 @@ def run_experiment(cfg: dict, parallel: bool | None = None) -> dict:
     budget = cfg["budget_usd"]
     mutation = cfg["mutation"]
 
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     base = Path(tempfile.mkdtemp(prefix=f"experiment_{name}_"))
     wt_a, wt_b = base / "A", base / "B"
 
@@ -311,7 +342,10 @@ def run_experiment(cfg: dict, parallel: bool | None = None) -> dict:
         run_setup(wt_b, task)
 
         for i in range(n_per_arm):
-            for arm, wt in (("A", wt_a), ("B", wt_b)):  # sempre A,B — nunca o braço inteiro de um lado
+            for arm, wt in (
+                ("A", wt_a),
+                ("B", wt_b),
+            ):  # sempre A,B — nunca o braço inteiro de um lado
                 row = run_task_once(wt, task)
                 row["arm"] = arm
                 row["pair_index"] = i
@@ -371,7 +405,7 @@ def _run_experiment_parallel(cfg: dict) -> dict:
                 f"est_cost_per_run={est_cost} (mínimo ${2 * est_cost:.2f}/par)"
             )
 
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     base = Path(tempfile.mkdtemp(prefix=f"experiment_{name}_"))
     wt_a, wt_b = base / "A", base / "B"
     results_dir = Path(tempfile.mkdtemp(prefix=f"experiment_{name}_results_"))
@@ -389,11 +423,7 @@ def _run_experiment_parallel(cfg: dict) -> dict:
         # próprio HARNESS_RESULTS, então nada colide no append. Dispara no
         # máximo max_workers de uma vez (rate limit da conta): a cada run
         # concluída, a próxima da fila sobe.
-        pending = [
-            (arm, i, wt)
-            for i in range(n_per_arm)
-            for arm, wt in (("A", wt_a), ("B", wt_b))
-        ]
+        pending = [(arm, i, wt) for i in range(n_per_arm) for arm, wt in (("A", wt_a), ("B", wt_b))]
         next_idx = 0
         active: list[tuple] = []
         while next_idx < len(pending) or active:
@@ -457,28 +487,40 @@ def _run_experiment_parallel(cfg: dict) -> dict:
 def print_table(result: dict) -> None:
     agg = result["aggregates"]
     print(f"\nexperimento: {result['name']}  task: {result['task']}")
-    print(f"{'braço':<6}{'n':<5}{'sucessos':<10}{'taxa':<8}{'custo_total':<14}{'custo_médio':<14}"
-          f"{'tokens_méd':<12}{'turns_méd':<10}")
+    print(
+        f"{'braço':<6}{'n':<5}{'sucessos':<10}{'taxa':<8}{'custo_total':<14}{'custo_médio':<14}"
+        f"{'tokens_méd':<12}{'turns_méd':<10}"
+    )
     for arm in ("A", "B"):
         a = agg[arm]
-        print(f"{arm:<6}{a['n']:<5}{a['successes']:<10}{a['success_rate']:<8.0%}"
-              f"${a['cost_usd_total']:<13.4f}${a['cost_usd_avg']:<13.4f}"
-              f"{a['tokens_avg']:<12.0f}{a['turns_avg']:<10.1f}")
+        print(
+            f"{arm:<6}{a['n']:<5}{a['successes']:<10}{a['success_rate']:<8.0%}"
+            f"${a['cost_usd_total']:<13.4f}${a['cost_usd_avg']:<13.4f}"
+            f"{a['tokens_avg']:<12.0f}{a['turns_avg']:<10.1f}"
+        )
     if result["stopped_early"]:
-        print(f"\nPAROU no par {result['stopped_at_pair']} — custo acumulado ${result['cost_total_usd']:.4f} "
-              f">= budget ${result['budget_usd']:.4f}")
+        print(
+            f"\nPAROU no par {result['stopped_at_pair']} — custo acumulado ${result['cost_total_usd']:.4f} "
+            f">= budget ${result['budget_usd']:.4f}"
+        )
     if result.get("budget_capped"):
-        print(f"\nn_per_arm reduzido de {result['n_per_arm_requested']} para {result['n_per_arm_effective']} "
-              f"ANTES de disparar — budget nominal (2 x n x est_cost_per_run) excedia "
-              f"${result['budget_usd']:.4f} (est_cost_per_run=${result['est_cost_per_run']:.2f})")
+        print(
+            f"\nn_per_arm reduzido de {result['n_per_arm_requested']} para {result['n_per_arm_effective']} "
+            f"ANTES de disparar — budget nominal (2 x n x est_cost_per_run) excedia "
+            f"${result['budget_usd']:.4f} (est_cost_per_run=${result['est_cost_per_run']:.2f})"
+        )
     d = result["decision"]
-    print(f"\nWilson 95%  A [{d['ci_a'][0]:.2f},{d['ci_a'][1]:.2f}]  B [{d['ci_b'][0]:.2f},{d['ci_b'][1]:.2f}] "
-          f"· diff de sucessos (B-A): {d['diff_successes']} -> {d['outcome'].upper()}")
+    print(
+        f"\nWilson 95%  A [{d['ci_a'][0]:.2f},{d['ci_a'][1]:.2f}]  B [{d['ci_b'][0]:.2f},{d['ci_b'][1]:.2f}] "
+        f"· diff de sucessos (B-A): {d['diff_successes']} -> {d['outcome'].upper()}"
+    )
     print(f"  {d['reason']}")
     for e in d.get("kpi", {}).get("kpis", {}).values():
         delta = f"{e['delta']:+.1%}" if e["delta"] is not None else "n/a"
-        print(f"  KPI {e['name']:<16} {e['median_a']:>10.4g} -> {e['median_b']:<10.4g} "
-              f"{delta:>7}  n={e['n_a']}/{e['n_b']}  [{e['verdict']}]")
+        print(
+            f"  KPI {e['name']:<16} {e['median_a']:>10.4g} -> {e['median_b']:<10.4g} "
+            f"{delta:>7}  n={e['n_a']}/{e['n_b']}  [{e['verdict']}]"
+        )
     if d.get("blocked_by"):
         print(f"  BLOQUEADO por KPI: {', '.join(d['blocked_by'])}")
 
@@ -569,7 +611,8 @@ def main() -> int:
     run_p = sub.add_parser("run", help="roda um experimento a partir de um .toml/.json")
     run_p.add_argument("config", help="ex: evolution/experiments_def/exp.toml")
     run_p.add_argument(
-        "--parallel", action="store_true",
+        "--parallel",
+        action="store_true",
         help="força modo parallel (todas as runs via Popen simultâneo), mesmo sem `parallel = true` no TOML",
     )
     args = ap.parse_args()

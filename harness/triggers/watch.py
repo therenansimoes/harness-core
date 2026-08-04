@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import sqlite3
 import time
-from datetime import datetime, timedelta, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Callable
 
 from harness.triggers.inbox import Handler, process_inbox
 
@@ -91,9 +91,9 @@ def should_dream(
     com o ledger ilegível é arquivar memória sem evidência.
     """
     path = Path(db)
-    at = now if isinstance(now, datetime) else datetime.now(timezone.utc)
+    at = now if isinstance(now, datetime) else datetime.now(UTC)
     if at.tzinfo is None:
-        at = at.replace(tzinfo=timezone.utc)
+        at = at.replace(tzinfo=UTC)
 
     last = _last_dream_at(dreams_dir if dreams_dir is not None else path.parent / "dreams")
     if last is not None and at - last < timedelta(hours=min_hours):
@@ -111,7 +111,7 @@ def _last_dream_at(dreams: Path) -> datetime | None:
     reports = sorted(Path(dreams).glob("*.md"), key=lambda p: p.stat().st_mtime)
     if not reports:
         return None
-    return datetime.fromtimestamp(reports[-1].stat().st_mtime, tz=timezone.utc)
+    return datetime.fromtimestamp(reports[-1].stat().st_mtime, tz=UTC)
 
 
 def _runs_since(db_path: Path, since: datetime | None) -> int:
@@ -127,7 +127,7 @@ def _runs_since(db_path: Path, since: datetime | None) -> int:
     params: tuple = ()
     if since is not None:
         sql += " WHERE created_at > ?"
-        params = (since.astimezone(timezone.utc).isoformat(timespec="seconds"),)
+        params = (since.astimezone(UTC).isoformat(timespec="seconds"),)
     conn = sqlite3.connect(db_path)
     try:
         return int(conn.execute(sql, params).fetchone()[0])

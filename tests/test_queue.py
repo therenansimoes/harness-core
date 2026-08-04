@@ -16,7 +16,8 @@ from harness.ruler.gate import Decision
 def _git(cwd: Path, *args: str) -> str:
     proc = subprocess.run(
         ["git", "-C", str(cwd), "-c", "user.name=t", "-c", "user.email=t@t", *args],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     assert proc.returncode == 0, proc.stderr
     return proc.stdout
@@ -54,8 +55,7 @@ def fila(tmp_path, monkeypatch) -> Path:
         d.mkdir(parents=True)
         (d / UNIT_FILE).write_text(f'id = "{name}"\n', encoding="utf-8")
     (cfg / "projects.toml").write_text(
-        f'[projects.t]\nrepo = {json.dumps(str(tmp_path))}\n'
-        f'queue_dir = {json.dumps(str(queue))}\n',
+        f"[projects.t]\nrepo = {json.dumps(str(tmp_path))}\nqueue_dir = {json.dumps(str(queue))}\n",
         encoding="utf-8",
     )
     return queue
@@ -92,9 +92,7 @@ def _entregas(repo: Path, arquivos: dict[str, tuple[str, str]], visto: list[str]
 
 def test_para_na_primeira_nao_aceita_e_move(fila, monkeypatch, capsys):
     visto: list[str] = []
-    monkeypatch.setattr(
-        queue_mod, "run_unit", _fake_run_unit({"02-dois": "escalate"}, visto)
-    )
+    monkeypatch.setattr(queue_mod, "run_unit", _fake_run_unit({"02-dois": "escalate"}, visto))
 
     assert queue_mod.run_queue("t", backend="mock", model="m", attempts=2) == 0
 
@@ -112,9 +110,7 @@ def test_para_na_primeira_nao_aceita_e_move(fila, monkeypatch, capsys):
 
 def test_no_move_e_ensaio(fila, monkeypatch):
     visto: list[str] = []
-    monkeypatch.setattr(
-        queue_mod, "run_unit", _fake_run_unit({"02-dois": "escalate"}, visto)
-    )
+    monkeypatch.setattr(queue_mod, "run_unit", _fake_run_unit({"02-dois": "escalate"}, visto))
 
     assert queue_mod.run_queue("t", move=False) == 0
 
@@ -125,9 +121,7 @@ def test_no_move_e_ensaio(fila, monkeypatch):
 
 def test_cli_queue_defaults():
     args = build_parser().parse_args(["queue", "--project", "t", "--no-move"])
-    assert (args.project, args.move, args.backend) == (
-        "t", False, queue_mod.DEFAULT_BACKEND
-    )
+    assert (args.project, args.move, args.backend) == ("t", False, queue_mod.DEFAULT_BACKEND)
     assert args.deadline_s == queue_mod.DEFAULT_DEADLINE_S and args.attempts is None
     # Integração é o default: sem ela a fila progressiva não compõe.
     assert args.integrate is True
@@ -156,9 +150,7 @@ def test_entregas_aceitas_compoem_no_branch_default(fila, monkeypatch, capsys):
 
     assert (repo / "01-um.txt").read_text(encoding="utf-8") == "01-um"
     assert (repo / "02-dois.txt").read_text(encoding="utf-8") == "02-dois"
-    branches = set(
-        _git(repo, "branch", "--format=%(refname:short)").split()
-    )
+    branches = set(_git(repo, "branch", "--format=%(refname:short)").split())
     assert {"harness/01-um", "harness/02-dois"} <= branches
     assert default_branch(repo) in branches
     assert (fila / QUEUE_DONE / "02-dois" / UNIT_FILE).is_file()
@@ -206,12 +198,20 @@ def test_regressao_manda_a_recem_integrada_pra_stuck_e_para(fila, monkeypatch, c
     repo = fila.parent
     _regua(fila, "01-um", "grep -q v1 app.txt")
     visto: list[str] = []
-    monkeypatch.setattr(queue_mod, "run_unit", _entregas(repo, {
-        "01-um": ("um.txt", "um\n"),
-        # arquivo diferente do da 1ª (merge limpo), conteúdo que derruba a régua
-        "02-dois": ("app.txt", "v2\n"),
-        "03-tres": ("tres.txt", "tres\n"),
-    }, visto))
+    monkeypatch.setattr(
+        queue_mod,
+        "run_unit",
+        _entregas(
+            repo,
+            {
+                "01-um": ("um.txt", "um\n"),
+                # arquivo diferente do da 1ª (merge limpo), conteúdo que derruba a régua
+                "02-dois": ("app.txt", "v2\n"),
+                "03-tres": ("tres.txt", "tres\n"),
+            },
+            visto,
+        ),
+    )
 
     assert queue_mod.run_queue("t") == 0
 
@@ -223,17 +223,23 @@ def test_regressao_manda_a_recem_integrada_pra_stuck_e_para(fila, monkeypatch, c
     assert "regression: 01-um QUEBROU" in out and "02-dois: regression: 01-um" in out
 
 
-def test_regressao_verde_deixa_a_fila_andar_e_pula_unidade_sem_regua(
-    fila, monkeypatch, capsys
-):
+def test_regressao_verde_deixa_a_fila_andar_e_pula_unidade_sem_regua(fila, monkeypatch, capsys):
     repo = fila.parent
     _regua(fila, "01-um", "grep -q v1 app.txt")
     visto: list[str] = []
-    monkeypatch.setattr(queue_mod, "run_unit", _entregas(repo, {
-        "01-um": ("um.txt", "um\n"),
-        "02-dois": ("dois.txt", "dois\n"),
-        "03-tres": ("tres.txt", "tres\n"),
-    }, visto))
+    monkeypatch.setattr(
+        queue_mod,
+        "run_unit",
+        _entregas(
+            repo,
+            {
+                "01-um": ("um.txt", "um\n"),
+                "02-dois": ("dois.txt", "dois\n"),
+                "03-tres": ("tres.txt", "tres\n"),
+            },
+            visto,
+        ),
+    )
 
     assert queue_mod.run_queue("t") == 0
 
@@ -251,11 +257,19 @@ def test_no_regression_desliga_a_checagem(fila, monkeypatch, capsys):
     repo = fila.parent
     _regua(fila, "01-um", "grep -q v1 app.txt")
     visto: list[str] = []
-    monkeypatch.setattr(queue_mod, "run_unit", _entregas(repo, {
-        "01-um": ("um.txt", "um\n"),
-        "02-dois": ("app.txt", "v2\n"),
-        "03-tres": ("tres.txt", "tres\n"),
-    }, visto))
+    monkeypatch.setattr(
+        queue_mod,
+        "run_unit",
+        _entregas(
+            repo,
+            {
+                "01-um": ("um.txt", "um\n"),
+                "02-dois": ("app.txt", "v2\n"),
+                "03-tres": ("tres.txt", "tres\n"),
+            },
+            visto,
+        ),
+    )
 
     assert queue_mod.run_queue("t", check_regression=False) == 0
 

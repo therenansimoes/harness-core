@@ -20,9 +20,9 @@ o TOML sumiu esconde o bug e paga a conta no tier errado.
 from __future__ import annotations
 
 import tomllib
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
 from harness.routing import config_dir
 from harness.routing._stats import wilson_lower_bound
@@ -97,8 +97,13 @@ def load_config(path: Path | str | None = None) -> dict:
 def tiers(cfg: dict) -> list[Tier]:
     return sorted(
         (
-            Tier(t["name"], t["backend"], str(t.get("model", "")), int(t["max_turns"]),
-                 int(t["cost_rank"]))
+            Tier(
+                t["name"],
+                t["backend"],
+                str(t.get("model", "")),
+                int(t["max_turns"]),
+                int(t["cost_rank"]),
+            )
             for t in cfg["tier"]
         ),
         key=lambda t: t.cost_rank,

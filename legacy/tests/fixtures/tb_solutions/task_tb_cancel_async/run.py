@@ -1,5 +1,5 @@
 import asyncio
-from typing import Callable, Awaitable
+
 
 async def task_with_semaphore(semaphore: asyncio.Semaphore, task) -> None:
     async with semaphore:

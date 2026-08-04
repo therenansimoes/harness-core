@@ -12,6 +12,7 @@ gen1 parents:
     candidates: a denylist of substrings is trivially bypassed by
     aliasing, quoting, or just using a binary nobody thought to ban).
 """
+
 import os
 import re
 import subprocess
@@ -78,7 +79,7 @@ def guard_command(argv: list) -> None:
                 f"python invocation must be exactly '-m pytest ...': argv={argv!r}"
             )
     if binary == "sh":
-        raise SafetyViolation("bare shell invocation is never allowed (argv={!r})".format(argv))
+        raise SafetyViolation(f"bare shell invocation is never allowed (argv={argv!r})")
 
 
 def validate_tools(tools: list) -> None:
@@ -87,9 +88,7 @@ def validate_tools(tools: list) -> None:
     falha depois por um motivo que não é o de verdade."""
     for tool in tools:
         if tool not in ALLOWED_TOOLS_MAX:
-            raise SafetyViolation(
-                f"tool not in allowlist: {tool!r} (max={ALLOWED_TOOLS_MAX!r})"
-            )
+            raise SafetyViolation(f"tool not in allowlist: {tool!r} (max={ALLOWED_TOOLS_MAX!r})")
 
 
 def safe_run(argv: list, cwd: str, timeout: int = 20, env: dict | None = None):
@@ -102,8 +101,13 @@ def safe_run(argv: list, cwd: str, timeout: int = 20, env: dict | None = None):
     # via relative traversal from within ROOT-scoped calls. See harness.py.
     try:
         proc = subprocess.run(
-            argv, cwd=cwd_real, capture_output=True, text=True,
-            timeout=timeout, shell=False, env=env,
+            argv,
+            cwd=cwd_real,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            shell=False,
+            env=env,
         )
         return proc.returncode, proc.stdout, proc.stderr
     except subprocess.TimeoutExpired:

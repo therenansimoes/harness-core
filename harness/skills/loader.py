@@ -25,12 +25,65 @@ _TOKEN = re.compile(r"\w{3,}", re.UNICODE)
 # Palavras que aparecem em quase toda skill/prompt: se contassem, o score viraria
 # ruído e o ranking, ordem alfabética.
 _STOPWORDS = frozenset(
-    """
-    para com sem por que uma que dos das nos nas ele ela isso este esta esse essa
-    aqui não nao sim mais menos como quando onde qual todo toda todos todas ser
-    seu sua the and for with that this from into you your are was not but any all
-    use using when where what which
-    """.split()
+    [
+        "para",
+        "com",
+        "sem",
+        "por",
+        "que",
+        "uma",
+        "que",
+        "dos",
+        "das",
+        "nos",
+        "nas",
+        "ele",
+        "ela",
+        "isso",
+        "este",
+        "esta",
+        "esse",
+        "essa",
+        "aqui",
+        "não",
+        "nao",
+        "sim",
+        "mais",
+        "menos",
+        "como",
+        "quando",
+        "onde",
+        "qual",
+        "todo",
+        "toda",
+        "todos",
+        "todas",
+        "ser",
+        "seu",
+        "sua",
+        "the",
+        "and",
+        "for",
+        "with",
+        "that",
+        "this",
+        "from",
+        "into",
+        "you",
+        "your",
+        "are",
+        "was",
+        "not",
+        "but",
+        "any",
+        "all",
+        "use",
+        "using",
+        "when",
+        "where",
+        "what",
+        "which",
+    ]
 )
 
 

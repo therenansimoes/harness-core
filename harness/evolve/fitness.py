@@ -92,7 +92,7 @@ class Fitness:
     n: int = 1
     data_dir: Path | str | None = None
     project: str | None = None
-    on_run: object | None = None   # Callable[[str, int, RunRow], None] | None
+    on_run: object | None = None  # Callable[[str, int, RunRow], None] | None
     stats: dict[str, EvalStats] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -134,7 +134,7 @@ class Fitness:
                 total += 1
                 cost += row.cost_usd or 0.0
                 if self.on_run is not None:
-                    self.on_run(unit.id, i, row)   # type: ignore[operator]
+                    self.on_run(unit.id, i, row)  # type: ignore[operator]
         self.stats[config_key(config)] = EvalStats(succ, total, cost, self.kind)
         return succ, total
 
@@ -144,7 +144,7 @@ class EvolveReport:
     best: Individual
     population: tuple[Individual, ...]
     steps: int
-    elites: tuple[tuple[str, str], ...]   # nichos que ESTA rodada tomou
+    elites: tuple[tuple[str, str], ...]  # nichos que ESTA rodada tomou
 
 
 def seed_configs(base: dict, pop_size: int, rng: random.Random) -> list[dict]:
@@ -186,11 +186,10 @@ def evolve(
     for ind in pop:
         st = stats.get(config_key(ind.config))
         niche = (
-            (st.kind, cost_bucket(st.cost_per_run)) if st is not None
+            (st.kind, cost_bucket(st.cost_per_run))
+            if st is not None
             else (getattr(evaluate, "kind", "code"), COST_BUCKETS[0])
         )
         if archive.add(niche, ind.config, ind.wilson_low):
             taken.append(niche)
-    return EvolveReport(
-        best=pop[0], population=tuple(pop), steps=steps, elites=tuple(taken)
-    )
+    return EvolveReport(best=pop[0], population=tuple(pop), steps=steps, elites=tuple(taken))

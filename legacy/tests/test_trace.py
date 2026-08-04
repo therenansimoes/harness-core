@@ -7,6 +7,7 @@ Sem chamada real ao `claude` — run_task.run_agent é monkeypatchado.
 
     python3 -m pytest tests/test_trace.py -q
 """
+
 from __future__ import annotations
 
 import json
@@ -21,11 +22,9 @@ sys.path.insert(0, str(REPO / "attic" / "judges"))
 
 os.environ.setdefault("PERSONA_MOCK", "1")
 
+import run_judge  # noqa: E402
 import run_task  # noqa: E402
 from agent import AgentResult  # noqa: E402
-
-import run_judge  # noqa: E402
-
 
 # ------------------------------------------------------------- run_task.py
 
@@ -74,8 +73,14 @@ def test_run_once_anexa_token_trace_nas_notes(monkeypatch, tmp_path):
 
     def fake_run_agent(prompt, ws):
         return AgentResult(
-            ok=True, seconds=1.0, tokens=10, cost_usd=0.01, turns=1,
-            notes="", trace_path=str(fake_trace), trace_lines=1,
+            ok=True,
+            seconds=1.0,
+            tokens=10,
+            cost_usd=0.01,
+            turns=1,
+            notes="",
+            trace_path=str(fake_trace),
+            trace_lines=1,
         )
 
     monkeypatch.setattr(run_task, "run_agent", fake_run_agent)
@@ -129,8 +134,7 @@ def test_load_trace_renderiza_com_numero_de_linha(monkeypatch, tmp_path):
     trace_dir = tmp_path / "runs" / "run_xyz"
     trace_dir.mkdir(parents=True)
     (trace_dir / "trace.jsonl").write_text(
-        '{"type": "assistant", "text": "primeiro"}\n'
-        '{"type": "result", "result": "DONE: ok"}\n'
+        '{"type": "assistant", "text": "primeiro"}\n{"type": "result", "result": "DONE: ok"}\n'
     )
     notes = "error_max_turns; trace:runs/run_xyz/trace.jsonl"
 

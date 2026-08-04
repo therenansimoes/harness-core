@@ -4,8 +4,8 @@ manual como fallback (plugin de terceiro não precisa tocar no núcleo).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from importlib.metadata import entry_points
-from typing import Callable
 
 from harness.backends.base import Backend
 
@@ -79,5 +79,7 @@ def available() -> list[str]:
 def get_backend(name: str) -> Backend:
     factories = _factories()
     if name not in factories:
-        raise KeyError(f"backend desconhecido: {name!r} (disponíveis: {', '.join(sorted(factories))})")
+        raise KeyError(
+            f"backend desconhecido: {name!r} (disponíveis: {', '.join(sorted(factories))})"
+        )
     return factories[name]()

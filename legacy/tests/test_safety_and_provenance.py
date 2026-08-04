@@ -21,7 +21,6 @@ sys.path.insert(0, str(REPO))
 import safety  # noqa: E402
 from run_task import hash_test_files  # noqa: E402
 
-
 # --------------------------------------------------------------- safety.py
 
 
@@ -44,7 +43,7 @@ def test_safe_run_bloqueia_binario_fora_da_allowlist():
 
 
 def test_safe_run_permite_pytest_exato():
-    rc, out, err = safety.safe_run(
+    rc, _out, err = safety.safe_run(
         [sys.executable, "-m", "pytest", "--version"], str(REPO), timeout=20
     )
     assert rc == 0, f"pytest --version deveria rodar limpo: rc={rc} err={err}"
@@ -100,20 +99,37 @@ def test_hash_test_files_ignora_arquivos_nao_test():
 # ------------------------------------------------------------- evolve.py
 
 
-def _fake_agg(rate=1.0, rate_valid=1.0, trunc_rate=0.0, med_s=20.0, cost_run=0.05,
-              tok_run=1500, n=5, n_valid=5, pass_=5):
+def _fake_agg(
+    rate=1.0,
+    rate_valid=1.0,
+    trunc_rate=0.0,
+    med_s=20.0,
+    cost_run=0.05,
+    tok_run=1500,
+    n=5,
+    n_valid=5,
+    pass_=5,
+):
     return {
-        "rate": rate, "rate_valid": rate_valid, "trunc_rate": trunc_rate,
-        "med_s": med_s, "cost_run": cost_run, "tok_run": tok_run,
-        "n": n, "n_valid": n_valid, "pass": pass_,
+        "rate": rate,
+        "rate_valid": rate_valid,
+        "trunc_rate": trunc_rate,
+        "med_s": med_s,
+        "cost_run": cost_run,
+        "tok_run": tok_run,
+        "n": n,
+        "n_valid": n_valid,
+        "pass": pass_,
     }
 
 
 def _fake_rep(va="vA", vb="vB", merge=True):
     gates = [{"name": "success não caiu", "ok": merge}]
     return {
-        "version_a": va, "version_b": vb,
-        "a": _fake_agg(), "b": _fake_agg(rate=1.0 if merge else 0.4, pass_=5 if merge else 2),
+        "version_a": va,
+        "version_b": vb,
+        "a": _fake_agg(),
+        "b": _fake_agg(rate=1.0 if merge else 0.4, pass_=5 if merge else 2),
         "d_med": -0.20 if merge else 0.30,
         "d_cost": -0.15 if merge else 0.25,
         "d_tok": -0.10,
@@ -126,13 +142,17 @@ def _fake_rep(va="vA", vb="vB", merge=True):
 
 def _fake_meta(pid):
     return {
-        "id": pid, "from_version": "vA", "to_version": "vB",
-        "hypothesis": "teste sintético", "body": "", "path": f"{pid}.md",
+        "id": pid,
+        "from_version": "vA",
+        "to_version": "vB",
+        "hypothesis": "teste sintético",
+        "body": "",
+        "path": f"{pid}.md",
     }
 
 
 def test_write_decision_grava_jsonl_accept_e_reject():
-    import evolve  # noqa: E402 (import tardio: precisa do sys.path acima)
+    import evolve
 
     tmp = Path(tempfile.mkdtemp(prefix="evolve_jsonl_"))
     old_decisions, old_jsonl = evolve.DECISIONS, evolve.DECISIONS_JSONL
@@ -142,12 +162,24 @@ def test_write_decision_grava_jsonl_accept_e_reject():
         evolve.DECISIONS.mkdir(parents=True)
 
         rep_accept = _fake_rep("vA", "vB", merge=True)
-        evolve.write_decision(_fake_meta("pid_accept"), rep_accept, "merge", gid=1,
-                               diff_summary="MAX_TURNS 12->11", n_runs=5)
+        evolve.write_decision(
+            _fake_meta("pid_accept"),
+            rep_accept,
+            "merge",
+            gid=1,
+            diff_summary="MAX_TURNS 12->11",
+            n_runs=5,
+        )
 
         rep_reject = _fake_rep("vA", "vB", merge=False)
-        evolve.write_decision(_fake_meta("pid_reject"), rep_reject, "discard", gid=2,
-                               diff_summary="MAX_TURNS 12->11", n_runs=5)
+        evolve.write_decision(
+            _fake_meta("pid_reject"),
+            rep_reject,
+            "discard",
+            gid=2,
+            diff_summary="MAX_TURNS 12->11",
+            n_runs=5,
+        )
 
         lines = evolve.DECISIONS_JSONL.read_text().strip().splitlines()
         assert len(lines) == 2, f"esperava 2 linhas, veio {len(lines)}"

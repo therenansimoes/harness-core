@@ -19,15 +19,15 @@ são independentes e a única pergunta é "qual dá mais aprendizado por turno".
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from harness.ledger import store
 
-K = 5                      # tentativas recentes que entram na média por unidade
-ZONE = (0.4, 0.8)          # zona de desenvolvimento proximal, fechada nas pontas
-MAX_ATTEMPTS_SCAN = 8      # teto de tentativas varridas por run (não há contador)
-HISTORY_LIMIT = 200        # janela de runs lida do ledger
+K = 5  # tentativas recentes que entram na média por unidade
+ZONE = (0.4, 0.8)  # zona de desenvolvimento proximal, fechada nas pontas
+MAX_ATTEMPTS_SCAN = 8  # teto de tentativas varridas por run (não há contador)
+HISTORY_LIMIT = 200  # janela de runs lida do ledger
 DEFAULT_UNITS_DIR = Path("benchmarks/held_in")
 UNIT_FILE = "unit.toml"
 
@@ -100,9 +100,7 @@ def next_unit(
     scores = unit_scores(kind=kind, k=k, db=db)
     lo, hi = ZONE
     inside = [
-        (scores[name], name)
-        for name in candidates
-        if name in scores and lo <= scores[name] <= hi
+        (scores[name], name) for name in candidates if name in scores and lo <= scores[name] <= hi
     ]
     if not inside:
         return None
@@ -128,20 +126,14 @@ def order(
     return [pick] + [u for u in units if u != pick]
 
 
-def _candidates(
-    units: Sequence[Path] | None, units_dir: Path | None
-) -> dict[str, Path]:
+def _candidates(units: Sequence[Path] | None, units_dir: Path | None) -> dict[str, Path]:
     """`unit_id -> path`. O id é o nome do diretório (é o que o ledger grava)."""
     if units is not None:
         return {p.name: p for p in units}
     base = Path(units_dir) if units_dir is not None else DEFAULT_UNITS_DIR
     if not base.is_dir():
         return {}
-    return {
-        p.name: p
-        for p in sorted(base.iterdir())
-        if p.is_dir() and (p / UNIT_FILE).is_file()
-    }
+    return {p.name: p for p in sorted(base.iterdir()) if p.is_dir() and (p / UNIT_FILE).is_file()}
 
 
 def _desc(name: str) -> tuple:

@@ -27,7 +27,8 @@ escrever exclusivamente `events`, e só em diamante fechado.
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from harness.graph import plugin_nodes, topology
 
@@ -137,9 +138,13 @@ def check(spec: Mapping[str, Any]) -> list[str]:
 
     # (b) sem andar pra trás na espinha fora das back-edges declaradas.
     for src, dst in pairs:
-        if src in SPINE_RANK and dst in SPINE_RANK:
-            if SPINE_RANK[src] > SPINE_RANK[dst] and (src, dst) not in BACK_EDGES:
-                reasons.append(f"{src}->{dst}: rank invertido")
+        if (
+            src in SPINE_RANK
+            and dst in SPINE_RANK
+            and SPINE_RANK[src] > SPINE_RANK[dst]
+            and (src, dst) not in BACK_EDGES
+        ):
+            reasons.append(f"{src}->{dst}: rank invertido")
 
     # (c) nó declarado e inalcançável é peso morto que ninguém revisou.
     orphans = sorted(set(nodes) - _reachable(nodes, pairs))
@@ -163,16 +168,12 @@ def check(spec: Mapping[str, Any]) -> list[str]:
         if src != topology.START_NAME:
             outgoing.setdefault(src, []).append(dst)
     for src, dsts in outgoing.items():
-        branches = sorted(
-            {d for d in dsts if d not in TERMINAL and d != topology.END_NAME}
-        )
+        branches = sorted({d for d in dsts if d not in TERMINAL and d != topology.END_NAME})
         if len(branches) < 2:
             continue
         unsafe = [b for b in branches if b not in safe]
         if unsafe:
-            reasons.append(
-                f"{src}->{branches}: fan-out com nó fora de events-only: {unsafe}"
-            )
+            reasons.append(f"{src}->{branches}: fan-out com nó fora de events-only: {unsafe}")
         outs = {b: [d for s, d in pairs if s == b] for b in branches}
         loose = sorted(b for b, o in outs.items() if len(o) != 1)
         if loose:

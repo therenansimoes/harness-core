@@ -109,7 +109,7 @@ def run_ab(
     if spec_of is None:
         # Braço estático: o mesmo `ArmSpec` em toda run daquele rótulo. Vira
         # `spec_of` aqui para o laço ter um caminho só.
-        static = dict(zip(ARMS, (_spec(arm_a), _spec(arm_b))))
+        static = dict(zip(ARMS, (_spec(arm_a), _spec(arm_b)), strict=False))
         spec_of = static.__getitem__
     db = Path(data_dir) / store.DB_NAME if data_dir is not None else None
     rows: dict[str, list[RunRow]] = {label: [] for label in ARMS}

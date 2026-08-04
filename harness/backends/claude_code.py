@@ -15,8 +15,9 @@ import json
 import os
 import shutil
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, ClassVar, Mapping
+from typing import Any, ClassVar
 
 # `deepagents_backend` só importa stdlib no topo (LangChain é lazy lá dentro),
 # então reusar o snapshot de mtime daqui não puxa o extra.
@@ -36,8 +37,17 @@ PERMISSION_MODE = "acceptEdits"
 # é silenciosamente ignorado pelo CLI — allowlist errada = agente sem tool.
 TOOLS = frozenset(
     {
-        "Bash", "Edit", "Glob", "Grep", "NotebookEdit",
-        "Read", "Task", "TodoWrite", "WebFetch", "WebSearch", "Write",
+        "Bash",
+        "Edit",
+        "Glob",
+        "Grep",
+        "NotebookEdit",
+        "Read",
+        "Task",
+        "TodoWrite",
+        "WebFetch",
+        "WebSearch",
+        "Write",
     }
 )
 
@@ -74,7 +84,9 @@ class ClaudeCodeBackend:
                 timeout=VERSION_TIMEOUT_S,
             )
         except (OSError, subprocess.SubprocessError) as exc:
-            return Preflight(ok=False, reason=f"{CLI} --version falhou: {type(exc).__name__}: {exc}")
+            return Preflight(
+                ok=False, reason=f"{CLI} --version falhou: {type(exc).__name__}: {exc}"
+            )
         if proc.returncode != 0:
             detail = proc.stderr.strip()[:200]
             return Preflight(ok=False, reason=f"{CLI} --version saiu {proc.returncode}: {detail}")

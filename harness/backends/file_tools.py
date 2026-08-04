@@ -42,7 +42,9 @@ CONTEXT_LINES = 3
 _PY_SKELETON = re.compile(r"^\s*(@|class\s|def\s|async\s+def\s)")
 _MD_HEADING = re.compile(r"^#{1,6}\s")
 _TOML_SECTION = re.compile(r"^\s*\[")
-_JS_SKELETON = re.compile(r"^\s*(export\s+)?(default\s+)?(async\s+)?(function\b|class\b|const\s+\w+\s*=)")
+_JS_SKELETON = re.compile(
+    r"^\s*(export\s+)?(default\s+)?(async\s+)?(function\b|class\b|const\s+\w+\s*=)"
+)
 
 _JS_SUFFIXES = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")
 
@@ -156,7 +158,7 @@ def _read_gate(root: Path, path: str) -> str | None:
         return None
     try:
         from harness.backends.smart_fs import needs_fresh_read
-    except Exception:  # noqa: BLE001 - sem o gate a tool ainda funciona
+    except Exception:
         return None
     return needs_fresh_read(path, text)
 
@@ -169,7 +171,7 @@ def _mark_written(root: Path, path: str) -> None:
         return
     try:
         from harness.backends.smart_fs import record_read
-    except Exception:  # noqa: BLE001 - mesmo motivo de `_read_gate`
+    except Exception:
         return
     record_read(path, text)
 
@@ -324,7 +326,9 @@ def _jtype(value: object) -> str:
 
 
 def _slug(relative: str) -> str:
-    return "".join(c if c.isalnum() or c in "._-" else "_" for c in relative).strip("_") or "arquivo"
+    return (
+        "".join(c if c.isalnum() or c in "._-" else "_" for c in relative).strip("_") or "arquivo"
+    )
 
 
 def _backup(root: Path, target: Path, raw: bytes) -> Path:

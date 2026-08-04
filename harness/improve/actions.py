@@ -21,9 +21,10 @@ import os
 import random
 import re
 import tomllib
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from harness.improve import mutate, root_dir
 from harness.improve import synthesize as synth
@@ -91,14 +92,10 @@ def propose_synthesize(
         rows.append(row)
     if not rows:
         return None
-    return SynthesizeProposal(
-        unit_ids=tuple(r.unit_id for r in rows), rows=tuple(rows)
-    )
+    return SynthesizeProposal(unit_ids=tuple(r.unit_id for r in rows), rows=tuple(rows))
 
 
-def apply_synthesize(
-    proposal: SynthesizeProposal, root: Path | str | None = None
-) -> list[Path]:
+def apply_synthesize(proposal: SynthesizeProposal, root: Path | str | None = None) -> list[Path]:
     """Delegação direta: quem escreve (e NUNCA em sealed) é o synthesize."""
     base = root_dir(root)
     return synth.synthesize_from_failures(
@@ -129,9 +126,7 @@ class TopologyProposal:
 
 def _render_section(spec: Mapping[str, Any]) -> str:
     nodes = "".join(f"  {json.dumps(n)},\n" for n in spec["nodes"])
-    edges = "".join(
-        f"  [{json.dumps(a)}, {json.dumps(b)}],\n" for a, b in spec["edges"]
-    )
+    edges = "".join(f"  [{json.dumps(a)}, {json.dumps(b)}],\n" for a, b in spec["edges"])
     return f"nodes = [\n{nodes}]\n\nedges = [\n{edges}]\n"
 
 
@@ -167,20 +162,19 @@ def propose_topology(
         (
             i
             for i, (src, dst) in enumerate(edges)
-            if src not in ("gate", topology.START_NAME)
-            and dst != topology.END_NAME
+            if src not in ("gate", topology.START_NAME) and dst != topology.END_NAME
         ),
         None,
     )
     if idx is None:
         return None
     src, dst = edges[idx]
-    new_edges = edges[:idx] + [(src, REFLECT), (REFLECT, dst)] + edges[idx + 1 :]
+    new_edges = [*edges[:idx], (src, REFLECT), (REFLECT, dst), *edges[idx + 1 :]]
     # Spec INTEIRA (inclusive `[kinds.*]`): o que não é copiado aqui o render
     # não tem como preservar, e o apply reescreve o arquivo todo.
     new_spec = {
         **spec,
-        "nodes": nodes + [REFLECT],
+        "nodes": [*nodes, REFLECT],
         "edges": [list(e) for e in new_edges],
     }
     topology._validate(new_spec)  # proposta já nasce válida ou não nasce
@@ -232,7 +226,7 @@ def evolve_seed(state: Mapping[str, Any] | None) -> int:
     MESMO candidato, não um novo sorteio."""
     thread = str((state or {}).get("thread_id", ""))
     cycle = int((state or {}).get("cycle", 0))
-    digest = hashlib.sha256(f"{thread}\0{cycle}".encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(f"{thread}\0{cycle}".encode()).hexdigest()
     return int(digest[:16], 16)
 
 
@@ -268,12 +262,8 @@ def _dump_toml(data: Mapping[str, Any], prefix: str = "") -> str:
         full = f"{prefix}.{k}" if prefix else k
         if isinstance(value, Mapping):
             tables.append(f"[{full}]\n{_dump_toml(value, prefix=full)}")
-        elif isinstance(value, list) and value and all(
-            isinstance(v, Mapping) for v in value
-        ):
-            tables.extend(
-                f"[[{full}]]\n{_dump_toml(v, prefix=full)}" for v in value
-            )
+        elif isinstance(value, list) and value and all(isinstance(v, Mapping) for v in value):
+            tables.extend(f"[[{full}]]\n{_dump_toml(v, prefix=full)}" for v in value)
         elif isinstance(value, list):
             items = ", ".join(mutate._render(v) for v in value)
             scalars.append(f"{k} = [{items}]")

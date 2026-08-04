@@ -33,8 +33,13 @@ CREATE TABLE mutations (
 
 def _mutation(mid: str, verdict: str, **over) -> MutationRow:
     base = dict(
-        mutation_id=mid, rule_id="r1", verdict=verdict, arm_a="3/6", arm_b="5/6",
-        applied_at="2026-01-01T00:00:00+00:00", reverted=(verdict != "KEEP"),
+        mutation_id=mid,
+        rule_id="r1",
+        verdict=verdict,
+        arm_a="3/6",
+        arm_b="5/6",
+        applied_at="2026-01-01T00:00:00+00:00",
+        reverted=(verdict != "KEEP"),
     )
     return MutationRow(**{**base, **over})
 
@@ -70,9 +75,7 @@ def test_migracao_adiciona_coluna_e_faz_backfill_do_note(tmp_path):
 
     rows = store.mutations(path=path)
 
-    cols = {r[1] for r in sqlite3.connect(path).execute(
-        "PRAGMA table_info(mutations)"
-    )}
+    cols = {r[1] for r in sqlite3.connect(path).execute("PRAGMA table_info(mutations)")}
     assert "action" in cols
     by_id = {r.mutation_id: r for r in rows}
     # note com token: a ação sai do texto livre e vai para a coluna

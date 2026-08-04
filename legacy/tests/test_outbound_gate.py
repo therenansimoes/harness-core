@@ -58,7 +58,7 @@ def raises(exc, fn, *a, **kw) -> bool:
         fn(*a, **kw)
     except exc:
         return True
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
     return False
 
@@ -82,7 +82,9 @@ def test_confirm_envia_uma_vez():
     assert row["message_id"] == "MID1", "message_id não foi gravado"
 
     # Confirmar de novo não pode enviar de novo.
-    assert raises(ValueError, whatsapp.confirm_send, oid, actor="cli", send_fn=spy), "confirmar duas vezes deveria levantar ValueError"
+    assert raises(ValueError, whatsapp.confirm_send, oid, actor="cli", send_fn=spy), (
+        "confirmar duas vezes deveria levantar ValueError"
+    )
     assert len(spy.calls) == 1, f"reconfirmação enviou de novo: {len(spy.calls)} chamadas"
 
 
@@ -91,20 +93,26 @@ def test_cancel_nao_envia():
     oid = whatsapp.request_send(OWNER, "nao mandar", requested_by="teste")
     whatsapp.cancel_send(oid, actor="cli")
     assert graph.get_outbound(oid)["status"] == "cancelled", "cancel não mudou o status"
-    assert raises(ValueError, whatsapp.confirm_send, oid, actor="cli", send_fn=spy), "confirmar cancelado deveria levantar ValueError"
+    assert raises(ValueError, whatsapp.confirm_send, oid, actor="cli", send_fn=spy), (
+        "confirmar cancelado deveria levantar ValueError"
+    )
     assert spy.calls == [], "cancelado NÃO pode ser enviado"
 
 
 def test_gate_no_graph():
     """A camada de baixo sozinha já impede pending -> sent."""
     oid = whatsapp.request_send(OWNER, "pulando a fila", requested_by="teste")
-    assert raises(ValueError, graph.mark_outbound_sent, oid, "MID_FALSO"), "graph deveria recusar pending -> sent sem passar por confirmed"
+    assert raises(ValueError, graph.mark_outbound_sent, oid, "MID_FALSO"), (
+        "graph deveria recusar pending -> sent sem passar por confirmed"
+    )
     assert graph.get_outbound(oid)["status"] == "pending", "status mudou apesar do erro"
 
 
 def test_allowlist():
     spy = Spy()
-    assert raises(whatsapp.NotAllowed, whatsapp.request_send, STRANGER, "oi", "teste"), "destino fora da allowlist deveria ser recusado na criação"
+    assert raises(whatsapp.NotAllowed, whatsapp.request_send, STRANGER, "oi", "teste"), (
+        "destino fora da allowlist deveria ser recusado na criação"
+    )
 
     # Pedido legítimo criado; allowlist esvaziada depois. Confirmar tem que falhar.
     oid = whatsapp.request_send(OWNER, "config vai mudar", requested_by="teste")
@@ -112,7 +120,9 @@ def test_allowlist():
     os.environ["HARNESS_WA_ALLOWLIST"] = ""
     os.environ["HARNESS_WA_OWNER"] = ""
     try:
-        assert raises(whatsapp.NotAllowed, whatsapp.confirm_send, oid, actor="cli", send_fn=spy), "allowlist vazia deveria recusar o envio na confirmação"
+        assert raises(whatsapp.NotAllowed, whatsapp.confirm_send, oid, actor="cli", send_fn=spy), (
+            "allowlist vazia deveria recusar o envio na confirmação"
+        )
         assert spy.calls == [], "enviou com allowlist vazia"
     finally:
         os.environ["HARNESS_WA_ALLOWLIST"] = antes
@@ -122,9 +132,8 @@ def test_allowlist():
 def test_assist_so_obedece_o_dono():
     inbox = Path(os.environ["HARNESS_WA_INBOX"])
     inbox.write_text(
-        '{"ts":"2026-08-01T10:00:00+00:00","from":"%s","body":"status","is_group":false}\n'
-        '{"ts":"2026-08-01T10:00:01+00:00","from":"%s","body":"status","is_group":true}\n'
-        % (STRANGER, OWNER),
+        f'{{"ts":"2026-08-01T10:00:00+00:00","from":"{STRANGER}","body":"status","is_group":false}}\n'
+        f'{{"ts":"2026-08-01T10:00:01+00:00","from":"{OWNER}","body":"status","is_group":true}}\n',
         encoding="utf-8",
     )
     assist.STATE = TMP / "cursor"
@@ -138,8 +147,7 @@ def test_assist_so_obedece_o_dono():
 def test_assist_reply_fica_pendente():
     inbox = Path(os.environ["HARNESS_WA_INBOX"])
     inbox.write_text(
-        '{"ts":"2026-08-01T11:00:00+00:00","from":"%s","body":"pendentes","is_group":false}\n'
-        % OWNER,
+        f'{{"ts":"2026-08-01T11:00:00+00:00","from":"{OWNER}","body":"pendentes","is_group":false}}\n',
         encoding="utf-8",
     )
     assist.STATE = TMP / "cursor2"
@@ -147,4 +155,6 @@ def test_assist_reply_fica_pendente():
     assert n == 1, f"assist deveria processar 1 comando do dono, processou {n}"
     novos = [p for p in graph.pending_outbound(limit=999) if p["requested_by"] == "assist"]
     assert len(novos) >= 1, "resposta do assist deveria virar pending"
-    assert all(p["status"] == "pending" for p in novos), "com auto-reply desligado, resposta ao dono NÃO pode sair sozinha"
+    assert all(p["status"] == "pending" for p in novos), (
+        "com auto-reply desligado, resposta ao dono NÃO pode sair sozinha"
+    )

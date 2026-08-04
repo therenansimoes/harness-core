@@ -83,8 +83,7 @@ def test_backend_nao_alcanca_o_canal_de_nota():
     import harness.backends
 
     src = "\n".join(
-        p.read_text(encoding="utf-8")
-        for p in Path(harness.backends.__file__).parent.rglob("*.py")
+        p.read_text(encoding="utf-8") for p in Path(harness.backends.__file__).parent.rglob("*.py")
     )
     assert "ruler.note" not in src
     assert "ruler import note" not in src

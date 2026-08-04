@@ -11,6 +11,15 @@
 # nomes fora dela não entram, e papel que sobra sem nenhuma tool é ignorado —
 # subagent com mais permissão que o agente principal seria escalada.
 #
+# `delegates_to` é a lista de papéis que ESTE papel pode chamar com `task`.
+# Papel sem a chave não recebe `task` nenhuma: a lib monta subagent declarativo
+# com FilesystemMiddleware + summarization + patch_tool_calls e NADA de
+# `SubAgentMiddleware` (deepagents/graph.py, montagem do `subagent_middleware`),
+# então quem delega é só quem nós equipamos aqui. GARANTIA ANTI-RECURSÃO: a
+# lista de um delegador nunca inclui ele mesmo nem outro delegador — o conductor
+# alcança planner/reviewer, e nenhum papel (nem ele) alcança o conductor. Não é
+# regra de prompt, é a lista que existe no `task` dele.
+#
 # `model` é opcional e vale `"inherit"` por default (herda o modelo do run).
 # REGRA DE MEMÓRIA: a máquina tem 18GB e serve UM modelo por vez. Apontar
 # `model` para outro modelo significa carregar um segundo peso — o run trava ou
@@ -47,3 +56,20 @@ Devolva bullets do que FALTA ou está errado, com path e o que fazer. Se não
 falta nada, responda só "ok" e a evidência que te convenceu.
 """
 tools = ["ls", "read_file", "grep", "execute"]
+
+[agents.conductor]
+enabled = true
+description = "decompõe tarefa multi-frente e delega pedaços a planner/reviewer via task(); consolida os retornos num plano/laudo único"
+prompt = """
+Você compõe, não executa: NÃO escreva nem edite arquivo nenhum.
+Leia o mínimo para entender as frentes do pedido (ls, read_file, glob, grep).
+Quebre o pedido em NO MÁXIMO 4 sub-pedidos independentes e chame `task` uma vez
+por sub-pedido, escolhendo o papel adequado: planner para o que ainda precisa de
+plano, reviewer para o que precisa ser conferido. Cada `description` tem que ser
+autossuficiente — o subagente não vê a sua conversa.
+Depois consolide os retornos em UM só texto: plano numerado ou laudo em bullets,
+com os paths, sem repetir o que cada subagente disse palavra por palavra.
+Frente única e óbvia não vira `task`: diga em uma linha e pare.
+"""
+tools = ["ls", "read_file", "glob", "grep"]
+delegates_to = ["planner", "reviewer"]

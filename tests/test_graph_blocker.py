@@ -87,9 +87,9 @@ def _unit(tmp_path: Path, name: str) -> Path:
 
 def _count(db: Path, node: str) -> int:
     with sqlite3.connect(db) as conn:
-        return conn.execute(
-            "SELECT COUNT(*) FROM node_events WHERE node = ?", (node,)
-        ).fetchone()[0]
+        return conn.execute("SELECT COUNT(*) FROM node_events WHERE node = ?", (node,)).fetchone()[
+            0
+        ]
 
 
 def _ev(final, node: str) -> list[dict]:
@@ -121,9 +121,7 @@ def test_needs_user_input_escalona_sem_queimar_a_segunda_tentativa(
 
 
 @pytest.mark.parametrize("blk", ["external_wait"], indirect=True)
-def test_external_wait_segue_em_retry_com_defer_no_evento(
-    data_dir, tmp_path, blk, policy_rapida
-):
+def test_external_wait_segue_em_retry_com_defer_no_evento(data_dir, tmp_path, blk, policy_rapida):
     unit = _unit(tmp_path, "espera")
     final = run_unit(unit, "blk", None, data_dir, thread_id="t-blk-wait", max_attempts=2)
 

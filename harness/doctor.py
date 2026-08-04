@@ -134,11 +134,9 @@ def _config(base: Path) -> list[Check]:
         except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
             broken.append(f"{f.name} ({exc})")
     config = (
-        Check("config", FAIL, f"{len(broken)} de {len(files)} não parseiam: "
-                              f"{'; '.join(broken)}")
+        Check("config", FAIL, f"{len(broken)} de {len(files)} não parseiam: {'; '.join(broken)}")
         if broken
-        else Check("config", OK, f"{len(files)} toml: "
-                                 f"{', '.join(f.name for f in files)}")
+        else Check("config", OK, f"{len(files)} toml: {', '.join(f.name for f in files)}")
     )
     return [config, _catalog(base)]
 
@@ -156,8 +154,7 @@ def _catalog(base: Path) -> Check:
     return Check(
         "catalog",
         OK,
-        f"{len(rules)} regra(s), n_per_arm={cfg['n_per_arm']:g} "
-        f"window={cfg['window']:g}",
+        f"{len(rules)} regra(s), n_per_arm={cfg['n_per_arm']:g} window={cfg['window']:g}",
     )
 
 
@@ -215,13 +212,14 @@ def _topology(base: Path) -> Check:
         topology.compile_spec(spec)
     except Exception as exc:
         return Check(
-            "topology", WARN,
+            "topology",
+            WARN,
             f"{type(exc).__name__}: {exc} — run_graph usa a topologia default",
         )
     return Check(
-        "topology", OK,
-        f"{path} compila: nodes={len(spec.get('nodes', []))} "
-        f"edges={len(spec.get('edges', []))}",
+        "topology",
+        OK,
+        f"{path} compila: nodes={len(spec.get('nodes', []))} edges={len(spec.get('edges', []))}",
     )
 
 
@@ -235,7 +233,8 @@ def _plugin_nodes(base: Path) -> Check:
         folder = plugin_nodes.nodes_dir(base)
         if plugin_nodes.disabled():
             return Check(
-                "plugin_nodes", OK,
+                "plugin_nodes",
+                OK,
                 f"{plugin_nodes.KILL_SWITCH}="
                 f"{os.environ.get(plugin_nodes.KILL_SWITCH, '')} — nenhum nó de "
                 f"plugin carrega, nem aprovado",
@@ -316,9 +315,7 @@ def _procs(data_dir: Path) -> Check:
             else:
                 vivos += 1
     if orfaos:
-        return Check(
-            "procs", WARN, f"{orfaos} processo(s) órfão(s) — `harness procs --reap` limpa"
-        )
+        return Check("procs", WARN, f"{orfaos} processo(s) órfão(s) — `harness procs --reap` limpa")
     return Check("procs", OK, f"0 processos órfãos (registrados de runs vivos: {vivos})")
 
 
@@ -335,7 +332,8 @@ def _cache(data_dir: Path) -> Check:
     tamanho = f"{cache_gc.human(usado)} em {arquivos} arquivo(s)"
     if usado > teto:
         return Check(
-            "cache", WARN,
+            "cache",
+            WARN,
             f"{tamanho} > teto {cache_gc.human(teto)} — `harness cache-gc` poda",
         )
     return Check("cache", OK, f"{tamanho} (teto {cache_gc.human(teto)})")

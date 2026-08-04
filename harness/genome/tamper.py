@@ -10,8 +10,8 @@ primeira, sozinha, confia no declarante.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 from harness.genome.genome import (
     DEFAULT_PATH,
@@ -65,7 +65,7 @@ def fingerprint(g: Genome, root: Path) -> str:
     h = hashlib.sha256()
     for rel in immutable_files(g, base):
         content = hashlib.sha256((base / rel).read_bytes()).hexdigest()
-        h.update(f"{rel}\0{content}\n".encode("utf-8"))
+        h.update(f"{rel}\0{content}\n".encode())
     return h.hexdigest()
 
 
@@ -83,10 +83,7 @@ def detect(
     """
     base = Path(root)
     g = genome if genome is not None else load(base / DEFAULT_PATH)
-    out = [
-        f"{GENOME_VIOLATION}:{violation_path(v)}"
-        for v in check_patch(g, changed, root=base)
-    ]
+    out = [f"{GENOME_VIOLATION}:{violation_path(v)}" for v in check_patch(g, changed, root=base)]
     if fingerprint(g, base) != before:
         out.append(IMMUTABLE_CHANGED)
     return out

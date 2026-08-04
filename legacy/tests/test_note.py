@@ -6,9 +6,9 @@ nota é do humano; teste que escrevesse no projeto de verdade viraria KPI falso.
 
     python3 -m pytest tests/test_note.py -q
 """
+
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -78,7 +78,7 @@ def test_add_appends_and_keeps_order(tmp_path, monkeypatch):
 
 def test_kpi_prints_mean_of_last_window(tmp_path, monkeypatch, capsys):
     _mk_project(tmp_path, monkeypatch, ids=("0001", "0002", "0003", "0004"))
-    for i, s in zip(("0001", "0002", "0003", "0004"), (0, 3, 3, 3)):
+    for i, s in zip(("0001", "0002", "0003", "0004"), (0, 3, 3, 3), strict=False):
         assert _add(i, s) == 0
     capsys.readouterr()
     assert note.main(["kpi", PROJ, "--window", "3"]) == 0
@@ -93,7 +93,7 @@ def test_kpi_exits_1_with_fewer_than_three_notes(tmp_path, monkeypatch, capsys):
     # nenhuma nota
     assert note.main(["kpi", PROJ]) == 1
     assert capsys.readouterr().out == ""
-    for i, s in zip(("0001", "0002"), (5, 5)):
+    for i, s in zip(("0001", "0002"), (5, 5), strict=False):
         assert _add(i, s) == 0
     capsys.readouterr()
     # 2 notas ainda é opinião solta: 1 nota virando média reverteria versão.
@@ -107,7 +107,7 @@ def test_kpi_exits_1_with_fewer_than_three_notes(tmp_path, monkeypatch, capsys):
 
 def test_kpi_stdout_last_line_parses_with_kpi_parse_value(tmp_path, monkeypatch, capsys):
     _mk_project(tmp_path, monkeypatch)
-    for i, s in zip(("0001", "0002", "0003"), (4, 5, 3)):
+    for i, s in zip(("0001", "0002", "0003"), (4, 5, 3), strict=False):
         assert _add(i, s) == 0
     capsys.readouterr()
     assert note.main(["kpi", PROJ]) == 0
@@ -118,7 +118,7 @@ def test_kpi_via_subprocess_com_harness_root(tmp_path, monkeypatch):
     """O caminho de verdade: kpi.run_kpi roda o cmd do kpi.toml com cwd no alvo
     e $HARNESS_ROOT apontando para a raiz do harness."""
     _mk_project(tmp_path, monkeypatch)
-    for i, s in zip(("0001", "0002", "0003"), (4, 5, 3)):
+    for i, s in zip(("0001", "0002", "0003"), (4, 5, 3), strict=False):
         assert _add(i, s) == 0
     alvo = tmp_path / "ws"
     alvo.mkdir()

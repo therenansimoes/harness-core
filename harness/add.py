@@ -46,8 +46,17 @@ TREE_SKIP = (".git", "node_modules", ".venv", "__pycache__", ".cache", "dist")
 
 # Não-determinismo óbvio: verify com passo humano não é régua, é opinião.
 FORBIDDEN_VERIFY = (
-    "review manually", "manually", "manualmente", "by hand", "a olho",
-    "human", "humano", "visually", "visualmente", "julgue", "confira se",
+    "review manually",
+    "manually",
+    "manualmente",
+    "by hand",
+    "a olho",
+    "human",
+    "humano",
+    "visually",
+    "visualmente",
+    "julgue",
+    "confira se",
 )
 # Verify que passa sempre não prova nada.
 TRIVIAL_VERIFY = ("true", ":", "exit 0")
@@ -70,9 +79,7 @@ def load_project_repo(name: str, projects_file: Path | None = None) -> Path:
     entry = data.get("projects", {}).get(name)
     if not isinstance(entry, dict) or "repo" not in entry:
         known = ", ".join(sorted(data.get("projects", {}))) or "nenhum"
-        raise AddError(
-            f"projeto {name!r} sem repo em {path.as_posix()} (registrados: {known})"
-        )
+        raise AddError(f"projeto {name!r} sem repo em {path.as_posix()} (registrados: {known})")
     repo = Path(str(entry["repo"])).expanduser()
     if not repo.is_dir():
         raise AddError(f"repo do projeto {name!r} não é diretório: {repo}")
@@ -86,8 +93,7 @@ def project_context(repo: Path) -> str:
         p = repo / rd
         if p.is_file():
             head = "\n".join(
-                p.read_text(encoding="utf-8", errors="replace")
-                .splitlines()[:CONTEXT_HEAD_LINES]
+                p.read_text(encoding="utf-8", errors="replace").splitlines()[:CONTEXT_HEAD_LINES]
             )
             parts.append(f"--- {rd} (início) ---\n{head}")
             break
@@ -164,13 +170,11 @@ def _call_author(prompt: str, model: str, max_usd: float) -> str:
         )
         if not result.ok:
             raise AddError(
-                f"chamada de autoria falhou: exit_reason={result.exit_reason} "
-                f"(trace descartado)"
+                f"chamada de autoria falhou: exit_reason={result.exit_reason} (trace descartado)"
             )
         if result.cost_usd is not None and result.cost_usd > max_usd:
             raise AddError(
-                f"autoria custou ${result.cost_usd:.4f} > teto ${max_usd:.2f} — "
-                f"unit não gravada"
+                f"autoria custou ${result.cost_usd:.4f} > teto ${max_usd:.2f} — unit não gravada"
             )
         text = _result_text(trace)
         if not text:

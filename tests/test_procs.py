@@ -154,7 +154,7 @@ def test_doctor_ve_orfao_como_aviso(ws, monkeypatch, tmp_path):
     run_ws = data / "ws" / "run-morto"
     (run_ws / ".harness").mkdir(parents=True)
     procs.procs_path(run_ws).write_text(
-        json.dumps([{"id": "x", "pid": 1, "pgid": 1, "port": 1, "harness_pid": 2 ** 31 - 1}]),
+        json.dumps([{"id": "x", "pid": 1, "pgid": 1, "port": 1, "harness_pid": 2**31 - 1}]),
         encoding="utf-8",
     )
 

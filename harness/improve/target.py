@@ -20,9 +20,10 @@ Padrão de falha = o `exit_reason` da linha do ledger, cortado no primeiro ':'
 from __future__ import annotations
 
 import tomllib
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 from harness.improve import catalog_path
 from harness.ruler.wilson import MIN_N
@@ -46,11 +47,11 @@ DEFAULTS: dict[str, float] = {
     # `cost_usd = 0.0` e sem isto TODA falha local teria custo zero — o loop
     # nunca acharia gradiente numa máquina que roda de graça.
     "sec_cost_usd": 0.0001,
-    "min_gain": 1e-6,      # abaixo disto o experimento custa mais que a cura
-    "min_fail_n": 1,       # falhas mínimas do padrão para ele existir
-    "n_per_arm": 6,        # tentativas por braço do A/B (MIN_N da régua)
-    "window": 200,         # runs recentes que contam como evidência
-    "max_parallel": 1,     # teto do fan-out; 1 = sequencial (ver autopilot_graph)
+    "min_gain": 1e-6,  # abaixo disto o experimento custa mais que a cura
+    "min_fail_n": 1,  # falhas mínimas do padrão para ele existir
+    "n_per_arm": 6,  # tentativas por braço do A/B (MIN_N da régua)
+    "window": 200,  # runs recentes que contam como evidência
+    "max_parallel": 1,  # teto do fan-out; 1 = sequencial (ver autopilot_graph)
 }
 
 
@@ -169,18 +170,14 @@ def waste(row: RunRow, sec_cost_usd: float) -> float:
     return (row.cost_usd or 0.0) + row.sec_total * sec_cost_usd
 
 
-def failure_stats(
-    history: Sequence[RunRow], sec_cost_usd: float
-) -> dict[str, tuple[int, float]]:
+def failure_stats(history: Sequence[RunRow], sec_cost_usd: float) -> dict[str, tuple[int, float]]:
     """`padrão -> (nº de falhas, custo médio da falha)`. Só linhas com ok=False:
     o que interessa é o desperdício, não o custo de trabalhar."""
     buckets: dict[str, list[float]] = {}
     for row in history:
         if row.ok:
             continue
-        buckets.setdefault(failure_pattern(row.exit_reason), []).append(
-            waste(row, sec_cost_usd)
-        )
+        buckets.setdefault(failure_pattern(row.exit_reason), []).append(waste(row, sec_cost_usd))
     return {k: (len(v), sum(v) / len(v)) for k, v in buckets.items()}
 
 
@@ -349,7 +346,5 @@ def actions() -> dict[str, Action]:
 def get_action(name: str) -> Action:
     found = actions()
     if name not in found:
-        raise KeyError(
-            f"ação desconhecida: {name!r} (disponíveis: {', '.join(sorted(found))})"
-        )
+        raise KeyError(f"ação desconhecida: {name!r} (disponíveis: {', '.join(sorted(found))})")
     return found[name]

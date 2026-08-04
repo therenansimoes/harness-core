@@ -112,8 +112,7 @@ def test_pricing_file_has_only_free_local_models():
     }
     assert all(k in local_openai for k in pricing)
     assert all(
-        v.get("input_per_mtok") == 0.0 and v.get("output_per_mtok") == 0.0
-        for v in pricing.values()
+        v.get("input_per_mtok") == 0.0 and v.get("output_per_mtok") == 0.0 for v in pricing.values()
     )
 
 
@@ -253,11 +252,11 @@ def test_compactacao_limpa_tool_result_velho_acima_do_gatilho():
     edit.apply(messages, count_tokens=count_tokens_approximately)
 
     corpos = [(m.name, m.content) for m in messages if isinstance(m, ToolMessage)]
-    assert corpos[0] == ("read_file", "[cleared]")   # os velhos saem
+    assert corpos[0] == ("read_file", "[cleared]")  # os velhos saem
     assert corpos[1] == ("read_file", "[cleared]")
     assert corpos[2] == ("read_file", "[cleared]")
-    assert corpos[3] == ("write_file", gordo)        # exclude_tools respeitado
-    assert corpos[-1] == ("read_file", gordo)        # keep=2 preserva os recentes
+    assert corpos[3] == ("write_file", gordo)  # exclude_tools respeitado
+    assert corpos[-1] == ("read_file", gordo)  # keep=2 preserva os recentes
     assert corpos[-2] == ("read_file", gordo)
     # `clear_at_least=0` limpa tudo de uma vez e o contexto volta pra BAIXO do
     # gatilho. Com cota parcial ele pararia na primeira limpeza e o turno
@@ -379,7 +378,17 @@ def test_manual_das_tools_entra_no_system_prompt(tmp_path, monkeypatch):
     da._build_agent(ExecRequest(prompt="x", workspace=tmp_path, model="openai:qwen3.5-9b-mlx"))
     prompt = capturado["system_prompt"]
     assert "Manual das tools" in prompt
-    for tool in ("ls", "read_file", "write_file", "edit_file", "glob", "grep", "execute", "delete", "task"):
+    for tool in (
+        "ls",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "glob",
+        "grep",
+        "execute",
+        "delete",
+        "task",
+    ):
         assert f"## {tool}" in prompt
 
 
@@ -399,9 +408,10 @@ def test_papeis_de_subagent_vao_como_subagents_e_manual(tmp_path, monkeypatch):
     monkeypatch.setattr(deepagents, "create_deep_agent", spy)
     da._build_agent(ExecRequest(prompt="x", workspace=tmp_path, model="openai:qwen3.5-9b-mlx"))
     nomes = [s["name"] for s in capturado["subagents"]]
-    assert nomes == ["planner", "reviewer"]
+    assert nomes == ["planner", "reviewer", "conductor"]
     assert all("system_prompt" in s for s in capturado["subagents"])
     assert "task(subagent_type='planner')" in capturado["system_prompt"]
+    assert "task(subagent_type='conductor')" in capturado["system_prompt"]
 
 
 def test_sem_papel_nao_passa_subagents(tmp_path, monkeypatch):
@@ -473,9 +483,7 @@ def test_model_instance_tem_temperature_baixa():
 def test_thinking_canal_por_provider():
     """No openai:* (LM Studio) o thinking já vem ligado do servidor, e o
     `extra_body` fica só para vLLM/llama.cpp compatíveis."""
-    assert da._thinking_kwargs("openai:qwen3.5-9b-mlx") == {
-        "extra_body": da.THINKING_EXTRA_BODY
-    }
+    assert da._thinking_kwargs("openai:qwen3.5-9b-mlx") == {"extra_body": da.THINKING_EXTRA_BODY}
     assert da._thinking_kwargs("anthropic:claude-sonnet-4-5") == {}
 
 
@@ -485,9 +493,7 @@ def test_model_for_passa_o_kwarg_do_provider(monkeypatch):
     import langchain.chat_models as lcm
 
     visto: list[dict] = []
-    monkeypatch.setattr(
-        lcm, "init_chat_model", lambda m, **kw: visto.append(kw) or f"model:{m}"
-    )
+    monkeypatch.setattr(lcm, "init_chat_model", lambda m, **kw: visto.append(kw) or f"model:{m}")
     assert da._model_for("openai:qwen3.5-9b-mlx") == "model:openai:qwen3.5-9b-mlx"
     assert visto[-1] == {
         "temperature": da.MODEL_TEMPERATURE,
@@ -553,9 +559,7 @@ def _req(tmp_path, **kw):
 
 def test_desistencia_silenciosa_vira_stalled(tmp_path, monkeypatch):
     """u4a: zero escrita e zero texto final saía como done/ok=True no ledger."""
-    backend = _fake_backend(
-        monkeypatch, lambda payload, config: {"messages": [FakeMsg("ai", "")]}
-    )
+    backend = _fake_backend(monkeypatch, lambda payload, config: {"messages": [FakeMsg("ai", "")]})
     res = backend.execute(_req(tmp_path))
     assert (res.ok, res.exit_reason, res.files_changed) == (False, "stalled", ())
 
@@ -631,11 +635,11 @@ def test_truncated_ganha_de_stalled_e_perde_pro_limite_de_turnos(tmp_path, monke
 @pytest.mark.parametrize(
     "meta",
     [
-        None,                             # provider sem metadata: fail-open
-        {},                               # metadata vazio
-        {"finish_reason": "stop"},        # terminou normal
-        {"finish_reason": None},          # campo presente e nulo
-        {"outra_coisa": "length"},        # chave inesperada não engana
+        None,  # provider sem metadata: fail-open
+        {},  # metadata vazio
+        {"finish_reason": "stop"},  # terminou normal
+        {"finish_reason": None},  # campo presente e nulo
+        {"outra_coisa": "length"},  # chave inesperada não engana
     ],
 )
 def test_sem_sinal_de_corte_o_comportamento_e_o_de_antes(tmp_path, monkeypatch, meta):
@@ -677,9 +681,71 @@ def test_timeout_materializa_trace_parcial(tmp_path, monkeypatch):
 
     res = _fake_backend(monkeypatch, invoke).execute(_req(tmp_path, timeout_s=0.2))
     assert res.exit_reason == "timeout"
-    linhas = [json.loads(l) for l in res.trace_path.read_text().splitlines()]
+    linhas = [json.loads(ln) for ln in res.trace_path.read_text().splitlines()]
     assert any("error" in r for r in linhas)
     assert sum(1 for r in linhas if r.get("type") == "ai") == 1
+
+
+def _system_do_workspace(tmp_path, monkeypatch) -> str:
+    """system_prompt que o _build_agent montaria para este workspace."""
+    pytest.importorskip("deepagents")
+    import deepagents
+
+    capturado: dict[str, str] = {}
+
+    def spy(*a, **kw):
+        capturado["system_prompt"] = kw["system_prompt"]
+        return object()
+
+    monkeypatch.setattr(deepagents, "create_deep_agent", spy)
+    da._build_agent(ExecRequest(prompt="x", workspace=tmp_path, model="openai:qwen3.5-9b-mlx"))
+    return capturado["system_prompt"]
+
+
+def test_constituicao_do_repo_alvo_entra_no_system_prompt(tmp_path, monkeypatch):
+    """O executor mexia no repo sem nunca ler a lei local dele. AGENTS.md é
+    arquivo versionado do alvo, então vai no lado confiável (system prompt)."""
+    (tmp_path / "AGENTS-exec.md").write_text(
+        "# Regras\n\nNunca comite direto na master.\n", encoding="utf-8"
+    )
+    prompt = _system_do_workspace(tmp_path, monkeypatch)
+    assert "## Constituição do projeto" in prompt
+    assert "Nunca comite direto na master." in prompt
+    assert "AGENTS-exec.md" in prompt
+
+
+def test_agents_exec_ganha_do_agents(tmp_path, monkeypatch):
+    """`-exec` existe para o projeto falar com o executor sem misturar com o
+    AGENTS.md dos humanos: quando os dois existem, só o -exec entra."""
+    (tmp_path / "AGENTS.md").write_text("MARCADOR-HUMANOS\n", encoding="utf-8")
+    (tmp_path / "AGENTS-exec.md").write_text("MARCADOR-EXECUTOR\n", encoding="utf-8")
+    prompt = _system_do_workspace(tmp_path, monkeypatch)
+    assert "MARCADOR-EXECUTOR" in prompt
+    assert "MARCADOR-HUMANOS" not in prompt
+
+
+def test_workspace_sem_constituicao_nao_muda_o_prompt(tmp_path, monkeypatch):
+    """Fail-open: repo-alvo sem AGENTS* devolve exatamente o prompt de antes."""
+    sem = _system_do_workspace(tmp_path, monkeypatch)
+    (tmp_path / "AGENTS.md").write_text("regra qualquer\n", encoding="utf-8")
+    com = _system_do_workspace(tmp_path, monkeypatch)
+    assert "Constituição do projeto" not in sem
+    assert com == f"{sem}\n\n{da._target_constitution(tmp_path)}"
+
+
+def test_constituicao_longa_e_truncada_com_aviso(tmp_path, monkeypatch):
+    """Constituição é regra, mas não pode comer o contexto do executor 9B: corta
+    no teto e avisa, para o modelo não achar que leu o arquivo inteiro."""
+    corpo = "linha de regra que se repete\n" * 400
+    (tmp_path / "AGENTS.md").write_text(corpo, encoding="utf-8")
+    assert len(corpo) > da.TARGET_CONSTITUTION_MAX_CHARS
+    prompt = _system_do_workspace(tmp_path, monkeypatch)
+    assert "truncado" in prompt
+    assert corpo.strip() not in prompt
+    bloco = da._target_constitution(tmp_path)
+    assert bloco.count("linha de regra") == corpo[: da.TARGET_CONSTITUTION_MAX_CHARS].count(
+        "linha de regra"
+    )
 
 
 # --- LM Studio de verdade ---------------------------------------------------

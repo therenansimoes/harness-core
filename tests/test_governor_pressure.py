@@ -101,9 +101,7 @@ def test_bench_por_celula_bane_no_kind_ruim_e_solta_no_kind_bom():
     # Mesmo ciclo, outro kind: a célula de content colou KEEP -> a ação continua
     # viva lá, e a marca de code sobrevive intacta (banco de uma célula não é
     # perdoado porque o ciclo de hoje é de outra).
-    banned, since = bench_with_expiry(
-        glob, gov, 4, since, kind="content", cell_stats=content
-    )
+    banned, since = bench_with_expiry(glob, gov, 4, since, kind="content", cell_stats=content)
     assert banned == set() and since == {"code:pesquisa": 4}
 
     # O prazo de soltura corre por célula, como o banco.
@@ -162,8 +160,9 @@ def _unit(tmp_path: Path, name: str, verify_cmd: str) -> Path:
 def caro(monkeypatch):
     """Mock cobrando $2.50 por tentativa: o mock real reporta 0.0 (grátis) e
     nenhum teto o alcançaria."""
-    from harness.backends.mock import MockBackend
     from dataclasses import replace as _replace
+
+    from harness.backends.mock import MockBackend
 
     original = MockBackend.execute
     monkeypatch.setattr(
@@ -178,9 +177,7 @@ def test_run_com_custo_estourado_escala_sem_retry(caro, data_dir, tmp_path, monk
     pediria retry (budget de sobra), mas o dinheiro acabou -> escalate."""
     cfg = tmp_path / "config"
     cfg.mkdir()
-    (cfg / "governor.toml").write_text(
-        "[pressure]\ncost_cap_usd = 1.0\n", encoding="utf-8"
-    )
+    (cfg / "governor.toml").write_text("[pressure]\ncost_cap_usd = 1.0\n", encoding="utf-8")
     monkeypatch.setenv(CONFIG_DIR_ENV, str(cfg))
 
     unit = _unit(tmp_path, "gasto", "test -f nao_existe.txt")
@@ -198,9 +195,7 @@ def test_run_com_teto_folgado_mantem_retry(caro, data_dir, tmp_path, monkeypatch
     escalada vem do budget de tentativas, não do governor."""
     cfg = tmp_path / "config"
     cfg.mkdir()
-    (cfg / "governor.toml").write_text(
-        "[pressure]\ncost_cap_usd = 100.0\n", encoding="utf-8"
-    )
+    (cfg / "governor.toml").write_text("[pressure]\ncost_cap_usd = 100.0\n", encoding="utf-8")
     monkeypatch.setenv(CONFIG_DIR_ENV, str(cfg))
 
     unit = _unit(tmp_path, "folga", "test -f nao_existe.txt")

@@ -73,7 +73,7 @@ def sem_reflect(sandbox: Path) -> Path:
         adapters.render_topology(
             {
                 "nodes": [n for n in spec["nodes"] if n != "reflect"],
-                "edges": [list(e) for e in edges + [("retry", "route")]],
+                "edges": [list(e) for e in [*edges, ("retry", "route")]],
             }
         ),
         encoding="utf-8",
@@ -91,7 +91,7 @@ def test_default_do_repo_e_legal():
 
 
 def test_insertable_nao_contem_espinha_nem_terminal():
-    assert gram.INSERTABLE == frozenset({"reflect"})
+    assert frozenset({"reflect"}) == gram.INSERTABLE
     assert not gram.INSERTABLE & (gram.SPINE | gram.TERMINAL)
 
 
@@ -173,18 +173,16 @@ def test_fan_out_ilegal_rejeitado(sandbox, fake_plugins):
 
     # ramo que escreve estado (measure) junto de um events-only
     sujo = {
-        "nodes": list(spec["nodes"]) + [n1],
-        "edges": [list(e) for e in base + [("verify", n1), ("verify", "measure"), (n1, "measure")]],
+        "nodes": [*list(spec["nodes"]), n1],
+        "edges": [list(e) for e in [*base, ("verify", n1), ("verify", "measure"), (n1, "measure")]],
     }
     assert any("fora de events-only" in r for r in gram.check(sujo))
 
     # dois events-only, mas cada um num destino: diamante aberto
     aberto = {
-        "nodes": list(spec["nodes"]) + [n1, n2],
+        "nodes": [*list(spec["nodes"]), n1, n2],
         "edges": [
-            list(e)
-            for e in base
-            + [("verify", n1), ("verify", n2), (n1, "measure"), (n2, "gate")]
+            list(e) for e in [*base, ("verify", n1), ("verify", n2), (n1, "measure"), (n2, "gate")]
         ],
     }
     assert any("não convergem" in r for r in gram.check(aberto))
@@ -289,7 +287,9 @@ def test_apply_recusa_kind_torto_sem_escrever(sandbox):
     spec = topology.load_spec(topo_path(sandbox))
     torta = adapters.TopologyProposal(
         target_file=adapters.TOPOLOGY_FILE,
-        new_text=tev.render({**spec, "kinds": {"code": {"nodes": ["plan"], "edges": [["START", "plan"]]}}}),
+        new_text=tev.render(
+            {**spec, "kinds": {"code": {"nodes": ["plan"], "edges": [["START", "plan"]]}}}
+        ),
     )
     with pytest.raises(topology.TopologyError):
         tev.apply(torta, root=sandbox)
@@ -303,13 +303,32 @@ def test_render_topology_legado_preserva_kinds(sandbox):
     spec = topology.load_spec(topo_path(sandbox))
     full = {
         **spec,
-        "kinds": {"code": {"nodes": ["plan", "execute", "verify", "gate", "accept",
-                                     "retry", "escalate", "revert", "record"],
-                           "edges": [["START", "plan"], ["plan", "execute"],
-                                     ["execute", "verify"], ["verify", "gate"],
-                                     ["retry", "execute"], ["accept", "record"],
-                                     ["escalate", "record"], ["revert", "record"],
-                                     ["record", "END"]]}},
+        "kinds": {
+            "code": {
+                "nodes": [
+                    "plan",
+                    "execute",
+                    "verify",
+                    "gate",
+                    "accept",
+                    "retry",
+                    "escalate",
+                    "revert",
+                    "record",
+                ],
+                "edges": [
+                    ["START", "plan"],
+                    ["plan", "execute"],
+                    ["execute", "verify"],
+                    ["verify", "gate"],
+                    ["retry", "execute"],
+                    ["accept", "record"],
+                    ["escalate", "record"],
+                    ["revert", "record"],
+                    ["record", "END"],
+                ],
+            }
+        },
     }
     back = tomllib.loads(adapters.render_topology(full))
     assert back["kinds"] == full["kinds"]
@@ -323,9 +342,7 @@ def test_propose_topology_legado_nao_apaga_secao_de_kind(sandbox):
         "nodes": list(spec["nodes"]),
         "edges": [list(e) for e in spec["edges"]],
     }
-    p.write_text(
-        adapters.render_topology({**spec, "kinds": {"infra": secao}}), encoding="utf-8"
-    )
+    p.write_text(adapters.render_topology({**spec, "kinds": {"infra": secao}}), encoding="utf-8")
 
     proposal = adapters.propose_topology(root=sandbox)
     assert proposal is not None

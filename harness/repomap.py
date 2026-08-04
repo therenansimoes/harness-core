@@ -159,7 +159,7 @@ def rank_symbols(ws: str | Path) -> list[dict]:
         if not isinstance(registro, dict):
             continue
         for simbolo in registro.get("symbols", []):
-            nome, linha, kind, sig = (list(simbolo) + ["", 0, "", ""])[:4]
+            nome, linha, kind, sig = ([*list(simbolo), "", 0, "", ""])[:4]
             achados.append(
                 {
                     "name": nome,

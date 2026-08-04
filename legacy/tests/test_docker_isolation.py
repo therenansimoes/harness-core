@@ -7,6 +7,7 @@ passou.
 
     python3 -m pytest tests/test_docker_isolation.py -q
 """
+
 from __future__ import annotations
 
 import sys
@@ -94,4 +95,3 @@ def test_network_none_bloqueia_rede(tmp_path):
         f"verify sintético conseguiu rede com --network none (deveria falhar): "
         f"{r.stdout}\n{r.stderr}"
     )
-

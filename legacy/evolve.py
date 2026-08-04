@@ -29,7 +29,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).parent.resolve()
@@ -53,7 +53,7 @@ class InfraError(Exception):
 
 
 def now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 # -------------------------------------------------------------------- genome
@@ -72,7 +72,7 @@ def load_genome(path: Path | None = None) -> dict:
     try:
         data = tomllib.loads(p.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as e:
-        raise InfraError(f"{p.name}: TOML inválido — {e}")
+        raise InfraError(f"{p.name}: TOML inválido — {e}") from e
 
     genome = {}
     for key in ("mutable", "immutable"):
@@ -114,9 +114,12 @@ def genome_violations(files, genome: dict | None = None) -> list[str]:
     for f in files:
         rel = _norm(f)
         p = PurePosixPath(rel)
-        if p.is_absolute() or ".." in p.parts:
-            bad.append(rel)
-        elif _matches(rel, g["immutable"]) or not _matches(rel, g["mutable"]):
+        if (
+            p.is_absolute()
+            or ".." in p.parts
+            or _matches(rel, g["immutable"])
+            or not _matches(rel, g["mutable"])
+        ):
             bad.append(rel)
     return bad
 
@@ -131,8 +134,10 @@ def genome_files(genome: dict | None = None, root: Path | None = None) -> list[s
         # só para descartar sandbox/.git/node_modules seria desperdício.
         head = pat.split("*", 1)[0].rstrip("/")
         start = base / head if head else base
-        candidates = [start] if start.is_file() else (
-            [p for p in start.rglob("*") if p.is_file()] if start.is_dir() else []
+        candidates = (
+            [start]
+            if start.is_file()
+            else ([p for p in start.rglob("*") if p.is_file()] if start.is_dir() else [])
         )
         for p in candidates:
             rel = p.relative_to(base).as_posix()
@@ -205,11 +210,11 @@ def parse_proposal(path: Path) -> dict:
     try:
         _, fm, body = text.split("+++", 2)
     except ValueError:
-        raise InfraError(f"{path.name}: front matter não fechado com +++")
+        raise InfraError(f"{path.name}: front matter não fechado com +++") from None
     try:
         meta = tomllib.loads(fm)
     except tomllib.TOMLDecodeError as e:
-        raise InfraError(f"{path.name}: TOML inválido — {e}")
+        raise InfraError(f"{path.name}: TOML inválido — {e}") from e
 
     for field in ("id", "from_version", "to_version", "hypothesis"):
         if not meta.get(field):
@@ -253,8 +258,9 @@ def apply_change(sandbox: Path, change: dict) -> str:
 # ------------------------------------------------------------------- sandbox
 
 
-def build_sandbox(pid: str, to_version: str, changes: list[dict],
-                  genome: dict | None = None) -> tuple[Path, str]:
+def build_sandbox(
+    pid: str, to_version: str, changes: list[dict], genome: dict | None = None
+) -> tuple[Path, str]:
     sandbox = SANDBOXES / pid
     if sandbox.exists():
         shutil.rmtree(sandbox)
@@ -287,8 +293,10 @@ def sandbox_tamper(sandbox: Path, genome: dict | None = None) -> list[str]:
         if not dst.exists():
             bad.append(rel)
             continue
-        if hashlib.sha256(dst.read_bytes()).hexdigest() != \
-                hashlib.sha256((ROOT / rel).read_bytes()).hexdigest():
+        if (
+            hashlib.sha256(dst.read_bytes()).hexdigest()
+            != hashlib.sha256((ROOT / rel).read_bytes()).hexdigest()
+        ):
             bad.append(rel)
     return bad
 
@@ -297,12 +305,19 @@ def run_suite(sandbox: Path, suite: str, repeat: int) -> int:
     """Roda a suite com o genome da sandbox, gravando no results.tsv canônico."""
     env = {
         **os.environ,
-        "HARNESS_RESULTS": str(RESULTS),   # candidata e baseline no mesmo log
-        "HARNESS_TASKS_ROOT": str(ROOT),   # tasks vêm do repo, não da sandbox
+        "HARNESS_RESULTS": str(RESULTS),  # candidata e baseline no mesmo log
+        "HARNESS_TASKS_ROOT": str(ROOT),  # tasks vêm do repo, não da sandbox
     }
     proc = subprocess.run(
-        [sys.executable, str(sandbox / "run_task.py"), "--all", "--suite", suite,
-         "--repeat", str(repeat)],
+        [
+            sys.executable,
+            str(sandbox / "run_task.py"),
+            "--all",
+            "--suite",
+            suite,
+            "--repeat",
+            str(repeat),
+        ],
         env=env,
         cwd=sandbox,
     )
@@ -405,9 +420,17 @@ def run_sealed_credit(sandbox: Path, va: str, vb: str, repeat: int, pid: str) ->
         print(f"   sealed: baseline {va} tem {base_n} runs, rodando baseline em sealed...")
         env = {**os.environ, "HARNESS_RESULTS": str(RESULTS), "HARNESS_TASKS_ROOT": str(ROOT)}
         subprocess.run(
-            [sys.executable, str(ROOT / "run_task.py"), "--all", "--suite", "sealed",
-             "--repeat", str(repeat)],
-            env=env, cwd=ROOT,
+            [
+                sys.executable,
+                str(ROOT / "run_task.py"),
+                "--all",
+                "--suite",
+                "sealed",
+                "--repeat",
+                str(repeat),
+            ],
+            env=env,
+            cwd=ROOT,
         )
 
     print("   sealed: rodando candidata...")
@@ -478,14 +501,14 @@ def _sealed_md(rep_sealed: dict | None, credited: bool | None) -> str:
         for g in rep_sealed["gates"]
         if not g["name"].startswith("ganho normalizado")
     )
-    return f"""Veredito: **{'CONFIRMA' if credited else 'REPROVA'}** o crédito.
+    return f"""Veredito: **{"CONFIRMA" if credited else "REPROVA"}** o crédito.
 
-| Métrica (sealed) | A = {rep_sealed['version_a']} | B = {rep_sealed['version_b']} |
+| Métrica (sealed) | A = {rep_sealed["version_a"]} | B = {rep_sealed["version_b"]} |
 |---|---|---|
-| success | {A['pass']}/{A['n']} = {A['rate']:.0%} | {B['pass']}/{B['n']} = {B['rate']:.0%} |
-| truncamento | {A['trunc_rate']:.0%} | {B['trunc_rate']:.0%} |
-| mediana s | {A['med_s']:.1f}s | {B['med_s']:.1f}s |
-| custo/run | ${A['cost_run']:.4f} | ${B['cost_run']:.4f} |
+| success | {A["pass"]}/{A["n"]} = {A["rate"]:.0%} | {B["pass"]}/{B["n"]} = {B["rate"]:.0%} |
+| truncamento | {A["trunc_rate"]:.0%} | {B["trunc_rate"]:.0%} |
+| mediana s | {A["med_s"]:.1f}s | {B["med_s"]:.1f}s |
+| custo/run | ${A["cost_run"]:.4f} | ${B["cost_run"]:.4f} |
 
 Gates de piso na held-out (o gate de ganho não se aplica aqui — sealed responde
 "generaliza?", não "melhorou?"):
@@ -510,8 +533,10 @@ def _judges_md(judge_result: bool | None, va: str, vb: str, require_judges: bool
         for jid in sorted(set(summary_a["scores"]) | set(summary_b["scores"]))
     )
     bloqueio = (
-        "**Bloqueou o merge** (`--require-judges` ativo)." if require_judges and not judge_result
-        else "Não bloqueou (aprovado)." if require_judges
+        "**Bloqueou o merge** (`--require-judges` ativo)."
+        if require_judges and not judge_result
+        else "Não bloqueou (aprovado)."
+        if require_judges
         else "Informativo — não bloqueou o merge (`--require-judges` não foi passado)."
     )
     return f"""Veredito: **{veredito}**
@@ -522,26 +547,32 @@ def _judges_md(judge_result: bool | None, va: str, vb: str, require_judges: bool
 
 | Métrica | A = {va} | B = {vb} |
 |---|---|---|
-| mediana | {summary_a['median']} | {summary_b['median']} |
-| spread | {summary_a['spread']} | {summary_b['spread']} |
+| mediana | {summary_a["median"]} | {summary_b["median"]} |
+| spread | {summary_a["spread"]} | {summary_b["spread"]} |
 
 Regra: mediana_B >= mediana_A - 5, spread_B <= 25, zero veto de candidato (D2). {bloqueio}"""
 
 
-def write_decision(meta: dict, rep: dict, outcome: str, gid: int, diff_summary: str,
-                   n_runs: int, rep_sealed: dict | None = None,
-                   credited: bool | None = None, judge_result: bool | None = None,
-                   require_judges: bool = False) -> Path:
+def write_decision(
+    meta: dict,
+    rep: dict,
+    outcome: str,
+    gid: int,
+    diff_summary: str,
+    n_runs: int,
+    rep_sealed: dict | None = None,
+    credited: bool | None = None,
+    judge_result: bool | None = None,
+    require_judges: bool = False,
+) -> Path:
     A, B = rep["a"], rep["b"]
     va, vb = rep["version_a"], rep["version_b"]
-    gates_md = "\n".join(
-        f"| {'PASS' if g['ok'] else 'FAIL'} | {g['name']} |" for g in rep["gates"]
-    )
+    gates_md = "\n".join(f"| {'PASS' if g['ok'] else 'FAIL'} | {g['name']} |" for g in rep["gates"])
     if outcome == "merge":
         selo = (
             "Confirmado em **sealed** (held-out): o ganho generaliza."
-            if credited else
-            "**NÃO creditado**: sem confirmação em held-out — hill-climb na fixed, "
+            if credited
+            else "**NÃO creditado**: sem confirmação em held-out — hill-climb na fixed, "
             "onde a mudança foi desenvolvida. A evidência é de ganho, não de generalização."
         )
         reason = (
@@ -566,13 +597,13 @@ def write_decision(meta: dict, rep: dict, outcome: str, gid: int, diff_summary: 
             f"truncamento {A['trunc_rate']:.0%} -> {B['trunc_rate']:.0%}. "
             f"Baseline {va} permanece intacto."
         )
-    doc = f"""# Decisão {meta['id']} — {outcome.upper()}
+    doc = f"""# Decisão {meta["id"]} — {outcome.upper()}
 
-**proposal_id:** `{meta['id']}` · **graph_decision_id:** `{gid}`
-**Proposta:** [`{Path(meta['path']).name}`](../proposals/{Path(meta['path']).name})
+**proposal_id:** `{meta["id"]}` · **graph_decision_id:** `{gid}`
+**Proposta:** [`{Path(meta["path"]).name}`](../proposals/{Path(meta["path"]).name})
 **Ciclo:** {va} → {vb} · {n_runs} runs de candidata · gerado por `evolve.py` em {now()}
 
-**Hipótese:** {meta['hypothesis']}
+**Hipótese:** {meta["hypothesis"]}
 
 **Mudança:** {diff_summary}
 
@@ -580,13 +611,13 @@ def write_decision(meta: dict, rep: dict, outcome: str, gid: int, diff_summary: 
 
 | Métrica | A = {va} | B = {vb} | Δ |
 |---|---|---|---|
-| success | {A['pass']}/{A['n']} = {A['rate']:.0%} | {B['pass']}/{B['n']} = {B['rate']:.0%} | — |
-| success limpo | {A['rate_valid']:.0%} | {B['rate_valid']:.0%} | — |
-| truncamento | {A['trunc_rate']:.0%} | {B['trunc_rate']:.0%} | — |
-| mediana s | {A['med_s']:.1f}s | {B['med_s']:.1f}s | {rep['d_med']:+.1%} |
-| custo/run | ${A['cost_run']:.4f} | ${B['cost_run']:.4f} | {rep['d_cost']:+.1%} |
-| tokens/run | {A['tok_run']:.0f} | {B['tok_run']:.0f} | {rep['d_tok']:+.1%} |
-| N válido | {A['n_valid']} | {B['n_valid']} | — |
+| success | {A["pass"]}/{A["n"]} = {A["rate"]:.0%} | {B["pass"]}/{B["n"]} = {B["rate"]:.0%} | — |
+| success limpo | {A["rate_valid"]:.0%} | {B["rate_valid"]:.0%} | — |
+| truncamento | {A["trunc_rate"]:.0%} | {B["trunc_rate"]:.0%} | — |
+| mediana s | {A["med_s"]:.1f}s | {B["med_s"]:.1f}s | {rep["d_med"]:+.1%} |
+| custo/run | ${A["cost_run"]:.4f} | ${B["cost_run"]:.4f} | {rep["d_cost"]:+.1%} |
+| tokens/run | {A["tok_run"]:.0f} | {B["tok_run"]:.0f} | {rep["d_tok"]:+.1%} |
+| N válido | {A["n_valid"]} | {B["n_valid"]} | — |
 
 ## Gates
 
@@ -610,7 +641,7 @@ def write_decision(meta: dict, rep: dict, outcome: str, gid: int, diff_summary: 
 
 ## Notas da proposta
 
-{meta['body'] or "(sem corpo)"}
+{meta["body"] or "(sem corpo)"}
 """
     out = DECISIONS / f"{meta['id']}.md"
     out.write_text(doc, encoding="utf-8")
@@ -635,8 +666,9 @@ def write_decision(meta: dict, rep: dict, outcome: str, gid: int, diff_summary: 
     return out
 
 
-def reject_genome_violation(meta: dict, violations: list[str],
-                            violation: str = GENOME_VIOLATION) -> int:
+def reject_genome_violation(
+    meta: dict, violations: list[str], violation: str = GENOME_VIOLATION
+) -> int:
     """DISCARD por genoma, no mesmo trilho de registro dos outros DISCARDs.
 
     Não roda suite e não chama juiz: proposta que toca a régua não é julgada
@@ -651,8 +683,12 @@ def reject_genome_violation(meta: dict, violations: list[str],
     reason = f"{violation}: {', '.join(violations)}"
 
     graph.record_proposal(
-        pid=pid, from_version=va, to_version_intended=vb,
-        hypothesis=meta["hypothesis"], diff_summary=reason, path=meta.get("path", ""),
+        pid=pid,
+        from_version=va,
+        to_version_intended=vb,
+        hypothesis=meta["hypothesis"],
+        diff_summary=reason,
+        path=meta.get("path", ""),
     )
     gid = graph.record_decision(
         proposal_id=pid,
@@ -668,8 +704,8 @@ def reject_genome_violation(meta: dict, violations: list[str],
         f"A proposta toca arquivo fora do genoma (`evolution/genome.toml`): "
         f"{', '.join(violations)}.\n"
         "Nenhuma suite rodou — não se julga pelo mérito uma mudança na régua."
-        if violation == GENOME_VIOLATION else
-        f"A sandbox reescreveu arquivo imutável enquanto rodava: "
+        if violation == GENOME_VIOLATION
+        else f"A sandbox reescreveu arquivo imutável enquanto rodava: "
         f"{', '.join(violations)}.\n"
         "Candidata que edita o que a julga não é julgada pelo mérito."
     )
@@ -680,7 +716,7 @@ def reject_genome_violation(meta: dict, violations: list[str],
 **proposal_id:** `{pid}` · **graph_decision_id:** `{gid}`
 **Ciclo:** {va} → {vb} · gerado por `evolve.py` em {now()}
 
-**Hipótese:** {meta['hypothesis']}
+**Hipótese:** {meta["hypothesis"]}
 
 ## Gates
 
@@ -697,17 +733,23 @@ Baseline {va} permanece intacto.
 
     DECISIONS_JSONL.parent.mkdir(parents=True, exist_ok=True)
     with DECISIONS_JSONL.open("a", encoding="utf-8") as f:
-        f.write(json.dumps({
-            "id": pid,
-            "va": va,
-            "vb": vb,
-            "accepted": False,
-            "reason": reason,
-            "gates_failed": [violation],
-            "d_cost": None,
-            "d_med": None,
-            "judges_ok": None,
-        }, ensure_ascii=False) + "\n")
+        f.write(
+            json.dumps(
+                {
+                    "id": pid,
+                    "va": va,
+                    "vb": vb,
+                    "accepted": False,
+                    "reason": reason,
+                    "gates_failed": [violation],
+                    "d_cost": None,
+                    "d_med": None,
+                    "judges_ok": None,
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
 
     print(f"\n=> DISCARD: {reason} — {va} intacto")
     return 1
@@ -727,8 +769,14 @@ def promote(sandbox: Path, to_version: str) -> None:
 # ----------------------------------------------------------------------- cli
 
 
-def cycle(proposal_path: Path, repeat: int, suite: str, force: bool,
-          no_credit: bool = False, require_judges: bool = False) -> int:
+def cycle(
+    proposal_path: Path,
+    repeat: int,
+    suite: str,
+    force: bool,
+    no_credit: bool = False,
+    require_judges: bool = False,
+) -> int:
     meta = parse_proposal(proposal_path)
     pid, va, vb = meta["id"], meta["from_version"], meta["to_version"]
 
@@ -753,8 +801,12 @@ def cycle(proposal_path: Path, repeat: int, suite: str, force: bool,
     print(f"   sandbox: {sandbox.relative_to(ROOT)}  [{diff_summary}]")
 
     graph.record_proposal(
-        pid=pid, from_version=va, to_version_intended=vb,
-        hypothesis=meta["hypothesis"], diff_summary=diff_summary, path=str(proposal_path),
+        pid=pid,
+        from_version=va,
+        to_version_intended=vb,
+        hypothesis=meta["hypothesis"],
+        diff_summary=diff_summary,
+        path=str(proposal_path),
     )
 
     before = len(tsv_rows())
@@ -792,16 +844,24 @@ def cycle(proposal_path: Path, repeat: int, suite: str, force: bool,
             print("   sealed: suite vazia — merge NÃO creditado (sem held-out)")
         else:
             credited = credit_ok(rep_sealed)
-            print(f"   sealed: {'CONFIRMA' if credited else 'REPROVA'} "
-                  f"(success {rep_sealed['b']['rate']:.0%}, "
-                  f"trunc {rep_sealed['b']['trunc_rate']:.0%})")
+            print(
+                f"   sealed: {'CONFIRMA' if credited else 'REPROVA'} "
+                f"(success {rep_sealed['b']['rate']:.0%}, "
+                f"trunc {rep_sealed['b']['trunc_rate']:.0%})"
+            )
 
     judge_result = judge_ok(va, vb)
     if judge_result is None:
         print("   juízes: sem dados (gate manual, FASE 1)")
     else:
-        print(f"   juízes: {'aprova' if judge_result else 'reprova'}"
-              + (" — bloqueando merge (--require-judges)" if require_judges and not judge_result else ""))
+        print(
+            f"   juízes: {'aprova' if judge_result else 'reprova'}"
+            + (
+                " — bloqueando merge (--require-judges)"
+                if require_judges and not judge_result
+                else ""
+            )
+        )
 
     outcome = "merge" if (rep["merge"] and credited is not False) else "discard"
     if require_judges and judge_result is False:
@@ -811,30 +871,53 @@ def cycle(proposal_path: Path, repeat: int, suite: str, force: bool,
         proposal_id=pid,
         outcome=outcome,
         scores_summary=json.dumps(
-            {"fixed": {"a": rep["a"], "b": rep["b"], "d_med": rep["d_med"],
-                       "d_cost": rep["d_cost"]},
-             "sealed": ({"a": rep_sealed["a"], "b": rep_sealed["b"]} if rep_sealed else None),
-             "credited": credited,
-             "judges_ok": judge_result},
+            {
+                "fixed": {
+                    "a": rep["a"],
+                    "b": rep["b"],
+                    "d_med": rep["d_med"],
+                    "d_cost": rep["d_cost"],
+                },
+                "sealed": ({"a": rep_sealed["a"], "b": rep_sealed["b"]} if rep_sealed else None),
+                "credited": credited,
+                "judges_ok": judge_result,
+            },
             ensure_ascii=False,
         ),
         reason=(
-            "; ".join(rep["failed"]) if rep["failed"]
-            else ("juízes reprovaram" if require_judges and judge_result is False
-                  else "sealed reprovou o piso" if credited is False
-                  else "todos os gates passaram" + ("" if credited else " (sem crédito sealed)"))
+            "; ".join(rep["failed"])
+            if rep["failed"]
+            else (
+                "juízes reprovaram"
+                if require_judges and judge_result is False
+                else "sealed reprovou o piso"
+                if credited is False
+                else "todos os gates passaram" + ("" if credited else " (sem crédito sealed)")
+            )
         ),
         gates_json=json.dumps(
-            {"fixed": rep["gates"],
-             "sealed": (rep_sealed["gates"] if rep_sealed else None),
-             "credited": credited,
-             "judges_ok": judge_result},
+            {
+                "fixed": rep["gates"],
+                "sealed": (rep_sealed["gates"] if rep_sealed else None),
+                "credited": credited,
+                "judges_ok": judge_result,
+            },
             ensure_ascii=False,
         ),
     )
 
-    doc = write_decision(meta, rep, outcome, gid, diff_summary, n_new, rep_sealed, credited,
-                         judge_result, require_judges)
+    doc = write_decision(
+        meta,
+        rep,
+        outcome,
+        gid,
+        diff_summary,
+        n_new,
+        rep_sealed,
+        credited,
+        judge_result,
+        require_judges,
+    )
 
     if outcome == "merge":
         promote(sandbox, vb)
@@ -843,8 +926,10 @@ def cycle(proposal_path: Path, repeat: int, suite: str, force: bool,
     elif rep["merge"] and credited is False:
         print(f"\n=> DISCARD: fixed aprovou mas sealed reprovou o piso — {va} intacto")
     elif rep["merge"] and require_judges and judge_result is False:
-        print(f"\n=> DISCARD: fixed (e sealed, se rodou) aprovaram mas os juízes reprovaram "
-              f"(--require-judges) — {va} intacto")
+        print(
+            f"\n=> DISCARD: fixed (e sealed, se rodou) aprovaram mas os juízes reprovaram "
+            f"(--require-judges) — {va} intacto"
+        )
     elif rep["merge"]:
         print(f"\n=> DISCARD: fixed aprovou mas sealed reprovou o piso — {va} intacto")
     else:
@@ -859,22 +944,29 @@ def main() -> int:
     ap.add_argument("--repeat", type=int, default=3, help="runs por task (default 3)")
     ap.add_argument("--suite", default="fixed")
     ap.add_argument("--force", action="store_true", help="ignora mismatch de from_version")
-    ap.add_argument("--no-credit", action="store_true",
-                    help="pula a confirmação em sealed (merge fica SEM crédito de generalização)")
-    ap.add_argument("--require-judges", action="store_true",
-                    help="bloqueia a promoção se judge_ok(va, vb) reprovar (default: FASE 1, "
-                         "gate manual — o sinal de juízes só entra na decisão como informativo)")
+    ap.add_argument(
+        "--no-credit",
+        action="store_true",
+        help="pula a confirmação em sealed (merge fica SEM crédito de generalização)",
+    )
+    ap.add_argument(
+        "--require-judges",
+        action="store_true",
+        help="bloqueia a promoção se judge_ok(va, vb) reprovar (default: FASE 1, "
+        "gate manual — o sinal de juízes só entra na decisão como informativo)",
+    )
     a = ap.parse_args()
 
     DECISIONS.mkdir(parents=True, exist_ok=True)
     SANDBOXES.mkdir(parents=True, exist_ok=True)
     try:
-        return cycle(Path(a.proposal).resolve(), a.repeat, a.suite, a.force, a.no_credit,
-                     a.require_judges)
+        return cycle(
+            Path(a.proposal).resolve(), a.repeat, a.suite, a.force, a.no_credit, a.require_judges
+        )
     except InfraError as e:
         print(f"ERRO DE INFRA: {e}", file=sys.stderr)
         return 2
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         print(f"ERRO DE INFRA inesperado: {type(e).__name__}: {e}", file=sys.stderr)
         return 2
 

@@ -23,25 +23,29 @@ def load_roles(
     *,
     backend: Any = None,
     allowed: Any = (),
+    model: Any = None,
 ) -> list[dict]:
     """Specs de subagent no formato que `create_deep_agent(subagents=...)` aceita.
 
     `backend` é o filesystem do run: sem ele não há como restringir as tools do
     papel (a restrição é um `FilesystemMiddleware` próprio, mesmo mecanismo do
     agente principal), então a allowlist fica só no prompt do papel. `allowed` é
-    a allowlist real do run — vazia significa "sem restrição no principal"."""
+    a allowlist real do run — vazia significa "sem restrição no principal".
+    `model` é o modelo do run, necessário só para papel com `delegates_to`: o
+    subagent aninhado é compilado na hora (ver `_delegacao`)."""
     try:
         path = Path(config_path or DEFAULT_CONFIG)
         if not path.is_file():
             return []
 
         data = tomllib.loads(path.read_text(encoding="utf-8"))
+        declarado = data.get("agents") or {}
         roles = []
-        for name, cfg in (data.get("agents") or {}).items():
+        for name, cfg in declarado.items():
             spec = _spec(name, cfg, backend, list(allowed or ()))
             if spec:
                 roles.append(spec)
-        return roles
+        return _liga_delegacao(roles, declarado, backend, model)
     except Exception as exc:  # broad de propósito: papel é opcional, nunca derruba o run
         print(f"agent_roles: falha ao carregar papéis: {exc}", file=sys.stderr)
         return []
@@ -111,6 +115,74 @@ def _spec(name: str, cfg: Any, backend: Any, allowed: list[str]) -> dict | None:
     return spec
 
 
+def _liga_delegacao(roles: list[dict], declarado: dict, backend: Any, model: Any) -> list[dict]:
+    """Equipa com `task` o papel que declarou `delegates_to` — e só ele.
+
+    GARANTIA ANTI-RECURSÃO: a lista de alvos exclui o próprio papel e qualquer
+    outro delegador, então o conductor alcança planner/reviewer e NENHUM papel
+    alcança o conductor. Não depende de prompt: subagent declarativo da lib não
+    ganha `task` nenhuma (o stack default dele é filesystem + summarization +
+    patch_tool_calls, ver a montagem de `subagent_middleware` em
+    `deepagents/graph.py`), logo a única `task` que existe dentro de um papel é a
+    que nós montamos aqui, com a lista já filtrada.
+
+    Papel que pediu delegação e não consegue (sem `model` do run, sem alvo vivo,
+    lib torta) SAI da lista: conductor sem `task` não faz o que a description
+    promete e o modelo principal delegaria a um papel manco."""
+    delegadores = {
+        name for name, cfg in declarado.items() if isinstance(cfg, dict) and cfg.get("delegates_to")
+    }
+    if not delegadores:
+        return roles
+
+    por_nome = {r["name"]: r for r in roles}
+    vivos = []
+    for spec in roles:
+        name = spec["name"]
+        if name not in delegadores:
+            vivos.append(spec)
+            continue
+        alvos = [
+            por_nome[alvo]
+            for alvo in declarado[name]["delegates_to"]
+            if isinstance(alvo, str) and alvo in por_nome and alvo not in delegadores
+        ]
+        middleware = _task_middleware(alvos, backend, model)
+        if not middleware:
+            print(
+                f"agent_roles: papel {name!r} não conseguiu delegar, ignorado",
+                file=sys.stderr,
+            )
+            continue
+        spec["middleware"] = list(spec.get("middleware") or []) + middleware
+        vivos.append(spec)
+    return vivos
+
+
+def _task_middleware(alvos: list[dict], backend: Any, model: Any) -> list[Any]:
+    """`SubAgentMiddleware` com a lista FECHADA de alvos, ou [] se não dá."""
+    if not alvos:
+        return []
+    try:
+        from deepagents.middleware.subagents import SubAgentMiddleware
+
+        # A lib compila cada spec já na construção do middleware e
+        # `create_sub_agent` exige `model` e `tools`. As tools de arquivo do alvo
+        # vêm do `FilesystemMiddleware` dele (`tools=` só aceita objeto de tool,
+        # não nome), então `[]` aqui é a lista aditiva vazia — não "sem tool".
+        aninhados = []
+        for alvo in alvos:
+            spec = {**alvo, "tools": []}
+            spec.setdefault("model", model)
+            if not spec["model"]:
+                return []
+            aninhados.append(spec)
+        return [SubAgentMiddleware(backend=backend, subagents=aninhados)]
+    except Exception as exc:
+        print(f"agent_roles: sem delegação no papel: {exc}", file=sys.stderr)
+        return []
+
+
 def _model(declared: Any) -> str | None:
     """Modelo do papel, ou None quando o papel herda o do agente principal.
 
@@ -148,7 +220,7 @@ def _fs_middleware(backend: Any, tools: list[str]) -> list[Any]:
     try:
         from typing import get_args
 
-        from deepagents.middleware.filesystem import FsToolName, FilesystemMiddleware
+        from deepagents.middleware.filesystem import FilesystemMiddleware, FsToolName
 
         known = [t for t in tools if t in get_args(FsToolName)]
         if not known:

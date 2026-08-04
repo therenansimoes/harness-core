@@ -188,7 +188,9 @@ def start(
     if not argv:
         return {"status": "blocked", "command": command, "reason": "comando vazio"}
 
-    log = open(log_path, "w")
+    # Handle fica aberto de propósito: é o stdout/stderr do Popen e vive
+    # enquanto o processo viver, não cabe num `with`.
+    log = open(log_path, "w")  # noqa: SIM115
     try:
         proc = subprocess.Popen(
             argv,
@@ -304,7 +306,9 @@ def local_probe(ws: str | Path, port: int, path: str = "/", method: str = "GET")
     if method not in PROBE_METHODS:
         return f"local_probe recusado: método {method!r} não suportado"
 
-    entry = next((e for e in read_procs(workspace) if _as_int(e.get("port")) == _as_int(port)), None)
+    entry = next(
+        (e for e in read_procs(workspace) if _as_int(e.get("port")) == _as_int(port)), None
+    )
     if entry is None:
         return (
             f"local_probe recusado: porta {port} não está registrada neste workspace. "
@@ -319,11 +323,19 @@ def local_probe(ws: str | Path, port: int, path: str = "/", method: str = "GET")
     opener = urllib.request.build_opener(_SemRedirect)
     try:
         with opener.open(req, timeout=PROBE_TIMEOUT_S) as resp:
-            status, ctype, corpo = resp.status, resp.headers.get("Content-Type", ""), resp.read(MAX_PROBE_BYTES + 1)
+            status, ctype, corpo = (
+                resp.status,
+                resp.headers.get("Content-Type", ""),
+                resp.read(MAX_PROBE_BYTES + 1),
+            )
     except urllib.error.HTTPError as exc:
         # 3xx cai aqui (redirect não seguido) junto com 4xx/5xx: é resposta do
         # servidor, e o modelo precisa ler o status.
-        status, ctype, corpo = exc.code, exc.headers.get("Content-Type", ""), exc.read(MAX_PROBE_BYTES + 1)
+        status, ctype, corpo = (
+            exc.code,
+            exc.headers.get("Content-Type", ""),
+            exc.read(MAX_PROBE_BYTES + 1),
+        )
     except (urllib.error.URLError, OSError, ValueError) as exc:
         return f"local_probe falhou em {url}: {type(exc).__name__}: {exc}"
 

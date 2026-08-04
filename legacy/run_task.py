@@ -19,13 +19,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from agent import BACKEND, MODEL, run_agent  # noqa: E402
-import isolation  # noqa: E402
-import kpi  # noqa: E402
+import isolation
+import kpi
+from agent import BACKEND, MODEL, run_agent
 
 ROOT = Path(__file__).parent.resolve()
 # evolve.py roda o runner a partir de uma sandbox (agent.py patchado) mas grava
@@ -122,7 +122,9 @@ def run_once(task_dir: Path, suite: str, keep: bool, isolation_mode: str = "tmpd
             # copiá-lo faz verify.py achar um interpretador quebrado sem
             # pytest. Defesa em profundidade: nunca copiar isso pro workspace.
             shutil.copytree(
-                fixtures, ws, dirs_exist_ok=True,
+                fixtures,
+                ws,
+                dirs_exist_ok=True,
                 ignore=shutil.ignore_patterns(".venv", "venv"),
             )
 
@@ -141,7 +143,11 @@ def run_once(task_dir: Path, suite: str, keep: bool, isolation_mode: str = "tmpd
                 v = isolation.run_verify_in_container(ws, verify)
             else:
                 v = subprocess.run(
-                    [sys.executable, str(verify)], cwd=ws, capture_output=True, text=True, timeout=120
+                    [sys.executable, str(verify)],
+                    cwd=ws,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
                 )
             success = 1 if v.returncode == 0 else 0
             vnote = "" if success else f"verify:{(v.stdout + v.stderr).strip()[-160:]}"
@@ -162,7 +168,7 @@ def run_once(task_dir: Path, suite: str, keep: bool, isolation_mode: str = "tmpd
             notes = "; ".join(n for n in (res.notes, vnote, trace_token) if n)
         append_result(
             {
-                "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
                 "harness_version": harness_version(),
                 "backend": BACKEND,
                 "model": MODEL,
@@ -179,7 +185,9 @@ def run_once(task_dir: Path, suite: str, keep: bool, isolation_mode: str = "tmpd
         )
         mark = "PASS" if success else "FAIL"
         kpi_note = f"  kpis={kpi.to_json(kpis)}" if kpis else ""
-        print(f"[{mark}] {task_id}  {res.seconds:.1f}s  {res.tokens}tok  ${res.cost_usd:.4f}  {notes}{kpi_note}")
+        print(
+            f"[{mark}] {task_id}  {res.seconds:.1f}s  {res.tokens}tok  ${res.cost_usd:.4f}  {notes}{kpi_note}"
+        )
         if keep:
             print(f"       workspace: {ws}")
         return bool(success)
@@ -201,7 +209,9 @@ def main() -> int:
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--keep", action="store_true", help="não apagar o workspace")
     ap.add_argument(
-        "--isolation", default="tmpdir", choices=["tmpdir", "docker"],
+        "--isolation",
+        default="tmpdir",
+        choices=["tmpdir", "docker"],
         help="tmpdir (default, atual) | docker: verify roda em container --rm --network none",
     )
     a = ap.parse_args()

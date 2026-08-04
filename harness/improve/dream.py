@@ -31,10 +31,11 @@ a skill teria apagado memória em troca de nada.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
 from harness.genome.genome import Genome
 from harness.improve import mutate, research, root_dir
@@ -202,12 +203,12 @@ def _clock(now: datetime | str | None) -> datetime:
     """Agora, aware em UTC. `None` é o único caminho que consulta o relógio do
     processo — todo o resto da ação recebe o instante já decidido."""
     if isinstance(now, datetime):
-        return now if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
+        return now if now.tzinfo is not None else now.replace(tzinfo=UTC)
     if isinstance(now, str):
         parsed = episodic.parse_ts(now)
         if parsed is not None:
             return parsed
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def propose_dream(
@@ -457,10 +458,10 @@ def _stamp(at: datetime) -> str:
     """Nome de arquivo ordenável e sem `:` — o `now_iso` tem offset com dois
     pontos, que é legal em POSIX e péssimo em qualquer ferramenta que faça
     split por `:`."""
-    return at.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return at.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
-def action() -> "Action":
+def action() -> Action:
     """A ação registrável — consultada por `target.actions()` quando o wiring
     do registry chegar."""
     from harness.improve.target import Action

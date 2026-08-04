@@ -25,6 +25,7 @@ JSMN_STRICT em "unmatched brackets"), fora do escopo deste juiz.
 
 exit 0 = pass (teste selado verde: PASSED sem FAILED).
 """
+
 from __future__ import annotations
 
 import hashlib

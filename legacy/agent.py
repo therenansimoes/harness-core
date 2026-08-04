@@ -15,12 +15,12 @@ from __future__ import annotations
 
 import json
 import os
+import profile as profile_mod
 import shlex
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import profile as profile_mod
 import safety
 
 ROOT = Path(__file__).parent.resolve()
@@ -148,7 +148,7 @@ def _write_trace(lines: list[str], run_id: str) -> tuple[str, int]:
         head, tail = truncated[:100], truncated[-tail_n:]
         dropped = len(truncated) - 100 - tail_n
         marker = json.dumps({"type": "harness_trunc", "dropped": dropped})
-        truncated = head + [marker] + tail
+        truncated = [*head, marker, *tail]
 
     content = ("\n".join(truncated) + "\n") if truncated else ""
     encoded = content.encode("utf-8")
@@ -310,9 +310,7 @@ def _run_api(prompt: str, workspace: Path, plan=None) -> AgentResult:
                 payload = f"(comando bloqueado pela allowlist: {e})"
             except ValueError as e:
                 payload = f"(comando inválido: {e})"
-            results.append(
-                {"type": "tool_result", "tool_use_id": block.id, "content": payload}
-            )
+            results.append({"type": "tool_result", "tool_use_id": block.id, "content": payload})
         messages.append({"role": "user", "content": results})
 
     return AgentResult(False, time.time() - t0, tokens, 0.0, turns, notes="max_turns")

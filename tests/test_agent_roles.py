@@ -24,8 +24,18 @@ def _write(tmp_path, text, name="agents.toml"):
     return p
 
 
+def _fake_model():
+    """Modelo de mentira só para a lib compilar o subagent aninhado."""
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+
+    return GenericFakeChatModel(messages=iter([]))
+
+
 def test_toml_real_do_repo_tem_os_dois_papeis():
-    """O arquivo versionado tem que carregar no formato que a lib espera."""
+    """O arquivo versionado tem que carregar no formato que a lib espera.
+
+    Sem `model` o conductor não consegue montar a `task` dele e sai — o que
+    sobra é exatamente o que existia antes dele."""
     roles = load_roles("config/agents.toml")
     assert [r["name"] for r in roles] == ["planner", "reviewer"]
     for r in roles:
@@ -118,6 +128,70 @@ prompt = "prompt omisso"
 def test_toml_real_do_repo_herda_o_modelo_do_run():
     """Um modelo por vez na máquina: papel versionado não aponta outro peso."""
     assert all("model" not in r for r in load_roles("config/agents.toml"))
+
+
+def test_conductor_entra_na_spec_do_principal(tmp_path):
+    """Com backend e modelo do run, o orquestrador existe para o agente principal."""
+    pytest.importorskip("deepagents")
+    from deepagents.backends.local_shell import LocalShellBackend
+
+    fs = LocalShellBackend(root_dir=str(tmp_path), virtual_mode=True)
+    roles = load_roles("config/agents.toml", backend=fs, model=_fake_model())
+    assert "conductor" in [r["name"] for r in roles]
+    assert "conductor" in roles_manual(roles)
+
+
+def test_conductor_nao_pode_chamar_conductor(tmp_path):
+    """ANTI-RECURSÃO ESTRUTURAL: a lista de subagents que o conductor recebe é
+    planner/reviewer e nada mais — nem ele mesmo. E papel que não delega não
+    ganha `SubAgentMiddleware`, então não há caminho de volta por outro papel."""
+    pytest.importorskip("deepagents")
+    from deepagents.backends.local_shell import LocalShellBackend
+    from deepagents.middleware.subagents import SubAgentMiddleware
+
+    fs = LocalShellBackend(root_dir=str(tmp_path), virtual_mode=True)
+    roles = {
+        r["name"]: r for r in load_roles("config/agents.toml", backend=fs, model=_fake_model())
+    }
+
+    (task_mw,) = [
+        mw for mw in roles["conductor"]["middleware"] if isinstance(mw, SubAgentMiddleware)
+    ]
+    assert task_mw.subagent_names == frozenset({"planner", "reviewer"})
+    assert "conductor" not in task_mw.subagent_names
+
+    for name in ("planner", "reviewer"):
+        assert not [
+            mw for mw in roles[name].get("middleware", []) if isinstance(mw, SubAgentMiddleware)
+        ]
+
+
+def test_conductor_enabled_false_sai(tmp_path):
+    roles = load_roles(
+        _write(
+            tmp_path,
+            '[agents.planner]\ndescription = "p"\nprompt = "p"\ntools = ["ls"]\n'
+            "[agents.conductor]\nenabled = false\n"
+            'description = "c"\nprompt = "c"\ntools = ["ls"]\n'
+            'delegates_to = ["planner"]\n',
+        ),
+        model=_fake_model(),
+    )
+    assert [r["name"] for r in roles] == ["planner"]
+
+
+def test_delegates_to_sem_modelo_derruba_o_delegador(tmp_path):
+    """Sem modelo não há subagent aninhado: papel que prometeu delegar e não
+    delega sai, e os alvos dele continuam de pé."""
+    roles = load_roles(
+        _write(
+            tmp_path,
+            '[agents.planner]\ndescription = "p"\nprompt = "p"\ntools = ["ls"]\n'
+            '[agents.chefe]\ndescription = "c"\nprompt = "c"\ntools = ["ls"]\n'
+            'delegates_to = ["planner"]\n',
+        )
+    )
+    assert [r["name"] for r in roles] == ["planner"]
 
 
 def test_manual_uma_linha_por_papel():

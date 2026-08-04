@@ -6,6 +6,7 @@ Sem chamada de API/subprocess `claude` — persona roda em PERSONA_MOCK=1.
 
     python3 -m pytest tests/test_judges.py -q
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -47,13 +48,21 @@ TASK_DIR_HW = REPO / "benchmarks" / "judge" / "task_j_hw"
 def _read_registry_rows() -> list[dict]:
     lines = REGISTRY.read_text().splitlines()
     header = lines[0].split("\t")
-    return [dict(zip(header, line.split("\t"))) for line in lines[1:] if line.strip()]
+    return [dict(zip(header, line.split("\t"), strict=False)) for line in lines[1:] if line.strip()]
 
 
 def test_registry_parseavel():
     rows = _read_registry_rows()
     assert rows, "registry.tsv vazio"
-    cols = {"judge_id", "upstream_url", "base_sha", "fix_sha", "sealed_sha256", "rubric_version", "license"}
+    cols = {
+        "judge_id",
+        "upstream_url",
+        "base_sha",
+        "fix_sha",
+        "sealed_sha256",
+        "rubric_version",
+        "license",
+    }
     for row in rows:
         assert cols <= set(row), f"linha do registry sem todas as colunas: {row}"
         assert len(row["base_sha"]) == 40, "base_sha deveria ser um sha1 de 40 chars"
@@ -122,7 +131,9 @@ def test_verify_detecta_sealed_adulterado():
             "def test_fake():\n    assert True\n"
         )
         (fake_repo / "benchmarks" / "judge" / "task_j_b2b").mkdir(parents=True)
-        shutil.copy(TASK_DIR / "verify.py", fake_repo / "benchmarks" / "judge" / "task_j_b2b" / "verify.py")
+        shutil.copy(
+            TASK_DIR / "verify.py", fake_repo / "benchmarks" / "judge" / "task_j_b2b" / "verify.py"
+        )
 
         proc = subprocess.run(
             [sys.executable, str(fake_repo / "benchmarks" / "judge" / "task_j_b2b" / "verify.py")],
@@ -151,7 +162,10 @@ def test_verify_j_web_detecta_sealed_adulterado():
             "test('fake', () => {})\n"
         )
         (fake_repo / "benchmarks" / "judge" / "task_j_web").mkdir(parents=True)
-        shutil.copy(TASK_DIR_WEB / "verify.py", fake_repo / "benchmarks" / "judge" / "task_j_web" / "verify.py")
+        shutil.copy(
+            TASK_DIR_WEB / "verify.py",
+            fake_repo / "benchmarks" / "judge" / "task_j_web" / "verify.py",
+        )
 
         proc = subprocess.run(
             [sys.executable, str(fake_repo / "benchmarks" / "judge" / "task_j_web" / "verify.py")],
@@ -180,7 +194,10 @@ def test_verify_j_hw_detecta_sealed_adulterado():
             "int main(void) { return 0; }\n"
         )
         (fake_repo / "benchmarks" / "judge" / "task_j_hw").mkdir(parents=True)
-        shutil.copy(TASK_DIR_HW / "verify.py", fake_repo / "benchmarks" / "judge" / "task_j_hw" / "verify.py")
+        shutil.copy(
+            TASK_DIR_HW / "verify.py",
+            fake_repo / "benchmarks" / "judge" / "task_j_hw" / "verify.py",
+        )
 
         proc = subprocess.run(
             [sys.executable, str(fake_repo / "benchmarks" / "judge" / "task_j_hw" / "verify.py")],
@@ -207,7 +224,9 @@ def test_verify_acusa_arquivo_selado_ausente():
             "judge_id\tupstream_url\tbase_sha\tfix_sha\tsealed_sha256\trubric_version\tlicense\n"
         )
         (fake_repo / "benchmarks" / "judge" / "task_j_b2b").mkdir(parents=True)
-        shutil.copy(TASK_DIR / "verify.py", fake_repo / "benchmarks" / "judge" / "task_j_b2b" / "verify.py")
+        shutil.copy(
+            TASK_DIR / "verify.py", fake_repo / "benchmarks" / "judge" / "task_j_b2b" / "verify.py"
+        )
 
         proc = subprocess.run(
             [sys.executable, str(fake_repo / "benchmarks" / "judge" / "task_j_b2b" / "verify.py")],
@@ -224,7 +243,7 @@ def test_verify_acusa_arquivo_selado_ausente():
 
 def test_parse_pytest_counts():
     sys.path.insert(0, str(TASK_DIR))
-    import verify as task_verify  # noqa: E402
+    import verify as task_verify
 
     out = "........F..\n=== 1 failed, 10 passed, 2 errors in 0.5s ==="
     counts = task_verify.parse_pytest_counts(out)
@@ -290,8 +309,8 @@ def test_extract_ficha_json_com_json_citado_na_evidencia():
     deve extrair a ficha final mesmo quando houver múltiplos '{' no texto."""
     result_text = (
         "Evidência P1: germany.py:1 — usa reconcile do domínio.\n"
-        "A resposta anterior foi: {\"status\": 200, \"body\": "
-        "{\"checksum\": \"ABC123\", \"expected\": \"ABC124\"}} — isso está errado.\n"
+        'A resposta anterior foi: {"status": 200, "body": '
+        '{"checksum": "ABC123", "expected": "ABC124"}} — isso está errado.\n'
         "Evidência P2: trace.jsonl:1 — bate com o DONE.\n"
         '{"P1": {"score": 12, "citation": "germany.py:1", "quote": "x"}, '
         '"P2": {"score": 8, "citation": "trace.jsonl:1", "quote": "y"}}'
@@ -304,10 +323,7 @@ def test_extract_ficha_json_com_json_citado_na_evidencia():
 def test_extract_ficha_json_sem_json_valido_levanta_erro():
     """Quando nenhum '{' no texto é decodificável como ficha válida,
     deve levantar JSONDecodeError."""
-    result_text = (
-        "Evidência P1: germany.py:1 — usa reconcile do domínio.\n"
-        "Nenhum JSON válido aqui."
-    )
+    result_text = "Evidência P1: germany.py:1 — usa reconcile do domínio.\nNenhum JSON válido aqui."
     with pytest.raises(json.JSONDecodeError):
         persona.extract_ficha_json(result_text)
 
@@ -328,7 +344,9 @@ def test_call_persona_com_exit_nao_zero_mas_json_valido_nao_descarta(monkeypatch
         "result": '{"P1": {"score": 10, "citation": "a.py:1", "quote": "q1"}, '
         '"P2": {"score": 5, "citation": "trace.jsonl:1", "quote": "q2"}}'
     }
-    _patch_subprocess_run(monkeypatch, returncode=1, stdout=json.dumps(stream_result), stderr="algum aviso")
+    _patch_subprocess_run(
+        monkeypatch, returncode=1, stdout=json.dumps(stream_result), stderr="algum aviso"
+    )
 
     ficha = persona.call_persona({}, "diff", "trace", "test output")
     assert ficha["P1"]["score"] == 10
@@ -356,7 +374,7 @@ def test_criterio_sem_citacao_e_descartado():
         "P1": {"score": 12, "citation": "", "quote": ""},
         "P2": {"score": 8, "citation": "trace.jsonl:1", "quote": "DONE: ok"},
     }
-    scored, discarded, veto, reason = run_judge.validate_and_score_persona(
+    scored, discarded, veto, _reason = run_judge.validate_and_score_persona(
         ficha, diff="algo", trace="trace.jsonl:1 DONE: ok"
     )
     assert discarded == ["P1"]
@@ -410,10 +428,14 @@ def test_citacao_com_quebra_de_linha_escapada_nao_veta():
 
 def test_citacao_valida_nao_veta():
     ficha = {
-        "P1": {"score": 15, "citation": "germany.py:1", "quote": "return super().reconcile(checksum)"},
+        "P1": {
+            "score": 15,
+            "citation": "germany.py:1",
+            "quote": "return super().reconcile(checksum)",
+        },
         "P2": {"score": 10, "citation": "trace.jsonl:1", "quote": "DONE: ok"},
     }
-    scored, discarded, veto, reason = run_judge.validate_and_score_persona(
+    scored, discarded, veto, _reason = run_judge.validate_and_score_persona(
         ficha,
         diff="+ return super().reconcile(checksum)",
         trace="trace.jsonl:1 DONE: ok",
@@ -437,8 +459,18 @@ def test_dry_run_produz_verdict_json_valido(tmp_path, monkeypatch):
     loaded = json.loads(out.read_text())
 
     expected_top = {
-        "judge_id", "harness_version", "rubric_version", "base_sha", "sealed_sha256",
-        "deterministic", "persona", "discarded", "veto_reason", "judge_score", "cost_usd", "ts",
+        "judge_id",
+        "harness_version",
+        "rubric_version",
+        "base_sha",
+        "sealed_sha256",
+        "deterministic",
+        "persona",
+        "discarded",
+        "veto_reason",
+        "judge_score",
+        "cost_usd",
+        "ts",
     }
     assert expected_top <= set(loaded)
     assert loaded["judge_id"] == "j_b2b"
@@ -456,8 +488,14 @@ def test_veto_de_candidato_zera_judge_score():
     deterministic = run_judge.synthetic_deterministic()
     deterministic["veto"] = True
     verdict = run_judge.build_verdict(
-        "j_b2b", reg, deterministic, persona_scored={}, discarded=[], persona_vetoed=False,
-        veto_reason="", cost_usd=0.1,
+        "j_b2b",
+        reg,
+        deterministic,
+        persona_scored={},
+        discarded=[],
+        persona_vetoed=False,
+        veto_reason="",
+        cost_usd=0.1,
     )
     assert verdict["judge_score"] == 0
     assert verdict["veto_reason"] == "D2: tamper/segredo/escrita fora do workspace"
@@ -470,12 +508,25 @@ def test_persona_vetada_mantem_score_deterministico():
     D4=2, sem P1/P2 -> 52/60 * 100 = 87."""
     reg = run_judge.read_registry_row("j_b2b")
     deterministic = {
-        "D1": 25, "D2": 15, "D3": 10, "D4": 2, "veto": False,
-        "evidence": {"target_test": "passed", "full_suite": "415 passed, 0 regressions / 415 total",
-                     "cost_usd": 0.5237, "turns": 1},
+        "D1": 25,
+        "D2": 15,
+        "D3": 10,
+        "D4": 2,
+        "veto": False,
+        "evidence": {
+            "target_test": "passed",
+            "full_suite": "415 passed, 0 regressions / 415 total",
+            "cost_usd": 0.5237,
+            "turns": 1,
+        },
     }
     verdict = run_judge.build_verdict(
-        "j_b2b", reg, deterministic, persona_scored={}, discarded=["P1", "P2"], persona_vetoed=True,
+        "j_b2b",
+        reg,
+        deterministic,
+        persona_scored={},
+        discarded=["P1", "P2"],
+        persona_vetoed=True,
         veto_reason="persona vetada: citação inválida em P2: 'trace.jsonl:160' não sustentada pelo material",
         cost_usd=0.5237,
     )
@@ -504,9 +555,14 @@ def test_criterio_descartado_recalcula_denominador():
     deterministic = run_judge.synthetic_deterministic()  # D1..D4 = 25+15+10+10 = 60/60 (cheio)
     # só P2 pontuado, cheio (10/10); P1 descartado -> não entra em nem numerador nem denominador
     verdict = run_judge.build_verdict(
-        "j_b2b", reg, deterministic,
+        "j_b2b",
+        reg,
+        deterministic,
         persona_scored={"P2": {"score": 10, "citation": "trace.jsonl:1", "quote": "x"}},
-        discarded=["P1"], persona_vetoed=False, veto_reason="", cost_usd=0.1,
+        discarded=["P1"],
+        persona_vetoed=False,
+        veto_reason="",
+        cost_usd=0.1,
     )
     # numer = 60 + 10 = 70; denom = 60 + 10 (peso de P2) = 70 -> 100
     assert verdict["judge_score"] == 100
@@ -706,8 +762,10 @@ def test_summary_registra_juiz_unstable_em_vez_de_score():
 
 def test_summary_separa_discordancia_de_variancia_intra():
     """As duas causas de dúvida viviam fundidas num `inconclusive` só."""
-    intra = {j: {"repeats": 3, "scores_runs": [], "spread_intra": 2, "unstable": False}
-             for j in ("j_b2b", "j_web", "j_hw")}
+    intra = {
+        j: {"repeats": 3, "scores_runs": [], "spread_intra": 2, "unstable": False}
+        for j in ("j_b2b", "j_web", "j_hw")
+    }
     summary = run_judge.build_summary({"j_b2b": 95, "j_web": 60, "j_hw": 90}, intra)
     assert summary["inconclusive"] is True
     assert summary["inconclusive_reason"] == ["disagreement"]
@@ -724,11 +782,15 @@ def test_all_judges_com_repeats_grava_intra_no_summary(tmp_path, monkeypatch):
     assert summary["unstable_judges"] == []
     for judge_id in ("j_b2b", "j_web", "j_hw"):
         assert summary["intra"][judge_id]["scores_runs"] == DRY_SCORES[:3]
-        loaded = json.loads((verdicts_dir / judge_id / f"{run_judge.harness_version()}.json").read_text())
+        loaded = json.loads(
+            (verdicts_dir / judge_id / f"{run_judge.harness_version()}.json").read_text()
+        )
         assert loaded["repeats"] == 3
         assert loaded["judge_score"] == summary["scores"][judge_id]
 
-    loaded_summary = json.loads((verdicts_dir / f"summary_{run_judge.harness_version()}.json").read_text())
+    loaded_summary = json.loads(
+        (verdicts_dir / f"summary_{run_judge.harness_version()}.json").read_text()
+    )
     assert loaded_summary["intra"] == summary["intra"]
 
 
@@ -749,7 +811,9 @@ def test_cli_repeats_chega_no_verdict(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["run_judge.py", "--dry-run", "--repeats", "3"])
 
     assert run_judge.main() == 0
-    loaded = json.loads((verdicts_dir / "j_b2b" / f"{run_judge.harness_version()}.json").read_text())
+    loaded = json.loads(
+        (verdicts_dir / "j_b2b" / f"{run_judge.harness_version()}.json").read_text()
+    )
     assert loaded["repeats"] == 3
     assert loaded["scores_runs"] == DRY_SCORES[:3]
 
@@ -761,7 +825,9 @@ def test_cli_rejeita_repeats_invalido(monkeypatch):
 
 
 def test_cli_repeats_nao_existe_na_trilha_build(monkeypatch):
-    monkeypatch.setattr(sys, "argv", ["run_judge.py", "--dry-run", "--track", "build", "--repeats", "3"])
+    monkeypatch.setattr(
+        sys, "argv", ["run_judge.py", "--dry-run", "--track", "build", "--repeats", "3"]
+    )
     with pytest.raises(SystemExit, match="só existe na trilha result"):
         run_judge.main()
 
@@ -819,7 +885,7 @@ def test_write_verdict_history_nao_duplica_no_ingest(tmp_path, monkeypatch):
     verdict = run_judge.run_dry()
     run_judge.write_verdict(verdict)
 
-    import graph  # noqa: E402 (import local — evita acoplar módulo no topo do arquivo)
+    import graph
 
     db_path = tmp_path / "g.db"
     n = graph.ingest_verdicts(verdicts_dir=verdicts_dir, db_path=str(db_path))

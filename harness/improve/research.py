@@ -20,9 +20,9 @@ from __future__ import annotations
 import os
 import re
 import tomllib
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
 from harness.backends.registry import get_backend
 from harness.genome.genome import Genome
@@ -189,14 +189,7 @@ def render_skill(proposal: ResearchProposal, body: str) -> str:
     name = mutate._render(proposal.slug)
     kinds = mutate._render(proposal.kind)
     desc = mutate._render(f"orientação destilada: {proposal.topic}".splitlines()[0])
-    return (
-        "---\n"
-        f"name = {name}\n"
-        f"kinds = [{kinds}]\n"
-        f"description = {desc}\n"
-        "---\n\n"
-        f"{body.strip()}\n"
-    )
+    return f"---\nname = {name}\nkinds = [{kinds}]\ndescription = {desc}\n---\n\n{body.strip()}\n"
 
 
 def _distill(workspace: Path, files_changed: Sequence[str]) -> str:

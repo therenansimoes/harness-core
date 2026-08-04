@@ -48,10 +48,15 @@ PRECOS = """<!DOCTYPE html>
 
 def playwright_ok() -> bool:
     try:
-        r = subprocess.run(["npx", "playwright", "--version"], cwd=REPO,
-                           capture_output=True, text=True, timeout=120)
+        r = subprocess.run(
+            ["npx", "playwright", "--version"],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
         return r.returncode == 0
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
@@ -111,7 +116,9 @@ def test_ui_quebrada_vira_await_renan():
     assert r["ui_failed"], "mudança visual grande deveria quebrar o screenshot"
     assert r["delivery_success"] == 0, "UI quebrada não pode ser entrega bem-sucedida"
     assert r["needs_human_ui_review"], "falha ambígua de UI deveria pedir humano"
-    assert r["next_action"] == "await_renan", f"next_action deveria ser await_renan, veio {r['next_action']}"
+    assert r["next_action"] == "await_renan", (
+        f"next_action deveria ser await_renan, veio {r['next_action']}"
+    )
 
 
 def test_review_subjective_forca_humano():
@@ -130,7 +137,8 @@ def test_review_subjective_forca_humano():
 def test_manual_ui_check_forca_humano():
     p = fresh(entregue=True)
     (p / "acceptance" / "s001" / "manual_ui_marca.py").write_text(
-        "import sys\nsys.exit(0)\n", encoding="utf-8")
+        "import sys\nsys.exit(0)\n", encoding="utf-8"
+    )
     r = delivery.post_work(p, "s001", actor="teste")
     assert r["needs_human_ui_review"], "check manual_ui* deveria forçar revisão humana"
     assert r["next_action"] == "await_renan", f"veio {r['next_action']}"
@@ -142,11 +150,16 @@ def test_baseline_atualizada_volta_a_passar():
     idx = p / "site" / "index.html"
     idx.write_text(
         idx.read_text(encoding="utf-8").replace(
-            "<body>", '<body><div style="height:400px;background:#0f0">NOVO BLOCO</div>'),
+            "<body>", '<body><div style="height:400px;background:#0f0">NOVO BLOCO</div>'
+        ),
         encoding="utf-8",
     )
     antes = delivery.run_ui_suite(p)
-    assert antes["passed"] < antes["total"], "screenshot deveria falhar antes de atualizar a baseline"
+    assert antes["passed"] < antes["total"], (
+        "screenshot deveria falhar antes de atualizar a baseline"
+    )
     delivery.run_ui_suite(p, update_baseline=True)
     r2 = delivery.run_ui_suite(p)
-    assert r2["passed"] == r2["total"], f"após atualizar baseline deveria passar: {[t for t in r2['tests'] if not t['ok']]}"
+    assert r2["passed"] == r2["total"], (
+        f"após atualizar baseline deveria passar: {[t for t in r2['tests'] if not t['ok']]}"
+    )

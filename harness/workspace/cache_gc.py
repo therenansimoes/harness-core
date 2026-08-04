@@ -61,14 +61,16 @@ def gc(
     antes = sum(size for _, size, _ in entradas)
     if antes <= teto:
         return {
-            "before": antes, "after": antes, "removed": 0, "freed": 0,
-            "skipped_recent": 0, "max_bytes": teto,
+            "before": antes,
+            "after": antes,
+            "removed": 0,
+            "freed": 0,
+            "skipped_recent": 0,
+            "max_bytes": teto,
         }
 
     # Mais frio primeiro; o quente (<24h) nem entra na lista de candidatos.
-    frios = sorted(
-        (e for e in entradas if agora - e[2] >= KEEP_RECENT_S), key=lambda e: e[2]
-    )
+    frios = sorted((e for e in entradas if agora - e[2] >= KEEP_RECENT_S), key=lambda e: e[2])
     quentes = len(entradas) - len(frios)
     total, removidos, liberados = antes, 0, 0
     for path, size, _ in frios:
@@ -83,8 +85,12 @@ def gc(
         removidos += 1
     _prune_empty(root)
     return {
-        "before": antes, "after": total, "removed": removidos, "freed": liberados,
-        "skipped_recent": quentes, "max_bytes": teto,
+        "before": antes,
+        "after": total,
+        "removed": removidos,
+        "freed": liberados,
+        "skipped_recent": quentes,
+        "max_bytes": teto,
     }
 
 

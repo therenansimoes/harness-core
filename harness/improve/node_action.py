@@ -18,9 +18,9 @@ Ainda NÃO registrada em `target.actions()`: o wiring é o passo seguinte.
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 from harness.genome.genome import Genome
 from harness.graph import plugin_nodes
@@ -142,9 +142,7 @@ def apply_node(
     )
 
     keep = passed and ack and meta_verdict == meta.ALLOWED
-    verdict = codegen.judge_code_mutation(
-        mutation, run_exam=lambda: keep, root=root
-    )
+    verdict = codegen.judge_code_mutation(mutation, run_exam=lambda: keep, root=root)
     digest: str | None = None
     if verdict == codegen.KEEP:
         from harness.improve import root_dir

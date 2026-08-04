@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import contextlib
 import shutil
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 VERIFIER_NAMES: tuple[str, ...] = ("verify.py",)
 

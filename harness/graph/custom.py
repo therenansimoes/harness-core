@@ -93,7 +93,5 @@ def run_workflow(
         }
         # `next` não vazio = thread parou no meio: retoma sem reinjetar.
         pending = bool(graph.get_state(config).next)
-        payload = (
-            None if pending else _rg.initial_state(unit, thread_id, max_attempts)
-        )
+        payload = None if pending else _rg.initial_state(unit, thread_id, max_attempts)
         return graph.invoke(payload, config)

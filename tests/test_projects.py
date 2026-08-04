@@ -45,7 +45,8 @@ def config_dir(tmp_path, monkeypatch):
 def _git(repo: Path, *args: str) -> str:
     proc = subprocess.run(
         ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     assert proc.returncode == 0, proc.stderr
     return proc.stdout
@@ -93,9 +94,7 @@ def test_projeto_nao_registrado_falha_com_instrucao(tmp_path, config_dir):
         get_project("fantasma")
 
 
-def test_cli_init_registra_e_status_uma_linha_por_projeto(
-    tmp_path, config_dir, data_dir, capsys
-):
+def test_cli_init_registra_e_status_uma_linha_por_projeto(tmp_path, config_dir, data_dir, capsys):
     repo = _toy_repo(tmp_path)
     q = tmp_path / "fila"
     assert cli.main(["init", str(repo), "--name", "toy", "--queue-dir", str(q)]) == 0
@@ -118,8 +117,7 @@ def test_cli_init_recusa_diretorio_sem_git(tmp_path, config_dir, capsys):
 
 def test_verify_default_do_projeto(tmp_path, config_dir):
     repo = _toy_repo(tmp_path)
-    init_project(repo, "toy", verify_default="test -f app.txt",
-                 queue_dir=tmp_path / "fila")
+    init_project(repo, "toy", verify_default="test -f app.txt", queue_dir=tmp_path / "fila")
     unit = _unit(tmp_path, 'id = "u4"\nproject = "toy"\nprompt = "x"\n')
     spec = cli.load_unit(unit)
     assert spec.verify_cmd == "test -f app.txt"
@@ -136,11 +134,14 @@ def test_unidade_sem_projeto_ainda_exige_verify_cmd(tmp_path, config_dir):
 def test_accept_entrega_branch_e_repo_fica_limpo(tmp_path, config_dir, data_dir):
     repo = _toy_repo(tmp_path)
     init_project(repo, "toy", queue_dir=tmp_path / "fila")
-    unit = _unit(tmp_path, (
-        'id = "u1"\nkind = "code"\nproject = "toy"\n'
-        'prompt = "escreve a saída do mock"\n'
-        'verify_cmd = "test -f mock_output.txt && test -f app.txt"\n'
-    ))
+    unit = _unit(
+        tmp_path,
+        (
+            'id = "u1"\nkind = "code"\nproject = "toy"\n'
+            'prompt = "escreve a saída do mock"\n'
+            'verify_cmd = "test -f mock_output.txt && test -f app.txt"\n'
+        ),
+    )
     final = run_unit(unit, "mock", None, data_dir, thread_id="p-accept")
     assert final["decision"].action == "accept"
 
@@ -179,12 +180,11 @@ def test_integrate_exige_working_tree_limpa_e_branch_existente(tmp_path, config_
 def test_escalate_remove_worktree_e_branch(tmp_path, config_dir, data_dir):
     repo = _toy_repo(tmp_path)
     init_project(repo, "toy", queue_dir=tmp_path / "fila")
-    unit = _unit(tmp_path, (
-        'id = "u2"\nkind = "code"\nproject = "toy"\n'
-        'prompt = "x"\nverify_cmd = "false"\n'
-    ))
-    final = run_unit(unit, "mock", None, data_dir, thread_id="p-escalate",
-                     max_attempts=1)
+    unit = _unit(
+        tmp_path,
+        ('id = "u2"\nkind = "code"\nproject = "toy"\nprompt = "x"\nverify_cmd = "false"\n'),
+    )
+    final = run_unit(unit, "mock", None, data_dir, thread_id="p-escalate", max_attempts=1)
     assert final["decision"].action != "accept"
     assert _branches(repo) == set()
     assert _git(repo, "status", "--porcelain") == ""
@@ -194,10 +194,13 @@ def test_escalate_remove_worktree_e_branch(tmp_path, config_dir, data_dir):
 def test_build_cmd_roda_antes_do_verify(tmp_path, config_dir, data_dir):
     repo = _toy_repo(tmp_path)
     init_project(repo, "toy", build_cmd="touch built.txt", queue_dir=tmp_path / "fila")
-    unit = _unit(tmp_path, (
-        'id = "u3"\nkind = "code"\nproject = "toy"\n'
-        'prompt = "x"\nverify_cmd = "test -f built.txt"\n'
-    ))
+    unit = _unit(
+        tmp_path,
+        (
+            'id = "u3"\nkind = "code"\nproject = "toy"\n'
+            'prompt = "x"\nverify_cmd = "test -f built.txt"\n'
+        ),
+    )
     final = run_unit(unit, "mock", None, data_dir, thread_id="p-build")
     assert final["decision"].action == "accept"
     assert "harness/u3" in _branches(repo)
@@ -205,10 +208,13 @@ def test_build_cmd_roda_antes_do_verify(tmp_path, config_dir, data_dir):
 
 def test_sem_projeto_o_workspace_default_fica_intacto(tmp_path, config_dir, data_dir):
     """O worktree é opt-in: unidade sem `project` não encosta em git nenhum."""
-    unit = _unit(tmp_path, (
-        'id = "u5"\nkind = "code"\nprompt = "escreve a saída do mock"\n'
-        'verify_cmd = "test -f mock_output.txt"\n'
-    ))
+    unit = _unit(
+        tmp_path,
+        (
+            'id = "u5"\nkind = "code"\nprompt = "escreve a saída do mock"\n'
+            'verify_cmd = "test -f mock_output.txt"\n'
+        ),
+    )
     final = run_unit(unit, "mock", None, data_dir, thread_id="p-plain")
     assert final["decision"].action == "accept"
     ws = Path(final["workspace"])
@@ -216,18 +222,19 @@ def test_sem_projeto_o_workspace_default_fica_intacto(tmp_path, config_dir, data
     assert not (ws / ".git").exists()
 
 
-def test_cli_run_de_unidade_com_projeto_entrega_branch(
-    tmp_path, config_dir, data_dir, capsys
-):
+def test_cli_run_de_unidade_com_projeto_entrega_branch(tmp_path, config_dir, data_dir, capsys):
     """`harness run --unit` de projeto passa pelo grafo: sem isto o run no dedo
     rodava em tmpdir e a branch de entrega nunca existia."""
     repo = _toy_repo(tmp_path)
     init_project(repo, "toy", queue_dir=tmp_path / "fila")
-    unit = _unit(tmp_path, (
-        'id = "u6"\nkind = "code"\nproject = "toy"\n'
-        'prompt = "escreve a saída do mock"\n'
-        'verify_cmd = "test -f mock_output.txt && test -f app.txt"\n'
-    ))
+    unit = _unit(
+        tmp_path,
+        (
+            'id = "u6"\nkind = "code"\nproject = "toy"\n'
+            'prompt = "escreve a saída do mock"\n'
+            'verify_cmd = "test -f mock_output.txt && test -f app.txt"\n'
+        ),
+    )
     assert cli.main(["run", "--unit", str(unit), "--backend", "mock"]) == 0
 
     out = capsys.readouterr().out.strip()
@@ -249,10 +256,13 @@ def test_cli_run_sem_projeto_nao_passa_pelo_grafo(
         raise AssertionError("run_unit não deveria ser chamado sem project")
 
     monkeypatch.setattr(run_graph, "run_unit", _boom)
-    unit = _unit(tmp_path, (
-        'id = "u7"\nkind = "code"\nprompt = "escreve a saída do mock"\n'
-        'verify_cmd = "test -f mock_output.txt"\n'
-    ))
+    unit = _unit(
+        tmp_path,
+        (
+            'id = "u7"\nkind = "code"\nprompt = "escreve a saída do mock"\n'
+            'verify_cmd = "test -f mock_output.txt"\n'
+        ),
+    )
     assert cli.main(["run", "--unit", str(unit), "--backend", "mock"]) == 0
     assert " u7 mock accept " in capsys.readouterr().out
 
@@ -271,13 +281,17 @@ def _com_marcos(tmp_path: Path, config_dir, toml: str) -> Path:
 
 
 def test_milestone_progress_conta_só_o_que_está_em_done(tmp_path, config_dir):
-    q = _com_marcos(tmp_path, config_dir, (
-        '[[milestone]]\nname = "MVP"\nunits = ["u1", "u2", "u3"]\n\n'
-        '[[milestone]]\nname = "Tema"\nunits = ["u4a", "u4b"]\n'
-    ))
-    for name in ("u1", "u2"):                      # feitas
+    q = _com_marcos(
+        tmp_path,
+        config_dir,
+        (
+            '[[milestone]]\nname = "MVP"\nunits = ["u1", "u2", "u3"]\n\n'
+            '[[milestone]]\nname = "Tema"\nunits = ["u4a", "u4b"]\n'
+        ),
+    )
+    for name in ("u1", "u2"):  # feitas
         (q / QUEUE_DONE / name).mkdir(parents=True)
-    (q / "u3").mkdir()                             # ainda na fila
+    (q / "u3").mkdir()  # ainda na fila
     (q / QUEUE_STUCK / "u4a").mkdir(parents=True)  # parada: não conta
     (q / QUEUE_DONE / "u9_fora_de_marco").mkdir()  # done sem marco: ignorada
 
@@ -299,13 +313,15 @@ def test_status_sem_milestones_fica_inalterado(tmp_path, config_dir, data_dir, c
     assert out[0].startswith("toy: fila=0 done=1 stuck=0")
 
 
-def test_status_mostra_marcos_e_toml_torto_só_avisa(
-    tmp_path, config_dir, data_dir, capsys
-):
-    q = _com_marcos(tmp_path, config_dir, (
-        '[[milestone]]\nname = "MVP"\nunits = ["u1", "u2"]\n\n'
-        '[[milestone]]\nname = "Tema"\nunits = ["u3"]\n'
-    ))
+def test_status_mostra_marcos_e_toml_torto_só_avisa(tmp_path, config_dir, data_dir, capsys):
+    q = _com_marcos(
+        tmp_path,
+        config_dir,
+        (
+            '[[milestone]]\nname = "MVP"\nunits = ["u1", "u2"]\n\n'
+            '[[milestone]]\nname = "Tema"\nunits = ["u3"]\n'
+        ),
+    )
     for name in ("u1", "u2"):
         (q / QUEUE_DONE / name).mkdir(parents=True)
 
@@ -331,8 +347,7 @@ def test_env_file_persiste_relativo_ao_repo(tmp_path, config_dir):
 
     # Absoluto dentro do repo vira relativo: o worktree do run é outro
     # diretório e tem de resolver o mesmo arquivo.
-    proj = init_project(repo, "toy", queue_dir=tmp_path / "fila",
-                        env_file=str(repo / ".env"))
+    proj = init_project(repo, "toy", queue_dir=tmp_path / "fila", env_file=str(repo / ".env"))
     assert proj.env_file == ".env"
     assert load_projects()["toy"].env_file == ".env"
     toml = (config_dir / "projects.toml").read_text(encoding="utf-8")
@@ -390,8 +405,18 @@ def test_project_env_resolve_do_workspace(tmp_path, config_dir):
 
 def test_cli_init_aceita_env_file(tmp_path, config_dir, capsys):
     repo = _toy_repo(tmp_path)
-    rc = cli.main(["init", str(repo), "--name", "toy", "--env-file", ".env",
-                   "--queue-dir", str(tmp_path / "fila")])
+    rc = cli.main(
+        [
+            "init",
+            str(repo),
+            "--name",
+            "toy",
+            "--env-file",
+            ".env",
+            "--queue-dir",
+            str(tmp_path / "fila"),
+        ]
+    )
     capsys.readouterr()
     assert rc == 0
     assert load_projects()["toy"].env_file == ".env"

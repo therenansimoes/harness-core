@@ -25,8 +25,14 @@ def _rows(values: list[dict | None], **row) -> list[dict]:
     (results.tsv anterior ao D4a)."""
     out = []
     for v in values:
-        r = {"success": "1", "seconds": "1.0", "tokens": "100",
-             "cost_usd": "0.01", "notes": "", **row}
+        r = {
+            "success": "1",
+            "seconds": "1.0",
+            "tokens": "100",
+            "cost_usd": "0.01",
+            "notes": "",
+            **row,
+        }
         if v is not None:
             r["kpis"] = kpi.to_json(v)
         out.append(r)
@@ -94,7 +100,7 @@ def test_nan_dos_dois_lados_nao_inventa_zero():
     a = _rows([{"x": float("nan")}] * 4)
     b = _rows([{"x": 5.0}] * 4)
     rep = score.kpi_report(a, b)
-    assert rep["kpis"] == {}          # A não tem valor válido nenhum
+    assert rep["kpis"] == {}  # A não tem valor válido nenhum
     assert rep["only_b"] == ["x"] and rep["blocked"] is False
 
 
@@ -109,7 +115,7 @@ def test_kpi_so_de_um_lado_e_ignorado():
 
 def test_menos_de_3_valores_validos_vira_flat_por_n():
     a = _rows([{"x": 100.0}] * 2)
-    b = _rows([{"x": 10.0}] * 5)   # -90% seria WORSE, mas A tem n=2
+    b = _rows([{"x": 10.0}] * 5)  # -90% seria WORSE, mas A tem n=2
     e = score.kpi_report(a, b)["kpis"]["x"]
     assert e["verdict"] == score.FLAT
     assert e["n_a"] == 2 and "insuficientes" in e["reason"]
@@ -127,7 +133,7 @@ def test_linha_sem_coluna_kpis_vale_dict_vazio():
 
 
 def test_json_quebrado_e_celula_vazia_nao_derrubam():
-    a = [{"kpis": "{isso nao e json"}, {"kpis": ""}] + _rows([{"x": 1.0}] * 3)
+    a = [{"kpis": "{isso nao e json"}, {"kpis": ""}, *_rows([{"x": 1.0}] * 3)]
     b = _rows([{"x": 1.0}] * 3)
     assert score.kpi_report(a, b)["kpis"]["x"]["verdict"] == score.FLAT
 
@@ -144,10 +150,17 @@ def test_mediana_a_zero_nao_divide_por_zero():
 
 def _ab_rows(version: str, n: int, success: int, kpi_value: float) -> list[dict]:
     return [
-        {"harness_version": version, "suite": "s", "task_id": "t",
-         "success": str(success), "seconds": "1.0", "tokens": "100",
-         "cost_usd": "0.0100", "notes": "",
-         "kpis": kpi.to_json({"cobertura": kpi_value})}
+        {
+            "harness_version": version,
+            "suite": "s",
+            "task_id": "t",
+            "success": str(success),
+            "seconds": "1.0",
+            "tokens": "100",
+            "cost_usd": "0.0100",
+            "notes": "",
+            "kpis": kpi.to_json({"cobertura": kpi_value}),
+        }
         for _ in range(n)
     ]
 
@@ -179,8 +192,8 @@ def test_load_directions_le_o_campo_direction(tmp_path):
     )
     assert kpi.load_directions(tmp_path) == {
         "linhas": "down",
-        "cobertura": "up",   # default
-        "torto": "up",       # valor desconhecido cai no default (aviso no stderr)
+        "cobertura": "up",  # default
+        "torto": "up",  # valor desconhecido cai no default (aviso no stderr)
     }
 
 
@@ -195,13 +208,22 @@ def _exp_runs(kpi_a: float, kpi_b: float, n: int = 6) -> list[dict]:
     runs = []
     for i in range(n):
         for arm, v in (("A", kpi_a), ("B", kpi_b)):
-            runs.append({"arm": arm, "pair_index": i, "success": 1, "cost_usd": 0.01,
-                         "tokens": 100, "turns": 1, "kpis": kpi.to_json({"cobertura": v})})
+            runs.append(
+                {
+                    "arm": arm,
+                    "pair_index": i,
+                    "success": 1,
+                    "cost_usd": 0.01,
+                    "tokens": 100,
+                    "turns": 1,
+                    "kpis": kpi.to_json({"cobertura": v}),
+                }
+            )
     return runs
 
 
 def test_experiment_decide_bloqueia_por_kpi_regression():
-    import experiment  # noqa: PLC0415 — só este teste precisa do runner
+    import experiment
 
     runs = _exp_runs(100.0, 85.0)
     agg = experiment.aggregate(runs)
@@ -213,7 +235,7 @@ def test_experiment_decide_bloqueia_por_kpi_regression():
 
 
 def test_experiment_decide_sem_kpi_mantem_o_wilson():
-    import experiment  # noqa: PLC0415
+    import experiment
 
     runs = _exp_runs(100.0, 100.0)
     agg = experiment.aggregate(runs)

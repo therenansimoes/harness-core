@@ -23,7 +23,8 @@ from __future__ import annotations
 
 import math
 import random
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from harness.ruler.wilson import wilson_interval
 
@@ -45,9 +46,7 @@ _EXPLORE = math.sqrt(2)
 _MIN_CELL = 5
 
 
-def note_with_action(
-    action: str | None, note: str | None, kind: str | None = None
-) -> str | None:
+def note_with_action(action: str | None, note: str | None, kind: str | None = None) -> str | None:
     """Compõe o `note` com os tokens da ação e do kind na frente.
 
     Sem ação → nota intacta (kind sozinho não interessa: o placar é por ação).
@@ -67,7 +66,7 @@ def action_of(row: Any) -> str | None:
     Coluna `action` primeiro; sem ela (linha antiga, dict de teste), cai no
     token do `note` — as duas eras do ledger respondem a mesma pergunta.
     """
-    if (field := _get(row, "action")):
+    if field := _get(row, "action"):
         return field
     return _note_tag(row, ACTION_TAG)
 
@@ -79,7 +78,7 @@ def kind_of(row: Any) -> str | None:
     hoje, mas dict de teste e um schema futuro respondem igual — e o token do
     `note` como fonte real.
     """
-    if (field := _get(row, "kind")):
+    if field := _get(row, "kind"):
         return field
     return _note_tag(row, KIND_TAG)
 
@@ -150,10 +149,7 @@ def select_action(
     total = sum(s["n"] for s in stats.values())
     cell = action_stats(history, kind=kind) if kind else {}
     cell_total = sum(s["n"] for s in cell.values())
-    scores = {
-        name: _score(name, stats, total, cell, cell_total, explore)
-        for name in action_names
-    }
+    scores = {name: _score(name, stats, total, cell, cell_total, explore) for name in action_names}
     best = max(scores.values())
     tied = [name for name in action_names if scores[name] == best]
     return tied[0] if len(tied) == 1 else rng.choice(tied)
@@ -203,7 +199,7 @@ def _note_tag(row: Any, tag: str) -> str | None:
     note = _get(row, "note") or ""
     for part in note.split(";"):
         if part.startswith(tag):
-            return part[len(tag):] or None
+            return part[len(tag) :] or None
     return None
 
 

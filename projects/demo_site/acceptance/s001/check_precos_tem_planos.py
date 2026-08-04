@@ -1,4 +1,5 @@
 """Acceptance s001: site/precos.html tem exatamente 3 blocos class="plano" e um <h1>."""
+
 import sys
 from html.parser import HTMLParser
 from pathlib import Path
@@ -40,7 +41,7 @@ def main() -> int:
     parser.close()
 
     if parser.planos != 3:
-        print(f"esperava 3 blocos class=\"plano\", encontrou {parser.planos}")
+        print(f'esperava 3 blocos class="plano", encontrou {parser.planos}')
         return 1
 
     if parser.h1_count != 1:

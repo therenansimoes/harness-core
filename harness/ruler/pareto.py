@@ -17,10 +17,10 @@ todo A/B de mock, que é justamente o caminho de $0 do repo.
 from __future__ import annotations
 
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from math import isnan
 from pathlib import Path
-from typing import Mapping
 
 from harness.ruler.wilson import INCONCLUSIVE, KEEP, AbVerdict
 

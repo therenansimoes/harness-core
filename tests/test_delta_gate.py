@@ -31,9 +31,7 @@ def cfg(tmp_path, monkeypatch) -> Path:
 
 
 def _unit(tmp_path: Path, checks: tuple[Check, ...]) -> UnitSpec:
-    return UnitSpec(
-        id="u", path=tmp_path / "u", prompt="x", verify_cmd="true", checks=checks
-    )
+    return UnitSpec(id="u", path=tmp_path / "u", prompt="x", verify_cmd="true", checks=checks)
 
 
 def _state(tmp_path: Path, attempt: int, unit: UnitSpec) -> dict:
@@ -42,10 +40,14 @@ def _state(tmp_path: Path, attempt: int, unit: UnitSpec) -> dict:
         "unit": unit,
         "workspace": str(tmp_path / "ws"),
         "attempt": attempt,
-        "budget": Budget(max_attempts=9),   # teto alto: o corte tem que ser o delta
+        "budget": Budget(max_attempts=9),  # teto alto: o corte tem que ser o delta
         "verdict": Verdict(
-            passed=False, exit_code=64, log_path=tmp_path / "v.log", sec=0.1,
-            score=0.5, failed=("c1",),
+            passed=False,
+            exit_code=64,
+            log_path=tmp_path / "v.log",
+            sec=0.1,
+            score=0.5,
+            failed=("c1",),
         ),
     }
 
@@ -56,8 +58,14 @@ def _seed_scores(db: Path, scores: list[float]) -> None:
         store.record_node(
             RUN_ID,
             "verify",
-            {"passed": False, "exit_code": 64, "log_path": "v.log", "sec": 0.1,
-             "score": score, "failed": ["c1"]},
+            {
+                "passed": False,
+                "exit_code": 64,
+                "log_path": "v.log",
+                "sec": 0.1,
+                "score": score,
+                "failed": ["c1"],
+            },
             db,
             attempt=attempt,
         )
@@ -82,7 +90,7 @@ def test_score_subindo_continua_em_retry(tmp_path, data_dir, cfg):
 
 def test_uma_estagnacao_ainda_e_ruido(tmp_path, data_dir, cfg):
     db = data_dir / store.DB_NAME
-    _seed_scores(db, [0.4, 0.4, 0.6])   # parou uma vez e voltou a subir
+    _seed_scores(db, [0.4, 0.4, 0.6])  # parou uma vez e voltou a subir
 
     out = _gate(_state(tmp_path, 2, _unit(tmp_path, CHECKS)), _config(data_dir))
 
@@ -91,7 +99,7 @@ def test_uma_estagnacao_ainda_e_ruido(tmp_path, data_dir, cfg):
 
 def test_duas_estagnacoes_escalam_com_os_dois_scores(tmp_path, data_dir, cfg):
     db = data_dir / store.DB_NAME
-    _seed_scores(db, [0.6, 0.5, 0.5])   # não subiu na 1 nem na 2
+    _seed_scores(db, [0.6, 0.5, 0.5])  # não subiu na 1 nem na 2
 
     out = _gate(_state(tmp_path, 2, _unit(tmp_path, CHECKS)), _config(data_dir))
 
@@ -107,7 +115,7 @@ def test_duas_estagnacoes_escalam_com_os_dois_scores(tmp_path, data_dir, cfg):
 def test_unidade_sem_checks_intacta(tmp_path, data_dir, cfg):
     """Sem `[checks]` não há régua graduada: retry cego de sempre, bit a bit."""
     db = data_dir / store.DB_NAME
-    _seed_scores(db, [1.0, 1.0, 1.0])   # score fixo do caminho binário
+    _seed_scores(db, [1.0, 1.0, 1.0])  # score fixo do caminho binário
 
     out = _gate(_state(tmp_path, 2, _unit(tmp_path, ())), _config(data_dir))
 

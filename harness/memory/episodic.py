@@ -28,11 +28,11 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterable
 
 from harness.ledger.store import db_path as default_db_path
 from harness.ledger.store import now_iso
@@ -140,8 +140,7 @@ def record_failure(
     try:
         with _connect(db_path) as conn:
             conn.execute(
-                f"INSERT INTO {TABLE} (kind, unit_id, trace, created_at) "
-                "VALUES (?, ?, ?, ?)",
+                f"INSERT INTO {TABLE} (kind, unit_id, trace, created_at) VALUES (?, ?, ?, ?)",
                 (kind or "", unit_id or "", trace.strip()[:MAX_TRACE_CHARS], now_iso()),
             )
         return True
@@ -260,8 +259,7 @@ def archive(episode_ids: Iterable[int], db_path: Path | None = None) -> int:
         with _connect(db_path) as conn:
             before = _archived_count(conn)
             conn.executemany(
-                f"INSERT OR IGNORE INTO {ARCHIVE_TABLE} (episode_id, archived_at) "
-                "VALUES (?, ?)",
+                f"INSERT OR IGNORE INTO {ARCHIVE_TABLE} (episode_id, archived_at) VALUES (?, ?)",
                 [(i, ts) for i in ids],
             )
             return _archived_count(conn) - before
@@ -294,7 +292,7 @@ def parse_ts(value: str | None) -> datetime | None:
         dt = datetime.fromisoformat(value)
     except ValueError:
         return None
-    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
 def _iso(value: datetime | str) -> str:

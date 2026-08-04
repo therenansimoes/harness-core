@@ -6,7 +6,7 @@ import pytest
 
 pytest.importorskip("deepagents")
 
-from harness.backends.safe_shell import (  # noqa: E402
+from harness.backends.safe_shell import (
     BLOCKED_EXIT_CODE,
     EMPTY_OUTPUT,
     MAX_TIMEOUT,

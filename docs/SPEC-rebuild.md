@@ -107,16 +107,19 @@ def attribute(mutation_id:str, before:Sequence[RunRow], after:Sequence[RunRow]) 
 ```python
 # harness/graph/state.py
 class RunState(TypedDict):
-    run_id: str; unit: UnitSpec; attempt: int
+    run_id: str
+    unit: UnitSpec
+    attempt: int
     selection: Selection | None
     workspace: str | None
     exec: ExecResult | None
     verdict: Verdict | None
-    kpi_before: dict[str,float]; kpi_after: dict[str,float]
+    kpi_before: dict[str, float]
+    kpi_after: dict[str, float]
     tamper: list[str]
     decision: Decision | None
-    budget: Budget            # spent_usd, deadline_ts, max_attempts
-    events: Annotated[list[Event], operator.add]   # append-only, é o trace
+    budget: Budget  # spent_usd, deadline_ts, max_attempts
+    events: Annotated[list[Event], operator.add]  # append-only, é o trace
 ```
 
 **run_graph** (`harness/graph/run_graph.py`):
@@ -134,25 +137,44 @@ class RunState(TypedDict):
 # harness/backends/base.py
 @dataclass(frozen=True)
 class Capabilities:
-    resumable: bool; reports_cost: bool; model_selectable: bool
-    tools: frozenset[str]; streaming: bool
+    resumable: bool
+    reports_cost: bool
+    model_selectable: bool
+    tools: frozenset[str]
+    streaming: bool
+
 
 @dataclass(frozen=True)
 class ExecRequest:
-    prompt: str; workspace: Path; tools: tuple[str,...]
-    model: str|None; max_turns: int; timeout_s: float
-    env: Mapping[str,str]; session_id: str|None; trace_path: Path
+    prompt: str
+    workspace: Path
+    tools: tuple[str, ...]
+    model: str | None
+    max_turns: int
+    timeout_s: float
+    env: Mapping[str, str]
+    session_id: str | None
+    trace_path: Path
+
 
 @dataclass(frozen=True)
 class ExecResult:
-    ok: bool; exit_reason: str        # done|max_turns|timeout|error|blocked
-    turns: int; cost_usd: float|None; tokens_in: int|None; tokens_out: int|None
-    files_changed: tuple[str,...]; session_id: str|None; trace_path: Path
+    ok: bool
+    exit_reason: str  # done|max_turns|timeout|error|blocked
+    turns: int
+    cost_usd: float | None
+    tokens_in: int | None
+    tokens_out: int | None
+    files_changed: tuple[str, ...]
+    session_id: str | None
+    trace_path: Path
+
 
 class Backend(Protocol):
     name: ClassVar[str]
+
     def capabilities(self) -> Capabilities: ...
-    def preflight(self) -> Preflight: ...          # (ok, reason) — determinístico, ZERO chamada de LLM
+    def preflight(self) -> Preflight: ...  # (ok, reason) — determinístico, ZERO chamada de LLM
     def execute(self, req: ExecRequest) -> ExecResult: ...
 ```
 

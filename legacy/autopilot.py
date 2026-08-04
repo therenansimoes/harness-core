@@ -40,16 +40,17 @@ import time
 import tomllib
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).parent.resolve()
 sys.path.insert(0, str(ROOT))
 
-import config  # noqa: E402
 import evolve  # noqa: E402
 import graph  # noqa: E402
 import score  # noqa: E402
+
+import config  # noqa: E402
 
 
 def _project():
@@ -60,6 +61,7 @@ def _project():
     import project
 
     return project
+
 
 CATALOG = ROOT / "evolution" / "catalog.toml"
 DECISIONS = ROOT / "evolution" / "decisions"
@@ -84,11 +86,11 @@ class SkipProposal(Exception):
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _stamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
 # ------------------------------------------------------------------ catálogo
@@ -154,8 +156,12 @@ def _rule_by_code(code: str, catalog: list[dict]) -> dict | None:
     return None
 
 
-def error_counts(rows: list[dict], catalog: list[dict] | None = None,
-                 root: Path | None = None, window: int | None = None) -> list[tuple[str, int]]:
+def error_counts(
+    rows: list[dict],
+    catalog: list[dict] | None = None,
+    root: Path | None = None,
+    window: int | None = None,
+) -> list[tuple[str, int]]:
     """[(code, n)] das falhas recentes, ordenado por contagem e, no empate,
     pela ordem do catálogo."""
     rules = catalog if catalog is not None else load_catalog()
@@ -181,8 +187,12 @@ def error_counts(rows: list[dict], catalog: list[dict] | None = None,
     return sorted(counts.items(), key=lambda kv: (-kv[1], order.get(kv[0], 999)))
 
 
-def dominant_error(rows: list[dict], catalog: list[dict] | None = None,
-                   root: Path | None = None, window: int | None = None) -> tuple[str, int]:
+def dominant_error(
+    rows: list[dict],
+    catalog: list[dict] | None = None,
+    root: Path | None = None,
+    window: int | None = None,
+) -> tuple[str, int]:
     ranked = error_counts(rows, catalog, root, window)
     return ranked[0] if ranked else ("", 0)
 
@@ -227,7 +237,7 @@ def render_proposal(rule: dict, root: Path | None = None) -> Path:
         if not m:
             raise SkipProposal(f"âncora {anchor} (int) não encontrada em {target_rel}")
         cur = int(m.group(1))
-        new_val = min(int(round(cur * float(rule["factor"]))), int(rule["max_value"]))
+        new_val = min(round(cur * float(rule["factor"])), int(rule["max_value"]))
         if new_val <= cur:
             raise SkipProposal(f"{anchor} já está em {cur} (teto {rule['max_value']})")
         old = f"{anchor} = {cur}\n"
@@ -276,7 +286,7 @@ new = '''
 ## Por que
 
 Gerada por `autopilot.py` a partir da regra `{code}` de `evolution/catalog.toml`:
-o sintoma dominante nas falhas recentes do results.tsv casou `{rule.get('match_notes')}`.
+o sintoma dominante nas falhas recentes do results.tsv casou `{rule.get("match_notes")}`.
 Nenhum LLM participou desta escolha — a regra é uma tabela e a ordem dela é o
 desempate.
 
@@ -311,7 +321,7 @@ def snapshot_genome(session: str, root: Path | None = None) -> Path:
     base = root or ROOT
     dest = base / "evolution" / "rollbacks" / session / _stamp()
     dest.mkdir(parents=True, exist_ok=True)
-    for rel in evolve.genome_files(root=base) + ["harness_version.txt"]:
+    for rel in [*evolve.genome_files(root=base), "harness_version.txt"]:
         src = base / rel
         if not src.exists():
             continue
@@ -379,7 +389,7 @@ def results_files() -> list[Path]:
 def _lines(p: Path) -> list[str]:
     if not p.exists():
         return []
-    return [l for l in p.read_text(errors="replace").splitlines() if l.strip()]
+    return [ln for ln in p.read_text(errors="replace").splitlines() if ln.strip()]
 
 
 def baseline_lines() -> dict:
@@ -420,14 +430,19 @@ def project_rows(name: str) -> list[dict]:
     rows = []
     for ln in lines[1:]:
         cells = (ln.split("\t") + [""] * len(header))[: len(header)]
-        rows.append(dict(zip(header, cells)))
+        rows.append(dict(zip(header, cells, strict=False)))
     return rows
 
 
 def log_event(s: State, **ev) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    row = {"ts": _now(), "session": s.session, "iteration": s.iterations,
-           "elapsed_s": round(s.elapsed(), 1), "cost_usd": round(spent_usd(s), 4)}
+    row = {
+        "ts": _now(),
+        "session": s.session,
+        "iteration": s.iterations,
+        "elapsed_s": round(s.elapsed(), 1),
+        "cost_usd": round(spent_usd(s), 4),
+    }
     row.update(ev)
     with s.log_path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -444,8 +459,14 @@ def step_project(s: State) -> str:
     result = project.try_run_one(name, keep=False)
     if result == "ran":
         s.ran += 1
-    log_event(s, kind="project", result=result, code="", decision=name,
-              **{k: v for k, v in (project.LAST_RUN or {}).items()})
+    log_event(
+        s,
+        kind="project",
+        result=result,
+        code="",
+        decision=name,
+        **{k: v for k, v in (project.LAST_RUN or {}).items()},
+    )
     return result
 
 
@@ -471,7 +492,9 @@ def step_self(s: State) -> str:
 
     rule, n = _pick_rule(s, rows, catalog)
     if rule is None:
-        log_event(s, kind="self", result="no_signal", code="", decision="nenhuma regra propose aplicável")
+        log_event(
+            s, kind="self", result="no_signal", code="", decision="nenhuma regra propose aplicável"
+        )
         return "no_signal"
 
     code = rule["code"]
@@ -487,7 +510,7 @@ def step_self(s: State) -> str:
         rc = evolve.cycle(path, repeat=SELF_REPEAT, suite="fixed", force=False)
     except (Deadline, Stop):
         raise
-    except (evolve.InfraError, SystemExit, Exception) as e:  # noqa: BLE001
+    except (evolve.InfraError, SystemExit, Exception) as e:
         # Um ciclo que explode é dado de infra, não veredito: o loop segue e o
         # baseline não foi tocado (promote só roda no fim de cycle).
         log_event(s, kind="self", result="infra_error", code=code, decision=str(e)[:200])
@@ -496,9 +519,13 @@ def step_self(s: State) -> str:
     outcome = {0: "merge", 1: "discard"}.get(rc, f"exit_{rc}")
     if rc == 0:
         s.probation = {
-            "snap": str(snap), "left": s.probation_runs, "code": code,
-            "pid": path.stem, "project": name,
-            "idx": len(rows), "pre": rows[-s.probation_runs:],
+            "snap": str(snap),
+            "left": s.probation_runs,
+            "code": code,
+            "pid": path.stem,
+            "project": name,
+            "idx": len(rows),
+            "pre": rows[-s.probation_runs :],
             "n_signal": n,
         }
     log_event(s, kind="self", result=outcome, code=code, decision=path.name)
@@ -526,11 +553,11 @@ def _kpi_worse(pre: list[dict], post: list[dict], name: str | None) -> tuple[lis
         cfg = project.read_config(project.PROJECTS_ROOT / name) if name else {}
         if cfg.get("work_path"):
             directions = kpi.load_directions(Path(cfg["work_path"]).expanduser())
-    except Exception:  # noqa: BLE001
+    except Exception:
         directions = {}
     try:
         rep = kpi_report(pre, post, directions)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return [], f"kpi_report falhou: {e}"
     return list(rep.get("worse") or []), ""
 
@@ -547,7 +574,7 @@ def probation_check(s: State) -> str | None:
     s.probation = None
 
     rows = project_rows(p["project"]) if p["project"] else []
-    pre, post = p["pre"], rows[p["idx"]:]
+    pre, post = p["pre"], rows[p["idx"] :]
     kpi_worse, kpi_note = _kpi_worse(pre, post, p["project"])
     tampered = [r for r in post if "tamper:" in (r.get("notes") or "")]
 
@@ -560,8 +587,13 @@ def probation_check(s: State) -> str | None:
         reasons.append(f"tamper novo em {len(tampered)} run(s) pós-merge")
 
     if not reasons:
-        log_event(s, kind="probation", result="keep", code=p["code"], decision=kpi_note
-                  or f"pré {_succ(pre)}/{len(pre)} · pós {_succ(post)}/{len(post)}")
+        log_event(
+            s,
+            kind="probation",
+            result="keep",
+            code=p["code"],
+            decision=kpi_note or f"pré {_succ(pre)}/{len(pre)} · pós {_succ(post)}/{len(post)}",
+        )
         return "keep"
 
     restored = restore_genome(Path(p["snap"]))
@@ -570,24 +602,41 @@ def probation_check(s: State) -> str | None:
     doc_path = _write_revert(s, p, pre, post, reasons, restored, kpi_note)
     try:
         graph.record_governance_event(
-            project=p["project"] or "", action="autopilot_revert", actor="autopilot",
-            detail=json.dumps({"pid": p["pid"], "code": p["code"], "reasons": reasons,
-                               "snapshot": p["snap"], "decision": str(doc_path)},
-                              ensure_ascii=False),
+            project=p["project"] or "",
+            action="autopilot_revert",
+            actor="autopilot",
+            detail=json.dumps(
+                {
+                    "pid": p["pid"],
+                    "code": p["code"],
+                    "reasons": reasons,
+                    "snapshot": p["snap"],
+                    "decision": str(doc_path),
+                },
+                ensure_ascii=False,
+            ),
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         log_event(s, kind="probation", result="graph_error", code=p["code"], decision=str(e)[:200])
     log_event(s, kind="probation", result="revert", code=p["code"], decision="; ".join(reasons))
     return "revert"
 
 
-def _write_revert(s: State, p: dict, pre: list[dict], post: list[dict],
-                  reasons: list[str], restored: list[str], kpi_note: str) -> Path:
+def _write_revert(
+    s: State,
+    p: dict,
+    pre: list[dict],
+    post: list[dict],
+    reasons: list[str],
+    restored: list[str],
+    kpi_note: str,
+) -> Path:
     DECISIONS.mkdir(parents=True, exist_ok=True)
     out = DECISIONS / f"{p['pid']}-revert.md"
-    out.write_text(f"""# Revert {p['pid']} — probation reprovou
+    out.write_text(
+        f"""# Revert {p["pid"]} — probation reprovou
 
-**sessão:** `{s.session}` · **code:** `{p['code']}` · **projeto:** `{p['project']}`
+**sessão:** `{s.session}` · **code:** `{p["code"]}` · **projeto:** `{p["project"]}`
 **gerado por:** `autopilot.py` em {_now()}
 
 O merge passou os gates da suite fixed, mas as {len(post)} run(s) de projeto
@@ -600,22 +649,24 @@ git, cópia byte a byte.
 |---|---|---|
 | runs | {len(pre)} | {len(post)} |
 | success | {_succ(pre)}/{len(pre)} | {_succ(post)}/{len(post)} |
-| notes | {'; '.join(sorted({(r.get('notes') or '')[:40] for r in pre}))} | {'; '.join(sorted({(r.get('notes') or '')[:40] for r in post}))} |
+| notes | {"; ".join(sorted({(r.get("notes") or "")[:40] for r in pre}))} | {"; ".join(sorted({(r.get("notes") or "")[:40] for r in post}))} |
 
 ## Motivo
 
-{chr(10).join('- ' + r for r in reasons)}
+{chr(10).join("- " + r for r in reasons)}
 
 {kpi_note}
 
 ## Restauração
 
-- snapshot: `{p['snap']}`
-- arquivos: {', '.join(restored) or '(nenhum)'}
+- snapshot: `{p["snap"]}`
+- arquivos: {", ".join(restored) or "(nenhum)"}
 
-`{p['code']}` entra na blocklist DESTA sessão: não é reproposto até alguém
+`{p["code"]}` entra na blocklist DESTA sessão: não é reproposto até alguém
 olhar o motivo.
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
     return out
 
 
@@ -713,17 +764,23 @@ def loop(s: State) -> int:
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         summary = {
-            "kind": "summary", "result": s.stop_reason or "done", "code": "",
-            "decision": (f"{s.iterations} iterações · {s.ran} runs de fila · "
-                         f"{s.selfs} ciclos self · {s.reverts} reverts"),
+            "kind": "summary",
+            "result": s.stop_reason or "done",
+            "code": "",
+            "decision": (
+                f"{s.iterations} iterações · {s.ran} runs de fila · "
+                f"{s.selfs} ciclos self · {s.reverts} reverts"
+            ),
             "exit": code,
         }
         try:
             log_event(s, **summary)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
-        print(f"[autopilot] {s.stop_reason or 'done'} · {summary['decision']} · "
-              f"${spent_usd(s):.4f} · {s.elapsed():.0f}s · log {s.log_path}")
+        print(
+            f"[autopilot] {s.stop_reason or 'done'} · {summary['decision']} · "
+            f"${spent_usd(s):.4f} · {s.elapsed():.0f}s · log {s.log_path}"
+        )
     return code
 
 
@@ -760,15 +817,22 @@ def main(argv: list[str] | None = None) -> int:
     if not h.get("autopilot_allow_external_work_path", False):
         bad = external_work_paths(a.project)
         if bad:
-            print(f"[autopilot] recusa iniciar: work_path fora de {ROOT}: {', '.join(bad)}",
-                  file=sys.stderr)
+            print(
+                f"[autopilot] recusa iniciar: work_path fora de {ROOT}: {', '.join(bad)}",
+                file=sys.stderr,
+            )
             return 2
 
     s.baseline_lines = baseline_lines()
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_event(s, kind="start", result="ok", code="",
-              decision=f"wall={s.wall_s}s budget=${s.budget:.2f} self_every={s.self_every} "
-                       f"project={s.project or '(scheduler)'} mock={os.environ.get('HARNESS_MOCK_AGENT', '0')}")
+    log_event(
+        s,
+        kind="start",
+        result="ok",
+        code="",
+        decision=f"wall={s.wall_s}s budget=${s.budget:.2f} self_every={s.self_every} "
+        f"project={s.project or '(scheduler)'} mock={os.environ.get('HARNESS_MOCK_AGENT', '0')}",
+    )
     install_signals(s)
     return loop(s)
 

@@ -48,15 +48,15 @@ DEFAULT_PROJECT = "oficina"
 DEFAULT_BACKEND = "deepagents"
 DEFAULT_MODEL = "openai:qwen3.5-9b-mlx"
 DEFAULT_DEADLINE_S = 3600.0
-REGRESSION_TIMEOUT_S = 120.0   # regressão é barata: verify que demora não é régua
+REGRESSION_TIMEOUT_S = 120.0  # regressão é barata: verify que demora não é régua
 
 
 def pending(queue: Path) -> list[Path]:
     """Unidades ainda na fila, em ordem de nome (a ordem é a dependência)."""
     return sorted(
-        p for p in queue.iterdir()
-        if p.is_dir() and p.name not in (QUEUE_DONE, QUEUE_STUCK)
-        and (p / UNIT_FILE).is_file()
+        p
+        for p in queue.iterdir()
+        if p.is_dir() and p.name not in (QUEUE_DONE, QUEUE_STUCK) and (p / UNIT_FILE).is_file()
     )
 
 
@@ -161,7 +161,11 @@ def run_queue(
         # isso um segundo loop no mesmo dia reaproveitaria checkpoint antigo.
         thread = f"{project}-{unit_dir.name}-{int(t0)}"
         state = run_unit(
-            unit_dir, backend, model or None, data, thread_id=thread,
+            unit_dir,
+            backend,
+            model or None,
+            data,
+            thread_id=thread,
             max_attempts=attempts,
         )
         decision = state["decision"]

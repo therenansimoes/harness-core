@@ -11,8 +11,9 @@ default do loop é False e ponto. Quebrar isso é tamper.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Literal
 
 MetaVerdict = Literal["allowed", "quarantined", "blocked"]
 ALLOWED, QUARANTINED, BLOCKED = "allowed", "quarantined", "blocked"

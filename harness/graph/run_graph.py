@@ -29,15 +29,17 @@ attempt: é o único nó que precisa recalcular a cada passagem, senão o braço
 
 from __future__ import annotations
 
+import itertools
 import re
 import shutil
 import subprocess
 import time
 import tomllib
 import uuid
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from harness.backends import procs, registry
 from harness.genome import tamper
@@ -107,7 +109,7 @@ DEFAULT_MAX_ATTEMPTS = 2
 # visual tem dist para olhar.
 UI_VERIFY_DIST = "dist"
 UI_VERIFY_EXPECT = ("css",)
-UI_VERIFY_EXIT = 65   # veredito derrubado pela TELA, não pelo `verify_cmd`
+UI_VERIFY_EXIT = 65  # veredito derrubado pela TELA, não pelo `verify_cmd`
 
 # Gate de delta: quantas tentativas sem ganho de score toleram antes de chamar
 # gente. Uma é ruído do executor (mesma nota por caminho diferente); duas é
@@ -187,17 +189,13 @@ def load_policy(path: Path | None = None) -> GraphPolicy:
     nodes = nodes if isinstance(nodes, dict) else {}
     return GraphPolicy(
         max_attempts=_policy_int(data.get("max_attempts"), base.max_attempts),
-        verify_timeout_s=_policy_float(
-            data.get("verify_timeout_s"), base.verify_timeout_s
-        ),
+        verify_timeout_s=_policy_float(data.get("verify_timeout_s"), base.verify_timeout_s),
         measure=_policy_bool(nodes.get("measure"), base.measure),
         tamper=_policy_bool(nodes.get("tamper"), base.tamper),
         ui_verify=_policy_bool(nodes.get("ui_verify"), base.ui_verify),
         ui_verify_dist=_policy_str(data.get("ui_verify_dist"), base.ui_verify_dist),
         delta_gate=_policy_bool(nodes.get("delta_gate"), base.delta_gate),
-        blocker_defer_s=_policy_float(
-            data.get("blocker_defer_s"), base.blocker_defer_s
-        ),
+        blocker_defer_s=_policy_float(data.get("blocker_defer_s"), base.blocker_defer_s),
     )
 
 
@@ -265,7 +263,7 @@ def _stagnations(scores: Sequence[float]) -> int:
     Empate é estagnação de propósito: mesma nota por caminho diferente é a
     assinatura de quem está batendo na mesma parede.
     """
-    return sum(1 for prev, now in zip(scores, scores[1:]) if now <= prev)
+    return sum(1 for prev, now in itertools.pairwise(scores) if now <= prev)
 
 
 def _cfg(config, key: str, default: Any = None) -> Any:
@@ -445,8 +443,7 @@ PLAN_TRIGGERS = re.compile(
     re.IGNORECASE,
 )
 PLAN_ORDER = (
-    "ANTES DE TUDO: chame task(subagent_type='planner') e transcreva o plano "
-    "com write_todos."
+    "ANTES DE TUDO: chame task(subagent_type='planner') e transcreva o plano com write_todos."
 )
 
 
@@ -587,6 +584,25 @@ def _provision(state: RunState, config=None) -> dict:
     }
 
 
+def _prior_query(state: RunState) -> str:
+    """Termos ESTÁVEIS para procurar precedente humano — nunca o texto do hint.
+
+    O hint é prosa do checker ("régua reprovou exit 2; arquivos exigidos…") e o
+    vocabulário dele não existe do outro lado: o caso foi gravado com o motivo da
+    escalação (`no_gradient`, `deadline`) e a evidência. Query de hint volta vazia
+    sempre. `kind`, nome de check reprovado e a classe de saída são
+    identificadores curtos que `cli._record_human_decision` grava no contexto —
+    escrita e leitura casam por construção, não por sorte lexical.
+    """
+    terms = [state["unit"].kind or ""]
+    verdict = state.get("verdict")
+    if verdict is not None and not verdict.passed:
+        # Mesma classe de saída que o `finalize` carimba no ledger.
+        terms.append("verify_failed")
+        terms.extend(verdict.failed)
+    return " ".join(t for t in terms if t)
+
+
 def _prompt(state: RunState) -> str:
     """Prompt da tentativa: o da unidade, mais o hint do checker se houver.
 
@@ -610,7 +626,8 @@ def _prompt(state: RunState) -> str:
     # Mesmo bloco que a escalação mostra ao humano, do lado de quem vai tentar
     # de novo: se um humano já respondeu uma parada deste kind com este motivo,
     # a tentativa seguinte decide sabendo do precedente. "" quando não há.
-    prior = prior_decisions(state["unit"].kind, hint)
+    # A query é `_prior_query`, não o hint — ver o docstring de lá.
+    prior = prior_decisions(state["unit"].kind, _prior_query(state))
     if not trust_boundary.enabled():
         out = f"{base}\n\n{HINT_HEADER}\n{hint}"
         return f"{out}\n\n{prior}" if prior else out
@@ -711,9 +728,7 @@ def _ui_verify(ws: Path, policy: GraphPolicy) -> list[str]:
     try:
         from harness import uiverify
 
-        res = uiverify.verify(
-            dist, expect=UI_VERIFY_EXPECT, shot_out=ws / uiverify.SHOT_NAME
-        )
+        res = uiverify.verify(dist, expect=UI_VERIFY_EXPECT, shot_out=ws / uiverify.SHOT_NAME)
     except Exception:
         return []
     if uiverify.MISSING_CHROME in res.failures:
@@ -736,9 +751,7 @@ def _verify(state: RunState, config=None) -> dict:
     ws = Path(state["workspace"])
     # Fora do ws, um arquivo por tentativa: no ws o verificador selado imprimiria
     # o golden e a tentativa seguinte o leria como resposta.
-    log_path = (
-        run_log_dir(run_id, _cfg(config, CFG_DATA_DIR, "data")) / f"verify.a{attempt}.log"
-    )
+    log_path = run_log_dir(run_id, _cfg(config, CFG_DATA_DIR, "data")) / f"verify.a{attempt}.log"
     t0 = time.monotonic()
     # Prova selada: o verificador só existe no workspace dentro deste `with` —
     # o agente já rodou e a tentativa seguinte também não vai vê-lo.
@@ -770,9 +783,7 @@ def _verify(state: RunState, config=None) -> dict:
     # só derrubam exit code que estava verde. Orçamento próprio, como o do
     # comando principal.
     checks = state["unit"].checks
-    extra_score, failed, checks_log = run_extra_checks(
-        checks, ws, budget_s=policy.verify_timeout_s
-    )
+    extra_score, failed, checks_log = run_extra_checks(checks, ws, budget_s=policy.verify_timeout_s)
     if checks_log:
         out += checks_log.encode()
     verify_ok = exit_code == 0
@@ -840,9 +851,7 @@ def _measure(state: RunState, config=None) -> dict:
     specs = _specs_from_payload(prov.get("kpi_specs"))
     before = prov.get("kpi_before") or {}
     after = collect(Path(state["workspace"]), specs=specs) if specs else {}
-    store.record_node(
-        run_id, "measure", {"before": before, "after": after}, db, attempt=attempt
-    )
+    store.record_node(run_id, "measure", {"before": before, "after": after}, db, attempt=attempt)
     return {
         "kpi_before": before,
         "kpi_after": after,
@@ -877,9 +886,7 @@ def _gate(state: RunState, config=None) -> dict:
             mutable=tuple(gsaved.get("mutable") or ()),
         )
         changed = state["exec"].files_changed if state.get("exec") else ()
-        violations = tamper.detect(
-            Path(state["workspace"]), prov["tamper_fp"], changed, genome=g
-        )
+        violations = tamper.detect(Path(state["workspace"]), prov["tamper_fp"], changed, genome=g)
 
     if verdict is None:
         # Nada verificou: só cabe tentar de novo (mesmo caminho do stub).
@@ -951,11 +958,7 @@ def _gate(state: RunState, config=None) -> dict:
         "tamper": violations,
         "decision": decision,
         "defer_s": defer_s,
-        "events": [
-            _event(
-                "gate", action=decision.action, reason=decision.reason, **delta, **blk
-            )
-        ],
+        "events": [_event("gate", action=decision.action, reason=decision.reason, **delta, **blk)],
     }
 
 
@@ -1099,14 +1102,8 @@ def _record(state: RunState, config=None) -> dict:
     )
     # `note` no evento do record: o TIPO do blocker é o que explica a parada para
     # quem lê o trace depois — `exit_reason` sozinho só diz que houve um.
-    note = (
-        {"note": f"blocker:{result.blocker}"}
-        if result is not None and result.blocker
-        else {}
-    )
-    return {
-        "events": [_event("record", row_id=row_id, ok=ok, reused=not wrote, **note)]
-    }
+    note = {"note": f"blocker:{result.blocker}"} if result is not None and result.blocker else {}
+    return {"events": [_event("record", row_id=row_id, ok=ok, reused=not wrote, **note)]}
 
 
 def _after_gate(state: RunState) -> str:
@@ -1164,9 +1161,7 @@ def build_run_graph(checkpointer):
     b.add_edge("execute", "verify")
     b.add_edge("verify", "measure")
     b.add_edge("measure", "gate")
-    b.add_conditional_edges(
-        "gate", _after_gate, ["accept", "retry", "escalate", "revert"]
-    )
+    b.add_conditional_edges("gate", _after_gate, ["accept", "retry", "escalate", "revert"])
     b.add_edge("retry", "route")
     b.add_edge("accept", "record")
     b.add_edge("escalate", "record")
@@ -1250,9 +1245,7 @@ def run_unit(
         proj = get_project(unit.project)  # falha cedo se não registrado
         if proj.build_cmd:
             # O verify do projeto é build + verify da unidade, no worktree.
-            unit = replace(
-                unit, verify_cmd=f"({proj.build_cmd}) && ({unit.verify_cmd})"
-            )
+            unit = replace(unit, verify_cmd=f"({proj.build_cmd}) && ({unit.verify_cmd})")
     data_dir = Path(data_dir)
 
     with open_checkpointer(data_dir) as checkpointer:

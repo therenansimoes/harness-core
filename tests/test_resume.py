@@ -110,6 +110,13 @@ def test_sigkill_during_execute_resumes_without_reexecuting(data_dir, marks):
     # O trace é de um run só: retomou do checkpoint, não recomeçou do START
     # (recomeçar duplicaria plan/route/provision na lista append-only).
     assert [e["node"] for e in final["events"]] == [
-        "plan", "route", "provision", "execute", "verify",
-        "measure", "gate", "accept", "record",
+        "plan",
+        "route",
+        "provision",
+        "execute",
+        "verify",
+        "measure",
+        "gate",
+        "accept",
+        "record",
     ]

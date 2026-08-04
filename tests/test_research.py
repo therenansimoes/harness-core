@@ -24,9 +24,19 @@ GENOME_SEM_SKILLS = Genome(immutable=("harness/ruler/**",), mutable=("config/*.t
 
 def row(kind: str, ok: bool = False, exit_reason: str = "verify_failed:exit=1") -> RunRow:
     return RunRow(
-        run_id="r", unit_id="u", project=None, backend="mock", model=None,
-        tier="t0", kind=kind, ok=ok, exit_reason=exit_reason, sec_total=10.0,
-        sec_provision=0.0, cost_usd=None, intervention=False,
+        run_id="r",
+        unit_id="u",
+        project=None,
+        backend="mock",
+        model=None,
+        tier="t0",
+        kind=kind,
+        ok=ok,
+        exit_reason=exit_reason,
+        sec_total=10.0,
+        sec_provision=0.0,
+        cost_usd=None,
+        intervention=False,
         created_at=store.now_iso(),
     )
 

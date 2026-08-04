@@ -31,15 +31,33 @@ def node(state, config=None) -> dict:
 """
 
 ALL_NODES = [
-    "plan", "route", "provision", "execute", "verify", "measure",
-    "gate", "accept", "retry", "escalate", "revert", "record",
+    "plan",
+    "route",
+    "provision",
+    "execute",
+    "verify",
+    "measure",
+    "gate",
+    "accept",
+    "retry",
+    "escalate",
+    "revert",
+    "record",
 ]
 
 DEFAULT_EDGES = [
-    ["START", "plan"], ["plan", "route"], ["route", "provision"],
-    ["provision", "execute"], ["execute", "verify"], ["verify", "measure"],
-    ["measure", "gate"], ["retry", "route"], ["accept", "record"],
-    ["escalate", "record"], ["revert", "record"], ["record", "END"],
+    ["START", "plan"],
+    ["plan", "route"],
+    ["route", "provision"],
+    ["provision", "execute"],
+    ["execute", "verify"],
+    ["verify", "measure"],
+    ["measure", "gate"],
+    ["retry", "route"],
+    ["accept", "record"],
+    ["escalate", "record"],
+    ["revert", "record"],
+    ["record", "END"],
 ]
 
 
@@ -92,7 +110,8 @@ def test_modulo_aprovado_registra_e_spec_com_o_no_compila(root: Path) -> None:
         "nodes": [*ALL_NODES, "extra"],
         "edges": [
             *[e for e in DEFAULT_EDGES if e != ["plan", "route"]],
-            ["plan", "extra"], ["extra", "route"],
+            ["plan", "extra"],
+            ["extra", "route"],
         ],
     }
     topology.compile_spec(spec)  # inválida => TopologyError

@@ -55,7 +55,9 @@ DENYLIST: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bdd\b\s+(if|of)="), "dd (escrita crua em dispositivo)"),
     # `rm -rf build/` é legítimo; `rm -rf /`, `~`, `*`, `.` e `..` não.
     (
-        re.compile(r"\brm\b[^;&|]*-[a-zA-Z]*[rf][a-zA-Z]*\s+(-\S+\s+)*[/~*]|\brm\b[^;&|]*\s\.\.?(\s|$)"),
+        re.compile(
+            r"\brm\b[^;&|]*-[a-zA-Z]*[rf][a-zA-Z]*\s+(-\S+\s+)*[/~*]|\brm\b[^;&|]*\s\.\.?(\s|$)"
+        ),
         "rm recursivo em raiz, home ou glob solto",
     ),
     (re.compile(r"\b(chmod|chown|chgrp)\b[^;&|]*\s/"), "chmod/chown fora do workspace"),
@@ -136,8 +138,7 @@ _SEGMENT_SEPARATORS = set(";|&()<>")
 # o bastante para ser pego no texto cru.
 _RAW_GLOBAL = re.compile(r"\B-g\b|\B--global\b")
 _PIP_VENV_HINT = (
-    "pip fora do venv do workspace; "
-    "use install_deps ou uv pip install --python .venv/bin/python"
+    "pip fora do venv do workspace; use install_deps ou uv pip install --python .venv/bin/python"
 )
 
 
@@ -194,11 +195,10 @@ def _segment_reason(segment: list[str], root: Path) -> str | None:
     for flag in [sub, *args]:
         if flag in GLOBAL_FLAGS or ("=" in flag and flag.split("=", 1)[0] in GLOBAL_FLAGS):
             return f"instalador global/fora do workspace ({flag})"
-    if name.startswith("pip") and "/" not in prog:
-        # `uv pip` e `.venv/bin/pip` já apontam para o venv do workspace; `pip`
-        # solto é o do sistema até provar o contrário com `--python`.
-        if not _has_local_python(args, root):
-            return _PIP_VENV_HINT
+    # `uv pip` e `.venv/bin/pip` já apontam para o venv do workspace; `pip`
+    # solto é o do sistema até provar o contrário com `--python`.
+    if name.startswith("pip") and "/" not in prog and not _has_local_python(args, root):
+        return _PIP_VENV_HINT
     if name == "uv" and sub == "venv":
         target = next((a for a in args if not a.startswith("-")), None)
         if target and target.startswith("/") and not _inside(target, root):

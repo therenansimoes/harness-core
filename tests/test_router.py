@@ -40,9 +40,19 @@ def _unit(prompt: str, uid: str = "u", kind: str | None = None) -> UnitSpec:
 def _rows(n: int, kind: str, tier: str, backend: str, ok: bool) -> list[RunRow]:
     return [
         RunRow(
-            run_id=f"r{i}", unit_id="u", project="p", backend=backend, model=None,
-            tier=tier, kind=kind, ok=ok, exit_reason="done" if ok else "error",
-            sec_total=1.0, sec_provision=0.1, cost_usd=0.0, intervention=False,
+            run_id=f"r{i}",
+            unit_id="u",
+            project="p",
+            backend=backend,
+            model=None,
+            tier=tier,
+            kind=kind,
+            ok=ok,
+            exit_reason="done" if ok else "error",
+            sec_total=1.0,
+            sec_provision=0.1,
+            cost_usd=0.0,
+            intervention=False,
             created_at="2026-08-02T00:00:00+00:00",
         )
         for i in range(n)
@@ -179,9 +189,8 @@ def test_prior_floor_e_configuravel(flat_cfg):
 
 
 def test_prior_sobe_em_cascata_ate_o_topo(flat_cfg):
-    history = (
-        _rows(6, "code", "t0", "deepagents", ok=False)
-        + _rows(6, "code", "t1", "deepagents", ok=False)
+    history = _rows(6, "code", "t0", "deepagents", ok=False) + _rows(
+        6, "code", "t1", "deepagents", ok=False
     )
     sel = router.select(_unit("bug", kind="code"), history, cfg=flat_cfg)
     assert sel.tier == "t2", sel.reasons
@@ -229,8 +238,10 @@ def test_should_escalate_falso_no_topo(cfg):
 
 
 def test_load_valida_cost_rank_contiguo(tmp_path):
-    bad = PRIOR_TOML.replace('name = "t2"\nbackend = "claude_code"\nmodel = ""\nmax_turns = 40\ncost_rank = 2',
-                             'name = "t2"\nbackend = "claude_code"\nmodel = ""\nmax_turns = 40\ncost_rank = 3')
+    bad = PRIOR_TOML.replace(
+        'name = "t2"\nbackend = "claude_code"\nmodel = ""\nmax_turns = 40\ncost_rank = 2',
+        'name = "t2"\nbackend = "claude_code"\nmodel = ""\nmax_turns = 40\ncost_rank = 3',
+    )
     p = tmp_path / "models.toml"
     p.write_text(bad, encoding="utf-8")
     with pytest.raises(router.RouterError):

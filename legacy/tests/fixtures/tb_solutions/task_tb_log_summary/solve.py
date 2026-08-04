@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Solução de referência para task_tb_log_summary — lê logs/, escreve summary.csv.
 Rodar no diretório do workspace (após copiar fixtures/logs)."""
+
 import csv
 import re
 from datetime import datetime, timedelta

@@ -25,9 +25,10 @@ o loop não afrouxa o próprio prazo.
 from __future__ import annotations
 
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Mapping
+from typing import Any, Literal
 
 from harness.routing import config_dir
 
@@ -116,9 +117,7 @@ def load_gov(path: Path | None = None) -> Governor:
         cycle_s=_cap_float(deadline.get("cycle_s"), base.cycle_s),
         cost_cap_usd=_cap_float(pressure.get("cost_cap_usd"), base.cost_cap_usd),
         turn_taper=_frac(pressure.get("turn_taper"), base.turn_taper),
-        explore_frac_start=_frac(
-            focus.get("explore_frac_start"), base.explore_frac_start
-        ),
+        explore_frac_start=_frac(focus.get("explore_frac_start"), base.explore_frac_start),
         explore_frac_end=_frac(focus.get("explore_frac_end"), base.explore_frac_end),
         bench_after=_pos_int(focus.get("bench_after"), base.bench_after),
         bench_cycles=_pos_int(focus.get("bench_cycles"), base.bench_cycles),
@@ -274,10 +273,10 @@ def bench_with_expiry(
         except (KeyError, TypeError, ValueError):
             entered = None
         if entered is None or entered < 0 or entered > cycle:
-            out[key] = cycle           # entrando agora (ou marca do futuro)
+            out[key] = cycle  # entrando agora (ou marca do futuro)
             banned.add(name)
         elif cycle - entered >= gov.bench_cycles:
-            continue                   # cumpriu o prazo: sai do banco e da marca
+            continue  # cumpriu o prazo: sai do banco e da marca
         else:
             out[key] = entered
             banned.add(name)

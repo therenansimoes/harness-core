@@ -84,17 +84,18 @@ class SpyBackend:
 
     name = "spy"
 
-    def __init__(
-        self, seen: list, min_turns: int | None = None, boom: bool = False
-    ) -> None:
+    def __init__(self, seen: list, min_turns: int | None = None, boom: bool = False) -> None:
         self.seen = seen
         self.min_turns = min_turns
         self.boom = boom
 
     def capabilities(self) -> Capabilities:
         return Capabilities(
-            resumable=False, reports_cost=True, model_selectable=False,
-            tools=frozenset({"write"}), streaming=False,
+            resumable=False,
+            reports_cost=True,
+            model_selectable=False,
+            tools=frozenset({"write"}),
+            streaming=False,
         )
 
     def preflight(self) -> Preflight:
@@ -110,8 +111,14 @@ class SpyBackend:
             (req.workspace / OUTPUT).write_text("x", encoding="utf-8")
             changed = (OUTPUT,)
         return ExecResult(
-            ok=True, exit_reason="done", turns=1, cost_usd=0.0, tokens_in=0,
-            tokens_out=0, files_changed=changed, session_id=None,
+            ok=True,
+            exit_reason="done",
+            turns=1,
+            cost_usd=0.0,
+            tokens_in=0,
+            tokens_out=0,
+            files_changed=changed,
+            session_id=None,
             trace_path=req.trace_path,
         )
 
@@ -160,10 +167,20 @@ def seed_failures(sandbox: Path, n: int = 3) -> None:
     for i in range(n):
         store.record_run(
             RunRow(
-                run_id=f"seed{i}", unit_id="echo", project=None, backend="mock",
-                model=None, tier="t0", kind="code", ok=False,
-                exit_reason="verify_failed", sec_total=10.0, sec_provision=0.0,
-                cost_usd=0.0, intervention=False, created_at=store.now_iso(),
+                run_id=f"seed{i}",
+                unit_id="echo",
+                project=None,
+                backend="mock",
+                model=None,
+                tier="t0",
+                kind="code",
+                ok=False,
+                exit_reason="verify_failed",
+                sec_total=10.0,
+                sec_provision=0.0,
+                cost_usd=0.0,
+                intervention=False,
+                created_at=store.now_iso(),
             ),
             path=db(sandbox),
         )
@@ -247,7 +264,7 @@ def test_config_dir_pinado(sandbox, spy, monkeypatch):
 
     # 99 (ou zero run, com o backend da isca que nem existe) = leu a árvore errada
     assert [req.max_turns for req in seen] == [3, 9] * 6
-    assert os.environ["HARNESS_CONFIG_DIR"] == str(isca)   # restaurado no fim
+    assert os.environ["HARNESS_CONFIG_DIR"] == str(isca)  # restaurado no fim
 
 
 # --- ledger do experimento que não terminou --------------------------------------

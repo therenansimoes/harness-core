@@ -53,10 +53,20 @@ def _run(data: Path, run_id: str, tools, ok: bool) -> None:
     _trace(data, run_id, tools)
     store.record_run(
         RunRow(
-            run_id=run_id, unit_id=run_id, project=None,
-            backend="mock", model=None, tier="t0", kind="code", ok=ok,
-            exit_reason="ok" if ok else "verify_failed", sec_total=1.0, sec_provision=0.0,
-            cost_usd=0.0, intervention=False, created_at=store.now_iso(),
+            run_id=run_id,
+            unit_id=run_id,
+            project=None,
+            backend="mock",
+            model=None,
+            tier="t0",
+            kind="code",
+            ok=ok,
+            exit_reason="ok" if ok else "verify_failed",
+            sec_total=1.0,
+            sec_provision=0.0,
+            cost_usd=0.0,
+            intervention=False,
+            created_at=store.now_iso(),
         ),
         path=data / "runs.sqlite",
     )
@@ -137,10 +147,20 @@ def test_run_sem_trace_nao_conta_como_evidencia(data):
     _corpus(data, [VENCEDOR] * 3, [PERDEDOR] * 3)
     store.record_run(
         RunRow(
-            run_id="ok-fantasma", unit_id="u", project=None,
-            backend="mock", model=None, tier="t0", kind="code", ok=True,
-            exit_reason="ok", sec_total=1.0, sec_provision=0.0, cost_usd=0.0,
-            intervention=False, created_at=store.now_iso(),
+            run_id="ok-fantasma",
+            unit_id="u",
+            project=None,
+            backend="mock",
+            model=None,
+            tier="t0",
+            kind="code",
+            ok=True,
+            exit_reason="ok",
+            sec_total=1.0,
+            sec_provision=0.0,
+            cost_usd=0.0,
+            intervention=False,
+            created_at=store.now_iso(),
         ),
         path=data / "runs.sqlite",
     )

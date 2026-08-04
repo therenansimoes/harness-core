@@ -44,9 +44,7 @@ def test_new_escalation_carries_prior_decision(data_dir):
     """O caso fecha aqui: gravado no resume, lido na parada seguinte."""
     decisions.record_decision("code", esc.NO_GRADIENT, CTX, ANSWER)
 
-    payload = esc.payload(
-        esc.NO_GRADIENT, unit="u1", evidence={"history": 0}, kind="code"
-    )
+    payload = esc.payload(esc.NO_GRADIENT, unit="u1", evidence={"history": 0}, kind="code")
 
     prior = payload["evidence"]["prior_decisions"]
     assert "humano disse antes (não é ordem)" in prior
@@ -84,9 +82,87 @@ def test_cli_resume_records_the_case(data_dir):
     assert "humano disse antes" not in cases[0]
 
 
+def test_recall_pelo_vocabulario_estavel_nao_pelo_hint(data_dir):
+    """O caso é encontrado por identificador curto, não por prosa do checker.
+
+    Esta é a ponta que estava solta: no retry a query era o `reflect_hint`, e
+    nenhuma palavra dele existe do lado gravado — o recall voltava vazio sempre.
+    """
+    ctx = "u4c_persistencia verify_failed check:persistencia"
+    decisions.record_decision("code", esc.NO_GRADIENT, ctx, ANSWER)
+
+    # O que `run_graph._prior_query` monta: kind + classe de saída + check.
+    achou = decisions.recall_decisions("code", "code verify_failed persistencia")
+    assert achou and ANSWER in achou[0]
+    # Só o nome do check reprovado já basta: é o que faz dois casos serem um.
+    assert decisions.recall_decisions("code", "persistencia")
+
+    # Vocabulário antigo: o hint verboso sozinho não cruza com nada do caso.
+    hint = "régua reprovou exit 2; arquivos exigidos não apareceram no diff"
+    assert decisions.recall_decisions("code", hint) == []
+
+
+def test_retry_prompt_monta_query_dos_checks_reprovados(data_dir, tmp_path):
+    """Ponta de leitura real: `_prior_query` sai do verdict, não do hint."""
+    from pathlib import Path
+
+    from harness.graph import run_graph
+    from harness.types import UnitSpec, Verdict
+
+    unit = UnitSpec(
+        id="u4c_persistencia",
+        path=tmp_path,
+        prompt="faz",
+        verify_cmd="true",
+        kind="code",
+    )
+    verdict = Verdict(
+        passed=False,
+        exit_code=2,
+        log_path=Path("/dev/null"),
+        sec=0.1,
+        score=0.5,
+        failed=("persistencia",),
+    )
+
+    query = run_graph._prior_query({"unit": unit, "verdict": verdict})
+
+    assert query.split() == ["code", "verify_failed", "persistencia"]
+    decisions.record_decision(
+        "code",
+        esc.NO_GRADIENT,
+        "u4c_persistencia verify_failed check:persistencia",
+        ANSWER,
+    )
+    assert decisions.recall_decisions("code", query)
+    # Verdict verde (ou ausente) não inventa classe de saída na query.
+    assert run_graph._prior_query({"unit": unit, "verdict": None}) == "code"
+
+
+def test_cli_grava_termos_estaveis_no_contexto(data_dir):
+    """Ponta de escrita: os termos que a leitura procura entram no contexto."""
+    pending = {
+        "reason": esc.DEADLINE,
+        "unit": ["u4c_persistencia"],
+        "evidence": {
+            "node": "run_arms",
+            "kind": "code",
+            "failed": ["persistencia"],
+            "exit_reason": "verify_failed",
+        },
+    }
+
+    cli._record_human_decision(pending, {"action": "abort"})
+
+    # Achado pela query do retry, sem nenhuma palavra do hint no meio.
+    cases = decisions.recall_decisions("code", "code verify_failed persistencia")
+    assert cases and json.dumps({"action": "abort"}) in cases[0]
+
+
 def test_fail_open_sem_fts5(data_dir, monkeypatch):
     """Sqlite sem FTS5 (ou banco quebrado): grava não grava, lê não lê, e a
     escalação sai normal — memória que derruba o loop vale menos que nenhuma."""
+
     def boom(*a, **kw):
         raise RuntimeError("no such module: fts5")
 
@@ -110,9 +186,7 @@ def test_kill_switch_nao_grava_nem_le(data_dir, monkeypatch):
     monkeypatch.setenv(decisions.ENV_ENABLED, "0")
 
     assert decisions.recall_decisions("code", esc.NO_GRADIENT) == []
-    assert "prior_decisions" not in esc.payload(
-        esc.NO_GRADIENT, unit="u1", kind="code"
-    )["evidence"]
+    assert "prior_decisions" not in esc.payload(esc.NO_GRADIENT, unit="u1", kind="code")["evidence"]
     # Bloco: mesmo switch para os caminhos de exame/screening.
     monkeypatch.delenv(decisions.ENV_ENABLED)
     with decisions.disabled():

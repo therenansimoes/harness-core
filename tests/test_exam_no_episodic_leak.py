@@ -70,9 +70,7 @@ def test_screening_nao_grava_gabarito_na_episodica(tmp_path, global_dir):
     quarantine = tmp_path / "quarantine"
     _mk_unit(quarantine, "q_leak")
 
-    frontier = coevolve.screen_quarantine(
-        quarantine_dir=quarantine, data_dir=tmp_path / "exp"
-    )
+    frontier = coevolve.screen_quarantine(quarantine_dir=quarantine, data_dir=tmp_path / "exp")
 
     assert frontier == ["q_leak"]
     assert not any(SECRET in t for t in _traces(global_dir))

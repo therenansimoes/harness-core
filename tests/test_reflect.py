@@ -85,13 +85,9 @@ def _unit(tmp_path: Path, name: str, verify_cmd: str) -> Path:
     return unit
 
 
-def test_hint_cita_arquivo_exigido_e_entra_no_prompt_da_2a_tentativa(
-    data_dir, tmp_path, recorder
-):
+def test_hint_cita_arquivo_exigido_e_entra_no_prompt_da_2a_tentativa(data_dir, tmp_path, recorder):
     unit = _unit(tmp_path, "skeptic", f"grep -q pronto {MISSING}")
-    final = run_unit(
-        unit, "recorder", None, data_dir, thread_id="t-reflect", max_attempts=2
-    )
+    final = run_unit(unit, "recorder", None, data_dir, thread_id="t-reflect", max_attempts=2)
 
     assert final["attempt"] == 1
     hint = final["reflect_hint"]

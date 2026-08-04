@@ -42,10 +42,10 @@ import os
 import random
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Annotated, Any, Sequence, TypedDict
+from typing import Annotated, Any, TypedDict
 
 from harness.graph.checkpoint import open_checkpointer
 from harness.graph.run_graph import CFG_BACKEND, CFG_DATA_DIR, CFG_MODEL, _cfg, _event
@@ -263,9 +263,7 @@ def _expired(state: AutopilotState, node: str, config=None) -> dict | None:
     budget = state["budget"]
     now = _now(config)
     if budget.expired(now):
-        return _stop(
-            state, esc.DEADLINE, {"node": node, "deadline_ts": budget.deadline_ts}
-        )
+        return _stop(state, esc.DEADLINE, {"node": node, "deadline_ts": budget.deadline_ts})
     from harness.governor import governor as gov_mod
 
     started = state.get("cycle_started_ts")
@@ -341,8 +339,13 @@ def _pick_target(state: AutopilotState, config=None) -> dict:
         if chosen is None:
             return _stop(state, esc.ERROR, {"forced_rule_id": forced, "found": 0})
         target = Target(
-            rule=chosen, pattern="human", freq=0.0, avg_cost=0.0,
-            prior=chosen.prior(), gain=0.0, reasons=("human:forced",),
+            rule=chosen,
+            pattern="human",
+            freq=0.0,
+            avg_cost=0.0,
+            prior=chosen.prior(),
+            gain=0.0,
+            reasons=("human:forced",),
         )
     else:
         applicable = _applicable(rules, root, db)
@@ -444,7 +447,7 @@ def _applicable(rules: Sequence[Rule], root: Path, db: Path) -> list[Rule]:
         try:
             current = mutate.read_value(root / rule.target_file, rule.key)
         except (OSError, MutationError):
-            continue          # regra apontando pra chave que não existe mais
+            continue  # regra apontando pra chave que não existe mais
         if current == rule.from_value:
             out.append(rule)
     return out
@@ -463,13 +466,21 @@ def _propose(state: AutopilotState, config=None) -> dict:
         return _stop(
             state,
             esc.ERROR,
-            {"error": "catálogo desatualizado", "key": rule.key,
-             "current": repr(current), "expected": repr(rule.from_value)},
+            {
+                "error": "catálogo desatualizado",
+                "key": rule.key,
+                "current": repr(current),
+                "expected": repr(rule.from_value),
+            },
         )
     return {
         "events": [
-            _event("propose", rule=rule.id, key=rule.key,
-                   change=f"{rule.from_value!r}->{rule.to_value!r}")
+            _event(
+                "propose",
+                rule=rule.id,
+                key=rule.key,
+                change=f"{rule.from_value!r}->{rule.to_value!r}",
+            )
         ]
     }
 
@@ -503,20 +514,23 @@ def _genome_check(state: AutopilotState, config=None) -> dict:
         path=_db(config),
     )
     stop = _stop(
-        state, esc.GENOME_VIOLATION,
+        state,
+        esc.GENOME_VIOLATION,
         {"rule": rule.id, "target_file": rule.target_file, "violations": len(violations)},
     )
-    stop["results"] = [{
-        "cycle": state["cycle"],
-        "rule_id": rule.id,
-        "mutation_id": mid,
-        "verdict": REJECTED,
-        "arm_a": "0/0",
-        "arm_b": "0/0",
-        "delta": None,
-        "reverted": False,
-        "note": ";".join(violations),
-    }]
+    stop["results"] = [
+        {
+            "cycle": state["cycle"],
+            "rule_id": rule.id,
+            "mutation_id": mid,
+            "verdict": REJECTED,
+            "arm_a": "0/0",
+            "arm_b": "0/0",
+            "delta": None,
+            "reverted": False,
+            "note": ";".join(violations),
+        }
+    ]
     stop["aborted"] = True
     return stop
 
@@ -588,7 +602,7 @@ def _apply(state: AutopilotState, config=None) -> dict:
             attempt=state["cycle"],
         )
         mutation = mutate.apply(rule, ts, root=_root(config))
-    except GenomeViolation as exc:      # cinto e suspensório do genome_check
+    except GenomeViolation as exc:  # cinto e suspensório do genome_check
         return _stop(state, esc.GENOME_VIOLATION, {"violations": len(exc.violations)})
     except (OSError, MutationError) as exc:
         return _stop(state, esc.ERROR, {"error": str(exc)})
@@ -655,13 +669,16 @@ def _fanout_ab(state: AutopilotState, config=None) -> dict:
     totals = {"a": Arm(0, 0), "b": Arm(0, 0)}
     # Eixos do Pareto somados sobre TODAS as unidades: custo com denominador
     # próprio (run que não mediu sai dos dois lados da divisão), tempo com o seu.
-    acc = {label: {"cost_sum": 0.0, "cost_n": 0, "sec_sum": 0.0, "sec_n": 0}
-           for label in ("a", "b")}
+    acc = {
+        label: {"cost_sum": 0.0, "cost_n": 0, "sec_sum": 0.0, "sec_n": 0} for label in ("a", "b")
+    }
     try:
         for unit in state["units"]:
             unit_spec = load_unit(Path(unit))
             report = run_ab(
-                unit, n=n, data_dir=data_dir,
+                unit,
+                n=n,
+                data_dir=data_dir,
                 before_run=before_run,
                 # O rótulo do braço não entra na conta: quem diz A de B é o
                 # estado do toml que o `before_run` acabou de deixar no disco.
@@ -669,9 +686,7 @@ def _fanout_ab(state: AutopilotState, config=None) -> dict:
                 intervention=state["interventions"] > 0,
             )
             for label, arm in (("a", report.arm_a), ("b", report.arm_b)):
-                totals[label] = Arm(
-                    totals[label].succ + arm.succ, totals[label].n + arm.n
-                )
+                totals[label] = Arm(totals[label].succ + arm.succ, totals[label].n + arm.n)
             for label, arm_rows in (("a", report.rows_a), ("b", report.rows_b)):
                 bucket = acc[label]
                 for row in arm_rows:
@@ -690,19 +705,22 @@ def _fanout_ab(state: AutopilotState, config=None) -> dict:
             revert_error = None
         except (OSError, MutationError) as exc:
             revert_error = str(exc)
-        return _stop(state, esc.DEADLINE, {
-            "node": "fanout_ab",
-            "deadline_ts": state["budget"].deadline_ts,
-            "reverted": revert_error is None,
-            "revert_error": revert_error,
-        })
-    except Exception as exc:   # preflight, unit ilegível, backend explodindo
+        return _stop(
+            state,
+            esc.DEADLINE,
+            {
+                "node": "fanout_ab",
+                "deadline_ts": state["budget"].deadline_ts,
+                "reverted": revert_error is None,
+                "revert_error": revert_error,
+            },
+        )
+    except Exception as exc:  # preflight, unit ilegível, backend explodindo
         return _stop(state, esc.ERROR, {"error": f"{type(exc).__name__}: {exc}"})
 
     axes = {label: _mean_axes(acc[label]) for label in ("a", "b")}
     return {
-        "arms": {"a": [totals["a"].succ, totals["a"].n],
-                 "b": [totals["b"].succ, totals["b"].n]},
+        "arms": {"a": [totals["a"].succ, totals["a"].n], "b": [totals["b"].succ, totals["b"].n]},
         "axes": axes,
         "events": [
             _event(
@@ -710,7 +728,7 @@ def _fanout_ab(state: AutopilotState, config=None) -> dict:
                 units=len(state["units"]),
                 n=n,
                 parallel=parallel,
-                sequential=True,   # config global: ver docstring do módulo
+                sequential=True,  # config global: ver docstring do módulo
                 a=_arm_text(totals["a"]),
                 b=_arm_text(totals["b"]),
                 cost_a=axes["a"]["cost_usd"],
@@ -744,7 +762,10 @@ def _score(state: AutopilotState, config=None) -> dict:
         "verdict": verdict,
         "events": [
             _event(
-                "score", verdict=verdict, a=_arm_text(arm_a), b=_arm_text(arm_b),
+                "score",
+                verdict=verdict,
+                a=_arm_text(arm_a),
+                b=_arm_text(arm_b),
                 **extra,
             )
         ],
@@ -766,11 +787,7 @@ def _revert_cfg(state: AutopilotState, config=None) -> dict:
         # Revert que falha em silêncio é pior que não reverter: o ledger diria
         # `reverted` e o arquivo continuaria mudado.
         error = str(exc)
-    return {
-        "events": [
-            _event("revert_cfg", mutation=mutation.mutation_id, error=error)
-        ]
-    }
+    return {"events": [_event("revert_cfg", mutation=mutation.mutation_id, error=error)]}
 
 
 def _attribute(state: AutopilotState, config=None) -> dict:
@@ -849,22 +866,24 @@ def _record(state: AutopilotState, config=None) -> dict:
         "abort_reason": None,
         # Ciclo fechado, relógio zerado: o próximo `pick_target` estampa o dele.
         "cycle_started_ts": None,
-        "results": [{
-            "cycle": state["cycle"],
-            "rule_id": mutation.rule_id,
-            "mutation_id": mutation.mutation_id,
-            "key": mutation.key,
-            "change": f"{mutation.before_raw}->{mutation.after_raw}",
-            "verdict": verdict,
-            "arm_a": _arm_text(arm_a),
-            "arm_b": _arm_text(arm_b),
-            "delta": rate_b - rate_a,
-            "gain": target.get("gain"),
-            "pattern": target.get("pattern"),
-            "action": action,
-            "reverted": reverted,
-            "note": note,
-        }],
+        "results": [
+            {
+                "cycle": state["cycle"],
+                "rule_id": mutation.rule_id,
+                "mutation_id": mutation.mutation_id,
+                "key": mutation.key,
+                "change": f"{mutation.before_raw}->{mutation.after_raw}",
+                "verdict": verdict,
+                "arm_a": _arm_text(arm_a),
+                "arm_b": _arm_text(arm_b),
+                "delta": rate_b - rate_a,
+                "gain": target.get("gain"),
+                "pattern": target.get("pattern"),
+                "action": action,
+                "reverted": reverted,
+                "note": note,
+            }
+        ],
         "events": [_event("record", mutation=mutation.mutation_id, verdict=verdict)],
     }
 
@@ -884,7 +903,7 @@ def _record_aborted(state: AutopilotState, config=None) -> None:
     try:
         reverted = not mutate.is_applied(mutation, root=_root(config))
     except (OSError, MutationError):
-        reverted = False      # não deu para conferir: não se afirma que voltou
+        reverted = False  # não deu para conferir: não se afirma que voltou
     store.record_mutation(
         MutationRow(
             mutation_id=mutation.mutation_id,
@@ -995,15 +1014,11 @@ def build_autopilot_graph(checkpointer):
     b.add_edge("revert_cfg", "attribute")
     b.add_edge("attribute", "record")
     b.add_conditional_edges("record", _after_record, ["pick_target", END])
-    b.add_conditional_edges(
-        "escalate", _after_escalate, ["pick_target", "revert_cfg", END]
-    )
+    b.add_conditional_edges("escalate", _after_escalate, ["pick_target", "revert_cfg", END])
     return b.compile(checkpointer=checkpointer)
 
 
-def initial_state(
-    units: Sequence[str], cycles: int, budget: Budget
-) -> AutopilotState:
+def initial_state(units: Sequence[str], cycles: int, budget: Budget) -> AutopilotState:
     return AutopilotState(
         cycle=0,
         cycles=cycles,
@@ -1066,7 +1081,7 @@ def _pending_rules(rules: Sequence[Rule], base: Path, db: Path) -> list[str]:
         try:
             current = mutate.read_value(base / rule.target_file, rule.key)
         except (OSError, MutationError):
-            continue          # regra apontando pra chave que não existe mais
+            continue  # regra apontando pra chave que não existe mais
         if current == rule.to_value:
             dirty.append(rule.id)
     return dirty
@@ -1143,7 +1158,7 @@ def run_autopilot(
 
             payload: Any = Command(resume=resume)
         elif graph.get_state(config).next:
-            payload = None            # thread parada no meio: retoma sem entrada
+            payload = None  # thread parada no meio: retoma sem entrada
         else:
             payload = initial_state(units, cycles, budget)
         final = graph.invoke(payload, config)

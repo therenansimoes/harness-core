@@ -27,15 +27,15 @@ import pytest
 from harness import uiverify
 from harness.backends import dom_tools, procs
 
-FAKE_CHROME_DOM = '''#!{python}
+FAKE_CHROME_DOM = """#!{python}
 import os, sys
 sys.stdout.write(open(os.environ["HARNESS_FAKE_DOM"], encoding="utf-8").read())
-'''
+"""
 
-FAKE_CHROME_MUDO = '''#!{python}
+FAKE_CHROME_MUDO = """#!{python}
 import sys
 sys.exit(1)
-'''
+"""
 
 # Três violações, e o dobro de markup correto em volta para o parser ter chance de
 # errar: img com alt, input com <label for>, input dentro do <label>, input
@@ -117,7 +117,7 @@ def test_a11y_acha_as_tres_violacoes_e_nenhuma_a_mais(tmp_path):
 
     out = dom_tools.a11y_audit(tmp_path, dist_path="dist")
 
-    achados = [l for l in out.splitlines() if l.startswith("achado:")]
+    achados = [ln for ln in out.splitlines() if ln.startswith("achado:")]
     assert len(achados) == 3, out
     assert "3 achados" in out
     # Cada achado é de uma classe diferente e aponta o elemento errado, não o certo.
@@ -189,8 +189,12 @@ def test_contrast_ratio_bate_com_a_wcag():
     prova que a curva de luminância está certa, não só a fórmula da razão.
     """
     assert dom_tools.contrast_ratio((0, 0, 0), (255, 255, 255)) == pytest.approx(21.0, abs=0.01)
-    assert dom_tools.contrast_ratio((0x76, 0x76, 0x76), (255, 255, 255)) == pytest.approx(4.54, abs=0.02)
-    assert dom_tools.contrast_ratio((255, 255, 255), (255, 255, 255)) == pytest.approx(1.0, abs=0.01)
+    assert dom_tools.contrast_ratio((0x76, 0x76, 0x76), (255, 255, 255)) == pytest.approx(
+        4.54, abs=0.02
+    )
+    assert dom_tools.contrast_ratio((255, 255, 255), (255, 255, 255)) == pytest.approx(
+        1.0, abs=0.01
+    )
 
 
 def test_parse_color_diz_nao_sei_em_vez_de_chutar():
@@ -344,7 +348,9 @@ def test_fallback_get_cru_quando_o_chrome_falha(tmp_path, monkeypatch):
 
     raiz = tmp_path / "site"
     raiz.mkdir()
-    (raiz / "index.html").write_text('<html><body><p id="l">servido</p></body></html>', encoding="utf-8")
+    (raiz / "index.html").write_text(
+        '<html><body><p id="l">servido</p></body></html>', encoding="utf-8"
+    )
 
     class _Handler(SimpleHTTPRequestHandler):
         def __init__(self, *a, **kw):
@@ -359,7 +365,16 @@ def test_fallback_get_cru_quando_o_chrome_falha(tmp_path, monkeypatch):
         ws = tmp_path / "ws"
         (ws / ".harness").mkdir(parents=True)
         procs.procs_path(ws).write_text(
-            json.dumps([{"id": "s", "pid": os.getpid(), "pgid": os.getpid(), "port": httpd.server_address[1]}]),
+            json.dumps(
+                [
+                    {
+                        "id": "s",
+                        "pid": os.getpid(),
+                        "pgid": os.getpid(),
+                        "port": httpd.server_address[1],
+                    }
+                ]
+            ),
             encoding="utf-8",
         )
 
@@ -390,5 +405,7 @@ def test_tools_devolvem_string_em_vez_de_exceção(monkeypatch):
     monkeypatch.setattr(dom_tools, "fetch_dom", explode)
     inspecionar, auditar = dom_tools.make_dom_tools("/tmp")
 
-    assert "inspect_dom falhou: RuntimeError: boom" in inspecionar.invoke({"selector": "div", "port": 1})
+    assert "inspect_dom falhou: RuntimeError: boom" in inspecionar.invoke(
+        {"selector": "div", "port": 1}
+    )
     assert "a11y_audit falhou: RuntimeError: boom" in auditar.invoke({"port": 1})

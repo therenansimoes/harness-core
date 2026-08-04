@@ -62,8 +62,7 @@ def test_regressao_de_kpi_forca_revert(data_dir, unit, tmp_path):
 
 
 def test_revert_aparece_no_stdout(data_dir, unit, tmp_path, capsys):
-    cli.main(["run", "--unit", unit, "--backend", "mock",
-              "--repo", str(_repo(tmp_path, REGRIDE))])
+    cli.main(["run", "--unit", unit, "--backend", "mock", "--repo", str(_repo(tmp_path, REGRIDE))])
     out = capsys.readouterr().out
     assert "revert" in out and "kpi_regression:arquivos" in out
 

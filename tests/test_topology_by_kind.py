@@ -66,7 +66,7 @@ def test_retrocompat_todo_kind_resolve_no_topo_do_repo():
     spec = topology.load_spec()
     esperado = {"nodes": spec["nodes"], "edges": spec["edges"]}
     assert by_kind.kinds_declared(spec) == []
-    for kind in sorted(VALID_KINDS) + [None]:
+    for kind in [*sorted(VALID_KINDS), None]:
         assert by_kind.resolve_spec(spec, kind) == esperado
         assert topology.compile_spec(by_kind.resolve_spec(spec, kind)) is not None
 

@@ -48,10 +48,23 @@ def _ok() -> subprocess.CompletedProcess:
 
 def _write_result_row(worktree: Path, success: int, cost: float) -> None:
     header = "\t".join(experiment.RESULTS_HEADER)
-    row = "\t".join(str(v) for v in [
-        "2026-08-02T00:00:00+00:00", "vtest", "cli", "m", "fixed", "task_j_b2b",
-        success, "1.0", "100", f"{cost:.4f}", "1", "",
-    ])
+    row = "\t".join(
+        str(v)
+        for v in [
+            "2026-08-02T00:00:00+00:00",
+            "vtest",
+            "cli",
+            "m",
+            "fixed",
+            "task_j_b2b",
+            success,
+            "1.0",
+            "100",
+            f"{cost:.4f}",
+            "1",
+            "",
+        ]
+    )
     path = worktree / "results.tsv"
     if not path.exists():
         path.write_text(header + "\n")
@@ -126,7 +139,9 @@ def test_parse_experiment_campos_obrigatorios(tmp_path):
 
 def test_parse_experiment_falta_campo(tmp_path):
     p = tmp_path / "bad.toml"
-    p.write_text('name = "sem_task"\nn_per_arm = 1\nbudget_usd = 1.0\n[mutation]\nold="a"\nnew="b"\n')
+    p.write_text(
+        'name = "sem_task"\nn_per_arm = 1\nbudget_usd = 1.0\n[mutation]\nold="a"\nnew="b"\n'
+    )
     with pytest.raises(experiment.ExperimentError):
         experiment.parse_experiment(p)
 
@@ -170,8 +185,16 @@ def test_para_no_budget_no_par_completo(tmp_path, monkeypatch):
 
 def _agg(successes_a, n_a, successes_b, n_b) -> dict:
     def arm(successes, n):
-        return {"n": n, "successes": successes, "success_rate": successes / n if n else 0.0,
-                "cost_usd_total": 0.0, "cost_usd_avg": 0.0, "tokens_avg": 0.0, "turns_avg": 0.0}
+        return {
+            "n": n,
+            "successes": successes,
+            "success_rate": successes / n if n else 0.0,
+            "cost_usd_total": 0.0,
+            "cost_usd_avg": 0.0,
+            "tokens_avg": 0.0,
+            "turns_avg": 0.0,
+        }
+
     return {"A": arm(successes_a, n_a), "B": arm(successes_b, n_b)}
 
 
@@ -197,10 +220,12 @@ def test_draft_e_json_tres_cenarios(tmp_path, monkeypatch):
     # cada item é (sucesso_A, sucesso_B) de um par; script flat = [A,B,A,B,...] na ordem de consumo.
     # N=6 por braço é o mínimo que a régua de Wilson aceita para opinar.
     cenarios = [
-        ([(0, 1)] * 6, "promover"),                            # A=0/6, B=6/6
-        ([(1, 0)] * 6, "rejeitar"),                            # A=6/6, B=0/6
-        ([(1, 1), (1, 1), (0, 1), (0, 1), (1, 0), (0, 0)],     # A=3/6, B=4/6
-         "inconclusivo"),
+        ([(0, 1)] * 6, "promover"),  # A=0/6, B=6/6
+        ([(1, 0)] * 6, "rejeitar"),  # A=6/6, B=0/6
+        (
+            [(1, 1), (1, 1), (0, 1), (0, 1), (1, 0), (0, 0)],  # A=3/6, B=4/6
+            "inconclusivo",
+        ),
     ]
     for i, (pairs, expected) in enumerate(cenarios):
         script = [item for a, b in pairs for item in ((a, 0.0), (b, 0.0))]
@@ -271,7 +296,9 @@ new = "MAX_TURNS = 25"
 """
 
 
-def _write_parallel_cfg(tmp_path: Path, name: str, n: int, budget: float, est: float = 0.35) -> Path:
+def _write_parallel_cfg(
+    tmp_path: Path, name: str, n: int, budget: float, est: float = 0.35
+) -> Path:
     p = tmp_path / f"{name}.toml"
     p.write_text(PARALLEL_TOML.format(name=name, n=n, budget=budget, est=est))
     return p
@@ -297,10 +324,23 @@ def _make_fake_popen(script):
             success, cost = script.pop(0)
             results_path = Path(env["HARNESS_RESULTS"])
             header = "\t".join(experiment.RESULTS_HEADER)
-            row = "\t".join(str(v) for v in [
-                "2026-08-02T00:00:00+00:00", "vtest", "cli", "m", "fixed", "task_j_b2b",
-                success, "1.0", "100", f"{cost:.4f}", "1", "",
-            ])
+            row = "\t".join(
+                str(v)
+                for v in [
+                    "2026-08-02T00:00:00+00:00",
+                    "vtest",
+                    "cli",
+                    "m",
+                    "fixed",
+                    "task_j_b2b",
+                    success,
+                    "1.0",
+                    "100",
+                    f"{cost:.4f}",
+                    "1",
+                    "",
+                ]
+            )
             results_path.write_text(header + "\n" + row + "\n")
             self.returncode = 0
 
@@ -328,10 +368,23 @@ def _make_concurrency_popen(script):
             success, cost = script.pop(0)
             results_path = Path(env["HARNESS_RESULTS"])
             header = "\t".join(experiment.RESULTS_HEADER)
-            row = "\t".join(str(v) for v in [
-                "2026-08-02T00:00:00+00:00", "vtest", "cli", "m", "fixed", "task_j_b2b",
-                success, "1.0", "100", f"{cost:.4f}", "1", "",
-            ])
+            row = "\t".join(
+                str(v)
+                for v in [
+                    "2026-08-02T00:00:00+00:00",
+                    "vtest",
+                    "cli",
+                    "m",
+                    "fixed",
+                    "task_j_b2b",
+                    success,
+                    "1.0",
+                    "100",
+                    f"{cost:.4f}",
+                    "1",
+                    "",
+                ]
+            )
             results_path.write_text(header + "\n" + row + "\n")
             self.returncode = None
             self._polls = 0
@@ -357,7 +410,9 @@ def _make_concurrency_popen(script):
 
 def test_parallel_dispara_tudo_e_coleta(tmp_path, monkeypatch):
     cfg = experiment.parse_experiment(_write_parallel_cfg(tmp_path, "par1", n=3, budget=100.0))
-    fake_run = FakeRun(script=[])  # só git worktree add/remove + bash setup.sh — sem run_task.py aqui
+    fake_run = FakeRun(
+        script=[]
+    )  # só git worktree add/remove + bash setup.sh — sem run_task.py aqui
     fake_popen = _make_fake_popen(script=[(1, 0.1)] * 6)  # 3 pares, tudo sucesso
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
@@ -367,9 +422,12 @@ def test_parallel_dispara_tudo_e_coleta(tmp_path, monkeypatch):
     assert result["mode"] == "parallel"
     assert len(fake_popen.calls) == 6  # TODOS disparados, nenhum esperado antes do próximo
     assert [c["run_id"] for c in fake_popen.calls] == [
-        "par1_A_0_" + result["timestamp"], "par1_B_0_" + result["timestamp"],
-        "par1_A_1_" + result["timestamp"], "par1_B_1_" + result["timestamp"],
-        "par1_A_2_" + result["timestamp"], "par1_B_2_" + result["timestamp"],
+        "par1_A_0_" + result["timestamp"],
+        "par1_B_0_" + result["timestamp"],
+        "par1_A_1_" + result["timestamp"],
+        "par1_B_1_" + result["timestamp"],
+        "par1_A_2_" + result["timestamp"],
+        "par1_B_2_" + result["timestamp"],
     ]
     assert result["n_per_arm_effective"] == 3
     assert result["budget_capped"] is False
@@ -395,9 +453,12 @@ def test_parallel_respeita_max_workers(tmp_path, monkeypatch):
     assert fake_popen.state["peak"] == 2  # teto respeitado, e o pool foi usado de fato
     assert len(fake_popen.calls) == 6
     assert [c["run_id"] for c in fake_popen.calls] == [
-        "parmw_A_0_" + result["timestamp"], "parmw_B_0_" + result["timestamp"],
-        "parmw_A_1_" + result["timestamp"], "parmw_B_1_" + result["timestamp"],
-        "parmw_A_2_" + result["timestamp"], "parmw_B_2_" + result["timestamp"],
+        "parmw_A_0_" + result["timestamp"],
+        "parmw_B_0_" + result["timestamp"],
+        "parmw_A_1_" + result["timestamp"],
+        "parmw_B_1_" + result["timestamp"],
+        "parmw_A_2_" + result["timestamp"],
+        "parmw_B_2_" + result["timestamp"],
     ]
     assert len(result["runs"]) == 6
     assert result["aggregates"]["A"]["successes"] == 3
@@ -407,7 +468,9 @@ def test_parallel_respeita_max_workers(tmp_path, monkeypatch):
 def test_parallel_reduz_n_pelo_budget_antes_de_disparar(tmp_path, monkeypatch):
     # n_per_arm=10, est_cost_per_run=0.4 -> nominal = 10*2*0.4 = 8.0 > budget 1.0
     # n_efetivo = floor(1.0 / (2*0.4)) = 1
-    cfg = experiment.parse_experiment(_write_parallel_cfg(tmp_path, "par2", n=10, budget=1.0, est=0.4))
+    cfg = experiment.parse_experiment(
+        _write_parallel_cfg(tmp_path, "par2", n=10, budget=1.0, est=0.4)
+    )
     fake_run = FakeRun(script=[])
     fake_popen = _make_fake_popen(script=[(1, 0.1)] * 2)  # só 1 par -> 2 Popen, nunca 20
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -424,7 +487,9 @@ def test_parallel_reduz_n_pelo_budget_antes_de_disparar(tmp_path, monkeypatch):
 
 def test_parallel_budget_insuficiente_para_1_par_da_erro(tmp_path, monkeypatch):
     # est_cost_per_run=1.0 -> mínimo 1 par custa 2.0, budget é 0.5
-    cfg = experiment.parse_experiment(_write_parallel_cfg(tmp_path, "par3", n=5, budget=0.5, est=1.0))
+    cfg = experiment.parse_experiment(
+        _write_parallel_cfg(tmp_path, "par3", n=5, budget=0.5, est=1.0)
+    )
     fake_run = FakeRun(script=[])
     fake_popen = _make_fake_popen(script=[])
     monkeypatch.setattr(subprocess, "run", fake_run)

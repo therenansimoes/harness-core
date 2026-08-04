@@ -14,9 +14,19 @@ def data_dir(tmp_path, monkeypatch):
 
 def _row(**over) -> RunRow:
     base = dict(
-        run_id="r1", unit_id="echo", project="p", backend="mock", model=None,
-        tier="tier0", kind="code", ok=True, exit_reason="done", sec_total=1.5,
-        sec_provision=0.1, cost_usd=0.0, intervention=False,
+        run_id="r1",
+        unit_id="echo",
+        project="p",
+        backend="mock",
+        model=None,
+        tier="tier0",
+        kind="code",
+        ok=True,
+        exit_reason="done",
+        sec_total=1.5,
+        sec_provision=0.1,
+        cost_usd=0.0,
+        intervention=False,
         created_at=store.now_iso(),
     )
     base.update(over)
@@ -147,7 +157,7 @@ def test_migracao_adiciona_colunas_de_token(tmp_path):
 
     by_id = {r.run_id: r for r in store.history(path=path)}
     assert by_id["velha"].tokens_in is None
-    assert by_id["velha"].cost_usd == 0.02   # a linha antiga continua legível
+    assert by_id["velha"].cost_usd == 0.02  # a linha antiga continua legível
     assert (by_id["nova"].tokens_in, by_id["nova"].tokens_out) == (10, 20)
 
 
@@ -161,7 +171,7 @@ def test_mutations_sem_teto_le_o_historico_inteiro(data_dir):
     for i in range(600):
         store.record_mutation(_mut(i))
 
-    assert len(store.mutations()) == 500              # janela default
+    assert len(store.mutations()) == 500  # janela default
     assert len(store.mutations(limit=None)) == 600
     assert store.mutations(limit=None)[-1].mutation_id == "m0000"
     assert len(store.mutations(rule_id="floor_up", limit=None)) == 600

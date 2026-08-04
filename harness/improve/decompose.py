@@ -137,9 +137,7 @@ Responda APENAS com um array JSON, sem markdown e sem texto em volta. Cada item:
 - "kind": um de {json.dumps(list(add.KINDS))}"""
 
 
-def _call_planner(
-    prompt: str, backend: str, model: str | None, max_usd: float
-) -> str:
+def _call_planner(prompt: str, backend: str, model: str | None, max_usd: float) -> str:
     """UMA chamada ao backend. Seam de teste: o fake troca esta função.
 
     Espelha o `add._call_author` (preflight, workspace descartável, teto de
@@ -298,9 +296,7 @@ def propose_decompose(
         SubUnit(index=first + i, name=f"{first + i:02d}_{spec['id_slug']}", spec=spec)
         for i, spec in enumerate(specs)
     )
-    return DecomposeProposal(
-        task=task, project=project, units=units, backend=backend, queue=queue
-    )
+    return DecomposeProposal(task=task, project=project, units=units, backend=backend, queue=queue)
 
 
 def render_unit_toml(unit: SubUnit, proposal: DecomposeProposal) -> str:
@@ -346,9 +342,7 @@ def apply_decompose(
     """
     out = out if out is not None else sys.stdout
     if len(proposal.units) < MIN_UNITS:
-        raise DecomposeError(
-            f"plano com {len(proposal.units)} unit(s): nada a decompor"
-        )
+        raise DecomposeError(f"plano com {len(proposal.units)} unit(s): nada a decompor")
 
     rendered: list[tuple[Path, str, SubUnit]] = []
     for unit in proposal.units:
@@ -359,9 +353,7 @@ def apply_decompose(
             raise DecomposeError(f"unit {unit.name} não é TOML válido: {exc}") from None
         target = proposal.queue / unit.name
         if target.exists():
-            raise DecomposeError(
-                f"destino já existe: {target.as_posix()} — nada gravado"
-            )
+            raise DecomposeError(f"destino já existe: {target.as_posix()} — nada gravado")
         rendered.append((target, text, unit))
 
     if dry:
@@ -370,7 +362,7 @@ def apply_decompose(
             f"{len(rendered)} passos:",
             file=out,
         )
-        for target, text, unit in rendered:
+        for target, text, _unit in rendered:
             print(f"--- {target.as_posix()}/{UNIT_FILE} ---\n{text}", file=out)
         return []
 
@@ -382,9 +374,7 @@ def apply_decompose(
             # unit.toml por ÚLTIMO, motivo do `add`: quem varre a fila só
             # enxerga dir com ele, então falha no meio nunca deixa passo meio
             # escrito elegível para o driver.
-            (target / PROMPT_FILE).write_text(
-                unit.spec["prompt_md"] + "\n", encoding="utf-8"
-            )
+            (target / PROMPT_FILE).write_text(unit.spec["prompt_md"] + "\n", encoding="utf-8")
             (target / UNIT_FILE).write_text(text, encoding="utf-8")
         from harness.cli import load_unit  # tardio: cli importa harness.add
 
@@ -404,7 +394,7 @@ def apply_decompose(
     return created
 
 
-def action() -> "Action":
+def action() -> Action:
     """A ação registrável — o par propose/apply do registry."""
     from harness.improve.target import Action
 

@@ -24,9 +24,7 @@ from harness.types import ExecResult
 GENOME_COM_QUARENTENA = Genome(
     immutable=("benchmarks/sealed/**",), mutable=("benchmarks/quarantine/**",)
 )
-GENOME_SEM_QUARENTENA = Genome(
-    immutable=("benchmarks/sealed/**",), mutable=("config/*.toml",)
-)
+GENOME_SEM_QUARENTENA = Genome(immutable=("benchmarks/sealed/**",), mutable=("config/*.toml",))
 
 SPECS = [
     {
@@ -131,9 +129,7 @@ def test_backend_valido_materializa_quarentena_no_formato_do_synthesize(root: Pa
     assert data["origin"] == {"run_id": f"redteam:{name}", "exit_reason": "redteam"}
     assert cli.load_unit(created[0]).id == data["id"]
     # spec sem kind não inventa kind (o synthesize também omite)
-    assert "kind" not in tomllib.loads(
-        (created[1] / "unit.toml").read_text(encoding="utf-8")
-    )
+    assert "kind" not in tomllib.loads((created[1] / "unit.toml").read_text(encoding="utf-8"))
     # nada foi escrito fora da quarentena
     assert not (root / "benchmarks" / "sealed").exists()
 

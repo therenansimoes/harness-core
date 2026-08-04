@@ -58,10 +58,12 @@ def make_repo(pid: str, changes: list[tuple[str, str, str]]) -> tuple[Path, Path
     (tmp / "results.tsv").write_text(HEADER + "\n")
 
     prop = tmp / "evolution" / "proposals" / f"{pid}.md"
-    prop.write_text(PROPOSAL.format(
-        pid=pid,
-        changes="\n".join(CHANGE.format(file=f, old=o, new=n) for f, o, n in changes),
-    ))
+    prop.write_text(
+        PROPOSAL.format(
+            pid=pid,
+            changes="\n".join(CHANGE.format(file=f, old=o, new=n) for f, o, n in changes),
+        )
+    )
     return tmp, prop
 
 
@@ -70,7 +72,8 @@ def load_evolve(tmp: Path):
     sys.path.insert(0, str(tmp))
     for m in ("evolve", "score", "graph"):
         sys.modules.pop(m, None)
-    import evolve  # noqa: E402
+    import evolve
+
     return evolve
 
 
@@ -161,18 +164,18 @@ def test_genome_toml_ausente_e_fail_closed():
 
 
 VIOLA = [
-    ("score.py", True),                        # blocklist: o juiz
-    ("evolve.py", True),                       # blocklist: o loop
+    ("score.py", True),  # blocklist: o juiz
+    ("evolve.py", True),  # blocklist: o loop
     ("safety.py", True),
     ("kpi.py", True),
     ("results.tsv", True),
-    ("evolution/genome.toml", True),           # a própria régua do genoma
-    ("benchmarks/sealed/task_s01/verify.py", True),   # glob de held-out
+    ("evolution/genome.toml", True),  # a própria régua do genoma
+    ("benchmarks/sealed/task_s01/verify.py", True),  # glob de held-out
     ("benchmarks/held_in/task_h01/verify.py", True),
     ("tests/test_genome.py", True),
     (".harness/state.json", True),
-    ("delivery.py", True),                     # nem blocklist nem mutable
-    ("../fora.py", True),                      # escapa da raiz
+    ("delivery.py", True),  # nem blocklist nem mutable
+    ("../fora.py", True),  # escapa da raiz
     ("/etc/passwd", True),
     ("agent.py", False),
     ("prompts/x.md", False),
@@ -230,15 +233,14 @@ def _assert_rejeitada(rc, tmp, evolve, calls, esperado_em_razao):
         assert frag in entry["reason"], entry["reason"]
     assert (tmp / "harness_version.txt").read_text().strip() == "vA"
     import graph
+
     decs = graph.recent_decisions(5)
     assert decs and decs[0]["outcome"] == "discard"
     assert evolve.GENOME_VIOLATION in decs[0]["reason"]
 
 
 def test_proposta_em_score_py_e_rejeitada():
-    rc, tmp, evolve, calls = run_cycle(
-        "g_score", [("score.py", "MIN_N", "MIN_N2")]
-    )
+    rc, tmp, evolve, calls = run_cycle("g_score", [("score.py", "MIN_N", "MIN_N2")])
     try:
         _assert_rejeitada(rc, tmp, evolve, calls, ["score.py"])
         md = (tmp / "evolution" / "decisions" / "g_score.md").read_text()
@@ -324,6 +326,7 @@ def test_project_notes_tsv_is_immutable():
 
 def test_genome_toml_editado_durante_a_run_e_tamper():
     """Tamper check: reescrever a régua no meio do exame também é violação."""
+
     def tamper(tmp):
         p = tmp / "evolution" / "genome.toml"
         p.write_text(p.read_text().replace('"score.py",', ""))
@@ -359,8 +362,14 @@ def test_runtime_files_traz_o_que_o_genoma_nao_traz():
         (tmp / "__pycache__" / "lixo.py").write_text("# nada\n")
         evolve = load_evolve(tmp)
         files = evolve.runtime_files()
-        for f in ("safety.py", "kpi.py", "score.py", "agent.py", "prompts/x.md",
-                  "evolution/genome.toml"):
+        for f in (
+            "safety.py",
+            "kpi.py",
+            "score.py",
+            "agent.py",
+            "prompts/x.md",
+            "evolution/genome.toml",
+        ):
             assert f in files, f"{f} fora do runtime: {files}"
         assert not any("__pycache__" in f for f in files), files
         # o genoma continua sendo um subconjunto — runtime não é licença
@@ -390,6 +399,7 @@ def test_sandbox_tamper_pega_imutavel_e_ignora_genoma():
 
 def test_sandbox_suja_vira_discard_de_tamper():
     """Editar imutável na sandbox é DISCARD, não InfraError: veredito, não erro."""
+
     def sujar(tmp):
         p = tmp / "evolution" / "sandboxes" / "g_sandbox" / "safety.py"
         p.write_text(p.read_text() + "\n# a candidata mexeu no que a julga\n")

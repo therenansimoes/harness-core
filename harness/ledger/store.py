@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from harness.types import MutationRow, RunRow
@@ -74,14 +74,34 @@ CREATE INDEX IF NOT EXISTS idx_mutations_rule ON mutations(rule_id);
 """
 
 _COLUMNS = (
-    "run_id", "unit_id", "project", "backend", "model", "tier", "kind",
-    "ok", "exit_reason", "sec_total", "sec_provision", "cost_usd",
-    "tokens_in", "tokens_out", "intervention", "created_at",
+    "run_id",
+    "unit_id",
+    "project",
+    "backend",
+    "model",
+    "tier",
+    "kind",
+    "ok",
+    "exit_reason",
+    "sec_total",
+    "sec_provision",
+    "cost_usd",
+    "tokens_in",
+    "tokens_out",
+    "intervention",
+    "created_at",
 )
 
 _MUT_COLUMNS = (
-    "mutation_id", "rule_id", "verdict", "arm_a", "arm_b", "applied_at",
-    "reverted", "note", "action",
+    "mutation_id",
+    "rule_id",
+    "verdict",
+    "arm_a",
+    "arm_b",
+    "applied_at",
+    "reverted",
+    "note",
+    "action",
 )
 
 
@@ -140,22 +160,18 @@ def _backfill_action(conn: sqlite3.Connection) -> None:
     """
     from harness.improve import policy
 
-    rows = conn.execute(
-        "SELECT mutation_id, note FROM mutations WHERE note IS NOT NULL"
-    ).fetchall()
+    rows = conn.execute("SELECT mutation_id, note FROM mutations WHERE note IS NOT NULL").fetchall()
     updates = [
         (name, r["mutation_id"])
         for r in rows
         if (name := policy.action_of({"note": r["note"]})) is not None
     ]
     if updates:
-        conn.executemany(
-            "UPDATE mutations SET action = ? WHERE mutation_id = ?", updates
-        )
+        conn.executemany("UPDATE mutations SET action = ? WHERE mutation_id = ?", updates)
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def record_run(row: RunRow, path: Path | None = None) -> int:
@@ -204,8 +220,7 @@ def record_mutation(row: MutationRow, path: Path | None = None) -> bool:
     placeholders = ", ".join("?" * len(_MUT_COLUMNS))
     with connect(path) as conn:
         cur = conn.execute(
-            f"INSERT OR IGNORE INTO mutations ({', '.join(_MUT_COLUMNS)}) "
-            f"VALUES ({placeholders})",
+            f"INSERT OR IGNORE INTO mutations ({', '.join(_MUT_COLUMNS)}) VALUES ({placeholders})",
             values,
         )
         return cur.rowcount == 1
@@ -242,9 +257,7 @@ def record_node(
         return _insert_node(conn, run_id, node, payload, attempt)
 
 
-def get_node(
-    run_id: str, node: str, path: Path | None = None, attempt: int = 0
-) -> dict | None:
+def get_node(run_id: str, node: str, path: Path | None = None, attempt: int = 0) -> dict | None:
     """Payload gravado por `record_node`, ou None se o nó ainda não rodou."""
     with connect(path) as conn:
         row = _select_node(conn, run_id, node, attempt)
@@ -307,8 +320,7 @@ def _select_node(
     conn: sqlite3.Connection, run_id: str, node: str, attempt: int
 ) -> sqlite3.Row | None:
     return conn.execute(
-        "SELECT payload FROM node_events "
-        "WHERE run_id = ? AND node = ? AND attempt = ?",
+        "SELECT payload FROM node_events WHERE run_id = ? AND node = ? AND attempt = ?",
         (run_id, node, attempt),
     ).fetchone()
 

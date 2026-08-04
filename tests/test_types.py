@@ -15,8 +15,14 @@ from harness.types import (
 )
 
 ALL = [
-    UnitSpec, ExecRequest, ExecResult, Preflight, Capabilities,
-    Selection, Verdict, RunRow,
+    UnitSpec,
+    ExecRequest,
+    ExecResult,
+    Preflight,
+    Capabilities,
+    Selection,
+    Verdict,
+    RunRow,
 ]
 
 

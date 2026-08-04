@@ -21,8 +21,7 @@ def _unit(tmp_path: Path, name: str, kind: str) -> Path:
     unit = tmp_path / name
     unit.mkdir()
     (unit / "unit.toml").write_text(
-        f'id = "{name}"\nkind = "{kind}"\nprompt = "x"\n'
-        f'verify_cmd = "{VERIFY_LOUD}"\n',
+        f'id = "{name}"\nkind = "{kind}"\nprompt = "x"\nverify_cmd = "{VERIFY_LOUD}"\n',
         encoding="utf-8",
     )
     return unit

@@ -2,6 +2,7 @@
 
 Usa html.parser.HTMLParser da stdlib — sem regex frágil.
 """
+
 import sys
 from html.parser import HTMLParser
 from pathlib import Path
@@ -10,8 +11,20 @@ INDEX = Path("site/index.html")
 
 # Elementos void não têm tag de fechamento (HTML5), então não entram na pilha.
 VOID_ELEMENTS = {
-    "area", "base", "br", "col", "embed", "hr", "img", "input",
-    "link", "meta", "param", "source", "track", "wbr",
+    "area",
+    "base",
+    "br",
+    "col",
+    "embed",
+    "hr",
+    "img",
+    "input",
+    "link",
+    "meta",
+    "param",
+    "source",
+    "track",
+    "wbr",
 }
 
 
@@ -53,9 +66,7 @@ class StackValidator(HTMLParser):
             return
 
         if self.stack[-1] != tag:
-            self.error = (
-                f"tag </{tag}> fecha fora de ordem, esperava </{self.stack[-1]}>"
-            )
+            self.error = f"tag </{tag}> fecha fora de ordem, esperava </{self.stack[-1]}>"
             return
 
         self.stack.pop()

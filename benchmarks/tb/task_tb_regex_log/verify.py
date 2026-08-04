@@ -5,6 +5,7 @@ revisão f2e8c75e23add71613117eecc9498f53bcd7e04e (main, 2026-04-24).
 Traduzido de tests/test_outputs.py (test_regex_matches_dates) do task original —
 mesmos sample_logs e expected_dates, mesma checagem de compilação + re.findall
 com re.MULTILINE. exit 0 = pass."""
+
 import re
 import sys
 from pathlib import Path

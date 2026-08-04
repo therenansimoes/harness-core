@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-import safety  # noqa: E402
+import safety
 
 ROOT = Path(__file__).parent.resolve()
 TOOLS_TOML = ROOT / "evolution" / "tools.toml"

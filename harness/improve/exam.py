@@ -29,23 +29,51 @@ DEFAULT_MODEL = ""
 REQUIRES_REAL_KEY = "requires_real_backend"
 
 
+def _section_backend(data: dict, name: str) -> tuple[str, str] | None:
+    """(backend, model) da seção `name`; `None` quando a seção não decide nada
+    (ausente, não-tabela, ou `backend` ausente/vazio/não-string)."""
+    section = data.get(name)
+    if not isinstance(section, dict):
+        return None
+    backend, model = section.get("backend"), section.get("model")
+    if not isinstance(backend, str) or not backend:
+        return None
+    return backend, model if isinstance(model, str) else DEFAULT_MODEL
+
+
+def _load_config(config_path: Path | None) -> dict:
+    """Toml de `config/ruler.toml`; qualquer falha de leitura vira dict vazio."""
+    path = EXAM_CONFIG if config_path is None else config_path
+    try:
+        return tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
+        return {}
+
+
 def exam_backend(config_path: Path | None = None) -> tuple[str, str]:
     """(backend, model) da seção `[exam]`; qualquer falha devolve o mock.
 
     `config_path` só existe para teste; produção lê `config/ruler.toml`.
     """
-    path = EXAM_CONFIG if config_path is None else config_path
-    try:
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):
-        return MOCK_BACKEND, DEFAULT_MODEL
-    section = data.get("exam")
-    if not isinstance(section, dict):
-        return MOCK_BACKEND, DEFAULT_MODEL
-    backend, model = section.get("backend"), section.get("model")
-    if not isinstance(backend, str) or not backend:
-        return MOCK_BACKEND, DEFAULT_MODEL
-    return backend, model if isinstance(model, str) else DEFAULT_MODEL
+    return _section_backend(_load_config(config_path), "exam") or (
+        MOCK_BACKEND,
+        DEFAULT_MODEL,
+    )
+
+
+def frontier_backend(config_path: Path | None = None) -> tuple[str, str]:
+    """(backend, model) do screening da fronteira (harness/improve/coevolve.py).
+
+    `[frontier]` quando existe, senão `[exam]`, senão mock. O fallback é de
+    propósito: screenar a quarentena com um executor mais fraco que o do exame
+    marcaria como "na fronteira" candidato que a prova real passa.
+    """
+    data = _load_config(config_path)
+    return (
+        _section_backend(data, "frontier")
+        or _section_backend(data, "exam")
+        or (MOCK_BACKEND, DEFAULT_MODEL)
+    )
 
 
 def _discover(sealed_dir: Path) -> list[Path]:
@@ -100,8 +128,7 @@ def exam_report(
         for unit_dir in _discover(sealed):
             unit_id = unit_dir.name
             if backend == MOCK_BACKEND and _requires_real_backend(unit_dir):
-                print(f"exam: {unit_id} exige backend real, fora do exame mock",
-                      file=sys.stderr)
+                print(f"exam: {unit_id} exige backend real, fora do exame mock", file=sys.stderr)
                 continue
             # thread_id único: exame nunca retoma run velho por engano.
             thread_id = f"exam-{unit_id}-{uuid.uuid4().hex[:8]}"
@@ -132,11 +159,9 @@ def run_sealed_exam(
             config_path=config_path,
         )
     except Exception as exc:
-        print(f"exam: erro no exame selado, reprovando (fail-closed): {exc}",
-              file=sys.stderr)
+        print(f"exam: erro no exame selado, reprovando (fail-closed): {exc}", file=sys.stderr)
         return False
     if not report:
-        print("exam: benchmarks/sealed sem unidades — fail-closed, nada aprovado",
-              file=sys.stderr)
+        print("exam: benchmarks/sealed sem unidades — fail-closed, nada aprovado", file=sys.stderr)
         return False
     return all(r["passed"] for r in report)

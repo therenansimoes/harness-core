@@ -22,9 +22,10 @@ from __future__ import annotations
 
 import json
 import tomllib
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any
 
 from harness.backends.registry import get_backend
 from harness.genome.genome import Genome
@@ -290,7 +291,7 @@ def _spec(item: Any) -> AdversarialSpec:
     )
 
 
-def action() -> "Action":
+def action() -> Action:
     """A ação registrável — consultada por `target.actions()` quando o wiring
     do registry chegar."""
     from harness.improve.target import Action

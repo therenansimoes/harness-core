@@ -11,7 +11,5 @@ def collect(path: Path | str) -> dict:
     files = [p for p in sorted(base.rglob("*.py")) if p.is_file()]
     return {
         "files": len(files),
-        "lines": sum(
-            len(p.read_text(encoding="utf-8").splitlines()) for p in files
-        ),
+        "lines": sum(len(p.read_text(encoding="utf-8").splitlines()) for p in files),
     }

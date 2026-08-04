@@ -79,9 +79,7 @@ def tracer():
 
 
 def _unit(cmd: str, *checks: Check) -> UnitSpec:
-    return UnitSpec(
-        id="u1", path=Path("."), prompt="faça", verify_cmd=cmd, checks=tuple(checks)
-    )
+    return UnitSpec(id="u1", path=Path("."), prompt="faça", verify_cmd=cmd, checks=tuple(checks))
 
 
 # --- (1) aditivo: sem [checks], nada muda -------------------------------------
@@ -168,9 +166,7 @@ def test_orcamento_estourado_reprova_o_que_nao_rodou(tmp_path):
         Check(name="lento", cmd="sleep 1"),
         Check(name="nunca", cmd="touch sentinela_nunca"),
     )
-    score, failed, log = run_extra_checks(
-        checks, tmp_path, per_check_timeout_s=0.2, budget_s=0.2
-    )
+    score, failed, log = run_extra_checks(checks, tmp_path, per_check_timeout_s=0.2, budget_s=0.2)
     assert not (tmp_path / "sentinela_nunca").is_file()
     assert failed == ("lento", "nunca")
     assert score == 0.0
@@ -250,9 +246,9 @@ def test_trace_sobrevive_ao_workspace(data_dir, tmp_path, tracer):
     saved = (data_dir / "logs" / "t-trace-save" / "trace.0.jsonl").resolve()
     assert saved.is_file()
     assert saved.read_text(encoding="utf-8") == TRACE_LINE
-    assert store.get_node("t-trace-save", "execute", data_dir / store.DB_NAME)[
-        "trace_saved"
-    ] is True
+    assert (
+        store.get_node("t-trace-save", "execute", data_dir / store.DB_NAME)["trace_saved"] is True
+    )
 
 
 def test_trace_ausente_nao_levanta(data_dir, tmp_path):

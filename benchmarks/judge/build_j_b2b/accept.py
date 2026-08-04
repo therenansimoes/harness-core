@@ -22,6 +22,7 @@ seed intocado, que é vermelho por construção (nada foi implementado ainda).
 
 exit 0 = pass (suíte selada 100% verde). exit != 0 = fail.
 """
+
 from __future__ import annotations
 
 import hashlib

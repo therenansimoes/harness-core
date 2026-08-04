@@ -7,7 +7,8 @@ publica o próprio pacote e se anuncia no entry point `harness.auth`.
 
 from __future__ import annotations
 
-from typing import ClassVar, Mapping, Protocol, runtime_checkable
+from collections.abc import Mapping
+from typing import ClassVar, Protocol, runtime_checkable
 
 from harness.types import Preflight
 

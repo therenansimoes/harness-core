@@ -17,16 +17,16 @@ from harness.types import Check, UnitSpec, Verdict
 LOG_REL = Path(".harness") / "verify.log"
 LOGS_REL = "logs"
 DEFAULT_TIMEOUT_S = 300.0
-TAIL_LINES = 15      # diagnóstico: o fim do log é onde o erro costuma estar
-TIMEOUT_EXIT = 124   # convenção do `timeout(1)`
-NOEXEC_EXIT = 127    # convenção do shell para "não deu para executar"
+TAIL_LINES = 15  # diagnóstico: o fim do log é onde o erro costuma estar
+TIMEOUT_EXIT = 124  # convenção do `timeout(1)`
+NOEXEC_EXIT = 127  # convenção do shell para "não deu para executar"
 
 # Régua graduada: o `verify_cmd` é o check implícito de peso 1.0 que sempre
 # entra no score. Nome reservado — nenhum `[checks]` pode se chamar assim.
 VERIFY_CHECK_NAME = "verify_cmd"
 VERIFY_CHECK_WEIGHT = 1.0
 PER_CHECK_TIMEOUT_S = 60.0
-CHECKS_EXIT = 125   # veredito derrubado por SUBCHECK, com o `verify_cmd` verde
+CHECKS_EXIT = 125  # veredito derrubado por SUBCHECK, com o `verify_cmd` verde
 
 
 def run_log_dir(run_id: str, data_dir: Path | str | None = None) -> Path:
@@ -78,8 +78,12 @@ def run_extra_checks(
         limit = min(per_check_timeout_s, left)
         try:
             proc = subprocess.run(
-                check.cmd, shell=True, cwd=str(ws),
-                capture_output=True, text=True, timeout=limit,
+                check.cmd,
+                shell=True,
+                cwd=str(ws),
+                capture_output=True,
+                text=True,
+                timeout=limit,
             )
             exit_code = proc.returncode
             out = proc.stdout + proc.stderr
@@ -135,8 +139,12 @@ def run_verify(
     t0 = time.monotonic()
     try:
         proc = subprocess.run(
-            unit.verify_cmd, shell=True, cwd=str(ws),
-            capture_output=True, text=True, timeout=timeout_s,
+            unit.verify_cmd,
+            shell=True,
+            cwd=str(ws),
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
         )
         exit_code = proc.returncode
         log = proc.stdout + proc.stderr
@@ -149,9 +157,7 @@ def run_verify(
     # Régua graduada: orçamento próprio (o `timeout_s` é do comando principal),
     # e o vermelho do comando principal não dispensa os checks — é justamente
     # quando saber quanto passou vale algo.
-    extra_score, failed, checks_log = run_extra_checks(
-        unit.checks, ws, budget_s=timeout_s
-    )
+    extra_score, failed, checks_log = run_extra_checks(unit.checks, ws, budget_s=timeout_s)
     if checks_log:
         log += checks_log
     verify_ok = exit_code == 0
@@ -161,8 +167,12 @@ def run_verify(
     sec = time.monotonic() - t0
     log_path.write_text(log, encoding="utf-8")
     return Verdict(
-        passed=exit_code == 0, exit_code=exit_code, log_path=log_path, sec=sec,
-        score=score, failed=failed,
+        passed=exit_code == 0,
+        exit_code=exit_code,
+        log_path=log_path,
+        sec=sec,
+        score=score,
+        failed=failed,
     )
 
 

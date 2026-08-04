@@ -80,18 +80,14 @@ def test_doctor_toml_ilegivel_falha(sandbox):
 
 def test_doctor_catalogo_esteril_falha(sandbox):
     """`n_per_arm` abaixo do MIN_N: o catálogo carrega fechado, e doctor conta."""
-    (sandbox / "config" / "catalog.toml").write_text(
-        "[improve]\nn_per_arm = 3\n", encoding="utf-8"
-    )
+    (sandbox / "config" / "catalog.toml").write_text("[improve]\nn_per_arm = 3\n", encoding="utf-8")
 
     assert status_of("catalog", doctor.checks()) == doctor.FAIL
 
 
 def test_doctor_catalogo_sem_regra_e_aviso(sandbox):
     """Sem regra o improve não tem o que propor — mas o harness roda."""
-    (sandbox / "config" / "catalog.toml").write_text(
-        "[improve]\nn_per_arm = 6\n", encoding="utf-8"
-    )
+    (sandbox / "config" / "catalog.toml").write_text("[improve]\nn_per_arm = 6\n", encoding="utf-8")
 
     result = doctor.checks()
 
@@ -171,9 +167,7 @@ def test_doctor_skills_carregam(sandbox):
 
 def test_doctor_topology_torta_e_aviso_nao_falha(sandbox):
     """Spec inválida não é FALHA: build_run_graph cai no default por desenho."""
-    (sandbox / "config" / "topology.toml").write_text(
-        'nodes = "não é lista"\n', encoding="utf-8"
-    )
+    (sandbox / "config" / "topology.toml").write_text('nodes = "não é lista"\n', encoding="utf-8")
 
     result = doctor.checks()
 

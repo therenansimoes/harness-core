@@ -15,9 +15,10 @@ Ver `build_hint`.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from harness.ledger import store
 
@@ -98,10 +99,7 @@ def _touched(path: str, changed: list[str]) -> bool:
     mesmo arquivo por outro prefixo — comparar também pelo nome evita acusar
     de "não alterado" um arquivo que o worker escreveu."""
     base = path.rsplit("/", 1)[-1]
-    return any(
-        c == path or c.endswith("/" + path) or c.rsplit("/", 1)[-1] == base
-        for c in changed
-    )
+    return any(c == path or c.endswith("/" + path) or c.rsplit("/", 1)[-1] == base for c in changed)
 
 
 def build_hint(state: Mapping[str, Any]) -> str:
@@ -128,15 +126,11 @@ def build_hint(state: Mapping[str, Any]) -> str:
         code = _exit_code(fail)
         if code is not None:
             lines.append(f"A régua reprovou (exit {code}); o log não é seu.")
-        lines.append(
-            "Você alterou: " + (", ".join(changed[:MAX_ITEMS]) if changed else "nada")
-        )
+        lines.append("Você alterou: " + (", ".join(changed[:MAX_ITEMS]) if changed else "nada"))
         graded = _failed_checks(fail)
         if graded:
             names, score = graded
-            lines.append(
-                f"checks reprovados: {', '.join(names)} (score {score:.2f})"
-            )
+            lines.append(f"checks reprovados: {', '.join(names)} (score {score:.2f})")
         if files:
             lines.append("Checks do verify_cmd referenciam: " + ", ".join(files))
         if pats:
@@ -169,14 +163,15 @@ def hydrate(state: Mapping[str, Any], db: Path | None = None) -> Mapping[str, An
         if _verify_fail(view) is None:
             saved = store.get_node(run_id, "verify", db, attempt=prev)
             if saved and saved.get("tail"):
-                view["events"] = list(view.get("events") or ()) + [
+                view["events"] = [
+                    *list(view.get("events") or ()),
                     {
                         "node": "verify",
                         "tail": saved["tail"],
                         "exit_code": saved.get("exit_code"),
                         "score": saved.get("score"),
                         "failed": saved.get("failed") or (),
-                    }
+                    },
                 ]
     except Exception:
         return dict(state)

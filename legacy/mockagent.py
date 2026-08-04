@@ -56,6 +56,11 @@ def run(prompt: str, workspace: Path):
     if not notes:
         notes = "mock_fail" if fail else ""
     return AgentResult(
-        ok=not fail, seconds=time.time() - t0, tokens=0, cost_usd=0.0,
-        turns=1, text="DONE: mock", notes=notes,
+        ok=not fail,
+        seconds=time.time() - t0,
+        tokens=0,
+        cost_usd=0.0,
+        turns=1,
+        text="DONE: mock",
+        notes=notes,
     )

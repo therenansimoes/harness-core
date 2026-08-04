@@ -15,8 +15,9 @@ import threading
 import tomllib
 import urllib.error
 import urllib.request
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any, Callable, ClassVar, Sequence
+from typing import Any, ClassVar
 
 from harness import trust_boundary
 from harness.backends.agent_roles import load_roles, roles_manual
@@ -68,6 +69,15 @@ EXECUTOR_PROMPT_PATH = Path("prompts/executor.md")
 # prompts/tools/<provider>.md ganham do geral quando existem.
 TOOLS_PROMPT_PATH = Path("prompts/tools.md")
 TOOLS_PROMPT_DIR = Path("prompts/tools")
+
+# Constituição do REPO-ALVO (o workspace do run), em ordem de prioridade: o
+# `-exec` existe para o projeto dizer o que vale para um agente executor sem
+# misturar com o AGENTS.md que ele mantém para humanos/outras ferramentas.
+TARGET_CONSTITUTION_FILES = ("AGENTS-exec.md", "AGENTS.md")
+# Teto de caracteres: constituição é regra, mas system prompt de executor 9B é
+# recurso disputado (ver CONTEXT_TRIGGER_TOKENS). Acima do teto entra o começo
+# do arquivo com aviso de corte, para o modelo não tratar o fim como completo.
+TARGET_CONSTITUTION_MAX_CHARS = 2000
 
 # Alvos de arquivo citados no prompt da unidade — a fonte barata de `files=` para
 # o path-trigger das skills: determinístico, sem plumbing novo e sem depender de
@@ -455,10 +465,20 @@ def _build_agent(req: ExecRequest):
 
     # Papéis vêm de config/agents.toml (dado, não código): [] devolve o
     # comportamento de antes — só o `general-purpose` default da tool `task`.
-    roles = load_roles(backend=fs, allowed=allowed)
+    # `model` só serve ao papel que delega (o subagent aninhado é compilado na
+    # hora): é a MESMA instância do agente principal, nenhum peso extra na
+    # máquina.
+    chat_model = _model_for(req.model)
+    roles = load_roles(backend=fs, allowed=allowed, model=chat_model)
     manual = roles_manual(roles)
     if manual:
         system_prompt = f"{system_prompt}\n\n{manual}"
+
+    # Por último de propósito: é a regra que vence as outras quando conflita, e
+    # o fim do system prompt é o pedaço que o modelo pequeno mais respeita.
+    constitution = _target_constitution(req.workspace)
+    if constitution:
+        system_prompt = f"{system_prompt}\n\n{constitution}"
 
     extra_tools = list(load_mcp_tools())  # contrato: [] em QUALQUER falha
     # Tools de engenharia (edição cirúrgica) e de web. Cada import é fail-open
@@ -526,7 +546,7 @@ def _build_agent(req: ExecRequest):
     except Exception:
         pass
     agent = create_deep_agent(
-        model=_model_for(req.model),
+        model=chat_model,
         backend=fs,
         middleware=middleware,
         system_prompt=system_prompt,
@@ -688,6 +708,38 @@ def _executor_prompt() -> str:
     return ""
 
 
+def _target_constitution(workspace: Path) -> str:
+    """AGENTS-exec.md (ou AGENTS.md) do repo-alvo, ou "" se nenhum existir.
+
+    Fica no system prompt, lado CONFIÁVEL da fronteira (trust_boundary), e não
+    no bloco não confiável das skills/recall: é arquivo versionado do repo-alvo
+    — escrito por quem mantém o projeto e revisado em commit —, não texto que o
+    loop produziu numa execução anterior. Sem isto o executor mexe no repo sem
+    nunca ler a lei local dele.
+
+    Fail-open no padrão do arquivo: workspace sem o arquivo, ilegível ou fora do
+    alcance => "" e o run segue como antes."""
+    for name in TARGET_CONSTITUTION_FILES:
+        path = workspace / name
+        try:
+            if not path.is_file():
+                continue
+            raw = path.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            continue
+        if not raw:
+            continue
+        if len(raw) > TARGET_CONSTITUTION_MAX_CHARS:
+            raw = (
+                raw[:TARGET_CONSTITUTION_MAX_CHARS]
+                + f"\n\n[truncado em {TARGET_CONSTITUTION_MAX_CHARS} caracteres — "
+                f"leia {name} com read_file se precisar do resto]"
+            )
+        header = f"## Constituição do projeto\n\nDe `{name}` do repositório: é lei local, siga."
+        return f"{header}\n\n{raw}"
+    return ""
+
+
 def _tools_prompt(model: str | None) -> str:
     """Manual das tools para este modelo, ou "" se nenhum arquivo existir.
 
@@ -846,7 +898,7 @@ def _with_timeout(fn: Callable[[], Any], timeout_s: float) -> Any:
     def target() -> None:
         try:
             box.put((True, fn()))
-        except BaseException as exc:  # noqa: BLE001 — repassado na thread chamadora
+        except BaseException as exc:
             box.put((False, exc))
 
     threading.Thread(target=target, daemon=True).start()

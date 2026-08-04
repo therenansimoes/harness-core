@@ -166,7 +166,11 @@ def assert_url_allowed(url: str, cfg: WebConfig | None = None) -> list[str]:
         raise UrlBlocked(f"host {host!r} fora da allowlist")
 
     literal = _ip_literal(host)
-    enderecos = [str(_public_ip(literal))] if literal else [str(_public_ip(a)) for a in _resolve(host, porta)]
+    enderecos = (
+        [str(_public_ip(literal))]
+        if literal
+        else [str(_public_ip(a)) for a in _resolve(host, porta)]
+    )
     if not enderecos:
         raise UrlBlocked(f"host {host!r} não resolveu para nenhum endereço")
     return enderecos
@@ -199,7 +203,9 @@ def redirect_handler(cfg: WebConfig):
             except UrlBlocked as exc:
                 # HTTPError aqui aborta o urlopen com motivo legível no lugar de
                 # deixar o handler seguir o hop.
-                raise urllib.error.HTTPError(newurl, code, f"redirect bloqueado: {exc}", headers, fp)
+                raise urllib.error.HTTPError(
+                    newurl, code, f"redirect bloqueado: {exc}", headers, fp
+                ) from exc
             return super().redirect_request(req, fp, code, msg, headers, newurl)
 
     return _Handler()

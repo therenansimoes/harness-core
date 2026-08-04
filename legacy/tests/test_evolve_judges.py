@@ -9,6 +9,7 @@ em judges/verdicts/ do repo de verdade.
 
     python3 -m pytest tests/test_evolve_judges.py -q
 """
+
 from __future__ import annotations
 
 import json
@@ -23,20 +24,28 @@ import evolve  # noqa: E402
 
 def _write_summary(base: Path, version: str, median, spread, scores=None) -> None:
     base.mkdir(parents=True, exist_ok=True)
-    (base / f"summary_{version}.json").write_text(json.dumps({
-        "scores": scores or {"j_b2b": median},
-        "median": median,
-        "spread": spread,
-    }))
+    (base / f"summary_{version}.json").write_text(
+        json.dumps(
+            {
+                "scores": scores or {"j_b2b": median},
+                "median": median,
+                "spread": spread,
+            }
+        )
+    )
 
 
 def _write_verdict(base: Path, judge_id: str, version: str, veto: bool = False) -> None:
     d = base / judge_id
     d.mkdir(parents=True, exist_ok=True)
-    (d / f"{version}.json").write_text(json.dumps({
-        "judge_id": judge_id,
-        "deterministic": {"veto": veto},
-    }))
+    (d / f"{version}.json").write_text(
+        json.dumps(
+            {
+                "judge_id": judge_id,
+                "deterministic": {"veto": veto},
+            }
+        )
+    )
 
 
 def test_judge_ok_aprova(tmp_path, monkeypatch):

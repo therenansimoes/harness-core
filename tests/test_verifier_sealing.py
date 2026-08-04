@@ -49,9 +49,7 @@ class PeekBackend:
     def execute(self, req: ExecRequest) -> ExecResult:
         ws = req.workspace
         ws.mkdir(parents=True, exist_ok=True)
-        self.seen.append(
-            sorted(p.relative_to(ws).as_posix() for p in ws.rglob("*") if p.is_file())
-        )
+        self.seen.append(sorted(p.relative_to(ws).as_posix() for p in ws.rglob("*") if p.is_file()))
         (ws / "resposta.txt").write_text("42\n", encoding="utf-8")
         return ExecResult(
             ok=True,
@@ -94,8 +92,8 @@ def test_agente_nao_ve_verify_py_mas_o_verify_passa(tmp_path, peek):
 
     final = run_unit(unit, "peek", None, tmp_path / "data", thread_id="t-sealed")
 
-    assert peek == [["fixtures/dado.txt"]]      # o agente viu a fixture, não a prova
-    assert final["verdict"].passed is True      # e o verify ainda rodou `python3 verify.py`
+    assert peek == [["fixtures/dado.txt"]]  # o agente viu a fixture, não a prova
+    assert final["verdict"].passed is True  # e o verify ainda rodou `python3 verify.py`
     # Nem depois: o retry da tentativa seguinte também rodaria às cegas.
     assert not (Path(final["workspace"]) / "verify.py").exists()
 

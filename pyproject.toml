@@ -54,6 +54,45 @@ packages = ["harness"]
 # passam de 88 e quebrá-las piora a leitura).
 line-length = 100
 
+[tool.ruff.lint]
+# Ruleset CURADO, não o default amplo: cada família aqui pega bug de verdade
+# (F/E9), sujeira que apodrece (F401/I001) ou idioma morto (UP). O default do
+# ruff é E4/E7/E9/F; o que somamos é B (bugbear), SIM (simplify), I (isort),
+# UP (pyupgrade) e RUF.
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = [
+    # Comentário, docstring e mensagem de erro são em português: "—", "ç", "ã" e
+    # afins não são homoglifo suspeito aqui, são o idioma do repo.
+    "RUF001",
+    "RUF002",
+    "RUF003",
+    # `try/except/pass` é o fail-open documentado abaixo, e quase sempre carrega
+    # um comentário explicando POR QUE engolir é o certo naquele ponto.
+    # `contextlib.suppress` esconde esse comentário.
+    "SIM105",
+]
+# O que ficou DE FORA de propósito, porque brigaria com convenção deliberada
+# deste repo — não é descuido:
+#
+#   BLE001 (blind-except) — `except Exception` é o padrão fail-open do harness:
+#     um passo que quebra degrada o ciclo, nunca derruba o loop. Ver
+#     harness/autopilot.py e harness/backends/*.
+#   S110 / S112 (try-except-pass / -continue) — mesma razão: o corpo vazio É a
+#     decisão (best-effort em telemetria, cleanup, probe de ambiente).
+#   PLW1510 (subprocess-run-without-check) — o harness inspeciona returncode e
+#     stderr por conta própria; `check=True` trocaria diagnóstico por traceback.
+#   EXE001 — scripts de `scripts/` têm shebang e não precisam do bit +x no git.
+#
+# Se alguma dessas voltar ao select, ~170 achados legítimos por convenção
+# aparecem de uma vez. Discutir antes, não só habilitar.
+
+[tool.ruff.lint.per-file-ignores]
+# Testes: `assert False` como "não devia chegar aqui", `pytest.raises(Exception)`
+# em probe de erro e default mutável em dublê de classe são vocabulário normal de
+# suíte — não valem reescrita.
+"tests/*" = ["B011", "B017", "RUF012"]
+"legacy/tests/*" = ["B011", "B017", "RUF012"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 norecursedirs = ["legacy", ".venv", "projects", "benchmarks", "data"]

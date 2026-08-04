@@ -154,7 +154,9 @@ def _py_lint(repo: Path) -> str | None:
         return "ruff check ."
     if "[tool.ruff]" in _text(repo / "pyproject.toml"):
         return "ruff check ."
-    if (repo / ".flake8").is_file() or "[flake8]" in _text(repo / "setup.cfg") + _text(repo / "tox.ini"):
+    if (repo / ".flake8").is_file() or "[flake8]" in _text(repo / "setup.cfg") + _text(
+        repo / "tox.ini"
+    ):
         return "flake8"
     return None
 
@@ -209,7 +211,7 @@ def _script(pkg: dict, name: str) -> str:
 # ------------------------------------------------------------------ detecção
 
 
-def _detect_commands(repo: Path) -> Profile:  # noqa: C901 — é uma tabela, não um algoritmo
+def _detect_commands(repo: Path) -> Profile:
     P = Profile
 
     # 1. justfile — task runner genérico vence linguagem (ordem do upstream)
@@ -217,20 +219,28 @@ def _detect_commands(repo: Path) -> Profile:  # noqa: C901 — é uma tabela, n�
     if just:
         rec = _targets(_text(repo / just), JUST_RECIPE_RE)
         if "test" in rec:
-            return P("just", "just test",
-                     "just lint" if "lint" in rec else None,
-                     "just build" if "build" in rec else None,
-                     just, f"{just} tem receita `test:`")
+            return P(
+                "just",
+                "just test",
+                "just lint" if "lint" in rec else None,
+                "just build" if "build" in rec else None,
+                just,
+                f"{just} tem receita `test:`",
+            )
 
     # 2. Makefile — só vale com alvo `test:` de verdade (marcador fantasma)
     mk = _first(repo, ("Makefile", "makefile", "GNUmakefile"))
     if mk:
         tgt = _targets(_text(repo / mk), MAKE_TARGET_RE)
         if "test" in tgt:
-            return P("make", "make test",
-                     "make lint" if "lint" in tgt else None,
-                     "make build" if "build" in tgt else None,
-                     mk, f"{mk} tem alvo `test:`")
+            return P(
+                "make",
+                "make test",
+                "make lint" if "lint" in tgt else None,
+                "make build" if "build" in tgt else None,
+                mk,
+                f"{mk} tem alvo `test:`",
+            )
 
     # 3. workspace/monorepo ANTES de linguagem — rodar pytest/npm test na raiz
     #    de um monorepo é quase sempre errado
@@ -241,15 +251,25 @@ def _detect_commands(repo: Path) -> Profile:  # noqa: C901 — é uma tabela, n�
         ("nx.json", "nx", "nx run-many -t {}"),
     ):
         if (repo / marker).is_file():
-            return P(stack, tmpl.format("test"), tmpl.format("lint"), tmpl.format("build"),
-                     marker, f"{marker} presente — monorepo, comandos no nível do workspace")
+            return P(
+                stack,
+                tmpl.format("test"),
+                tmpl.format("lint"),
+                tmpl.format("build"),
+                marker,
+                f"{marker} presente — monorepo, comandos no nível do workspace",
+            )
     if pkg.get("workspaces"):
         pm, _ = _node_pm(repo, pkg)
         pm = pm or "npm"
-        return P(f"{pm}-workspaces", f"{pm} test --workspaces",
-                 f"{pm} run lint --workspaces", f"{pm} run build --workspaces",
-                 "package.json workspaces",
-                 "package.json declara workspaces — monorepo antes de linguagem")
+        return P(
+            f"{pm}-workspaces",
+            f"{pm} test --workspaces",
+            f"{pm} run lint --workspaces",
+            f"{pm} run build --workspaces",
+            "package.json workspaces",
+            "package.json declara workspaces — monorepo antes de linguagem",
+        )
 
     # 4. gerenciador Python por LOCKFILE (`[tool.poetry]` não implica poetry
     #    instalado) + pytest detectado
@@ -259,66 +279,116 @@ def _detect_commands(repo: Path) -> Profile:  # noqa: C901 — é uma tabela, n�
         for lock, pm in (("uv.lock", "uv"), ("pdm.lock", "pdm"), ("poetry.lock", "poetry")):
             if (repo / lock).is_file():
                 lint = _py_lint(repo)
-                return P(f"python-{pm}", f"{pm} run {argv}",
-                         f"{pm} run {lint}" if lint else None, None,
-                         lock, f"{lock} + pytest ({pytest_marker})")
+                return P(
+                    f"python-{pm}",
+                    f"{pm} run {argv}",
+                    f"{pm} run {lint}" if lint else None,
+                    None,
+                    lock,
+                    f"{lock} + pytest ({pytest_marker})",
+                )
 
         # 5. pytest puro
         lint = _py_lint(repo)
-        return P("python-pytest", argv, lint, None,
-                 pytest_marker, f"pytest detectado por {pytest_marker}")
+        return P(
+            "python-pytest",
+            argv,
+            lint,
+            None,
+            pytest_marker,
+            f"pytest detectado por {pytest_marker}",
+        )
 
     # 6. Django sem pytest (pytest-django venceria acima)
     if (repo / "manage.py").is_file():
-        return P("django", "python3 manage.py test", None, None,
-                 "manage.py", "manage.py sem pytest detectado")
+        return P(
+            "django",
+            "python3 manage.py test",
+            None,
+            None,
+            "manage.py",
+            "manage.py sem pytest detectado",
+        )
 
     # 6b. tests/ com test_*.py e nenhuma config — extensão nossa (ver _tests_dir)
     tdir = _tests_dir(repo)
     if tdir:
-        return P("python-pytest", f"pytest {tdir}/", _py_lint(repo), None,
-                 f"{tdir}/test_*.py", f"{tdir}/ tem test_*.py sem config de pytest — heurística")
+        return P(
+            "python-pytest",
+            f"pytest {tdir}/",
+            _py_lint(repo),
+            None,
+            f"{tdir}/test_*.py",
+            f"{tdir}/ tem test_*.py sem config de pytest — heurística",
+        )
 
     # 7. fallback Python
-    pyfile = _first(repo, ("pyproject.toml", "setup.py", "tox.ini", "setup.cfg", "requirements.txt"))
+    pyfile = _first(
+        repo, ("pyproject.toml", "setup.py", "tox.ini", "setup.cfg", "requirements.txt")
+    )
     if pyfile:
-        return P("python", "python3 -m unittest", _py_lint(repo),
-                 "python3 -m build" if pyfile == "pyproject.toml" else None,
-                 pyfile, f"{pyfile} sem pytest — fallback unittest")
+        return P(
+            "python",
+            "python3 -m unittest",
+            _py_lint(repo),
+            "python3 -m build" if pyfile == "pyproject.toml" else None,
+            pyfile,
+            f"{pyfile} sem pytest — fallback unittest",
+        )
 
     # 8. Go — nunca `go test` puro (módulo com subpacotes daria zero testes)
     if (repo / "go.mod").is_file():
-        return P("go", "go test ./...", "go vet ./...", "go build ./...",
-                 "go.mod", "go.mod presente")
+        return P(
+            "go", "go test ./...", "go vet ./...", "go build ./...", "go.mod", "go.mod presente"
+        )
 
     # 9. Rust
     if (repo / "Cargo.toml").is_file():
-        return P("rust", "cargo test", "cargo clippy -- -D warnings", "cargo build",
-                 "Cargo.toml", "Cargo.toml presente")
+        return P(
+            "rust",
+            "cargo test",
+            "cargo clippy -- -D warnings",
+            "cargo build",
+            "Cargo.toml",
+            "Cargo.toml presente",
+        )
 
     # 10. Node: exige scripts.test E lockfile, e o script não pode ser o stub
     if pkg:
         pm, pm_marker = _node_pm(repo, pkg)
         test_script = _script(pkg, "test")
         if pm and pm != "bun" and test_script and not STUB_TEST_RE.search(test_script):
-            return P(pm, f"{pm} test",
-                     f"{pm} run lint" if _script(pkg, "lint") else None,
-                     f"{pm} run build" if _script(pkg, "build") else None,
-                     f"package.json scripts.test + {pm_marker}",
-                     f"scripts.test real + {pm_marker} -> {pm}")
+            return P(
+                pm,
+                f"{pm} test",
+                f"{pm} run lint" if _script(pkg, "lint") else None,
+                f"{pm} run build" if _script(pkg, "build") else None,
+                f"package.json scripts.test + {pm_marker}",
+                f"scripts.test real + {pm_marker} -> {pm}",
+            )
 
     # 10b. bun não exige script
     bun = _first(repo, ("bun.lockb", "bun.lock"))
     if bun:
-        return P("bun", "bun test", None,
-                 "bun run build" if _script(pkg, "build") else None,
-                 bun, f"{bun} presente — bun test não exige script")
+        return P(
+            "bun",
+            "bun test",
+            None,
+            "bun run build" if _script(pkg, "build") else None,
+            bun,
+            f"{bun} presente — bun test não exige script",
+        )
 
     # 11. TypeScript sem script de teste: typecheck é o mais perto que dá
     if (repo / "tsconfig.json").is_file():
-        return P("typescript", "npx tsc --noEmit", None,
-                 "npx tsc", "tsconfig.json",
-                 "tsconfig.json sem scripts.test — comando é TYPECHECK, não teste")
+        return P(
+            "typescript",
+            "npx tsc --noEmit",
+            None,
+            "npx tsc",
+            "tsconfig.json",
+            "tsconfig.json sem scripts.test — comando é TYPECHECK, não teste",
+        )
 
     return P()
 
@@ -415,7 +485,11 @@ def prompt_block(prof: Profile) -> str:
     if prof.stack == "unknown" and not prof.conventions:
         return ""
     facts = [f"Projeto: stack {prof.stack}."]
-    for label, cmd in (("Testes", prof.test_cmd), ("Lint", prof.lint_cmd), ("Build", prof.build_cmd)):
+    for label, cmd in (
+        ("Testes", prof.test_cmd),
+        ("Lint", prof.lint_cmd),
+        ("Build", prof.build_cmd),
+    ):
         if cmd:
             facts.append(f"{label}: `{cmd}`.")
     block = "\n" + " ".join(facts) + "\n"

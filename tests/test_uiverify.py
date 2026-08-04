@@ -22,13 +22,13 @@ CSS = "body{color:#111;font-family:system-ui}\n" * 20
 
 # Fake do Chrome: lê `--screenshot=<path>` e escreve um PNG íntegro (assinatura +
 # IEND) do tamanho pedido em FAKE_SHOT_BYTES.
-FAKE_CHROME = '''#!{python}
+FAKE_CHROME = """#!{python}
 import os, sys
 out = next(a.split("=", 1)[1] for a in sys.argv if a.startswith("--screenshot="))
 n = int(os.environ.get("FAKE_SHOT_BYTES", "40000"))
 with open(out, "wb") as fh:
     fh.write(b"\\x89PNG\\r\\n\\x1a\\n" + b"x" * n + b"IEND\\xaeB`\\x82")
-'''
+"""
 
 
 @pytest.fixture(autouse=True)
@@ -59,8 +59,9 @@ LINK_MORTO = '<link rel="stylesheet" href="../styles/global.css">'
 
 
 def test_dist_com_css_passa(tmp_path):
-    res = uiverify.verify(make_dist(tmp_path, LINK_OK), expect=("css",),
-                          shot_out=tmp_path / "shot.png")
+    res = uiverify.verify(
+        make_dist(tmp_path, LINK_OK), expect=("css",), shot_out=tmp_path / "shot.png"
+    )
     assert res.failures == ()
     assert (res.checked, res.ok_assets) == (1, 1)
     assert res.shot.is_file()
@@ -69,8 +70,9 @@ def test_dist_com_css_passa(tmp_path):
 def test_link_morto_reprova_com_os_dois_motivos(tmp_path):
     """O dist real quebrado: o `<link>` existe, o arquivo não. Duas falhas —
     o asset 404 e a ausência de qualquer folha carregável."""
-    res = uiverify.verify(make_dist(tmp_path, LINK_MORTO, css=False), expect=("css",),
-                          shot_out=tmp_path / "shot.png")
+    res = uiverify.verify(
+        make_dist(tmp_path, LINK_MORTO, css=False), expect=("css",), shot_out=tmp_path / "shot.png"
+    )
     assert res.failures == (
         "asset 404: ../styles/global.css",
         "css: nenhum stylesheet carregável (nem <style> inline)",
@@ -80,8 +82,9 @@ def test_link_morto_reprova_com_os_dois_motivos(tmp_path):
 def test_asset_404_reprova_sem_expect_asset(tmp_path):
     """Imagem morta derruba o verify mesmo sem `--expect-asset`: o check de
     referência local não depende de flag."""
-    res = uiverify.verify(make_dist(tmp_path, LINK_OK, body='<img src="/foto.jpg">'),
-                          shot_out=tmp_path / "shot.png")
+    res = uiverify.verify(
+        make_dist(tmp_path, LINK_OK, body='<img src="/foto.jpg">'), shot_out=tmp_path / "shot.png"
+    )
     assert res.failures == ("asset 404: /foto.jpg",)
 
 
@@ -93,8 +96,9 @@ def test_referencia_externa_nao_e_conferida(tmp_path):
         + '<script src="//cdn.example.com/x.js"></script>'
     )
     body = '<a href="mailto:x@y.z">m</a><a href="#topo">t</a>'
-    res = uiverify.verify(make_dist(tmp_path, head, body=body), expect=("css",),
-                          shot_out=tmp_path / "shot.png")
+    res = uiverify.verify(
+        make_dist(tmp_path, head, body=body), expect=("css",), shot_out=tmp_path / "shot.png"
+    )
     assert res.failures == ()
     assert res.checked == 1
 
@@ -105,8 +109,11 @@ NAV_MORTO = '<nav><a href="/projetos.html">projetos</a></nav>'
 def test_pagina_linkada_ausente_e_aviso_nao_falha(tmp_path):
     """O caso de produção: o nav da unidade 1 aponta para as quatro páginas, u5/u6
     é que as criam. Página linkada ausente é completude, não renderização."""
-    res = uiverify.verify(make_dist(tmp_path, LINK_OK, body=NAV_MORTO),
-                          expect=("css",), shot_out=tmp_path / "shot.png")
+    res = uiverify.verify(
+        make_dist(tmp_path, LINK_OK, body=NAV_MORTO),
+        expect=("css",),
+        shot_out=tmp_path / "shot.png",
+    )
     assert res.failures == ()
     assert res.warnings == ("pagina linkada ausente: /projetos.html",)
 
@@ -114,8 +121,7 @@ def test_pagina_linkada_ausente_e_aviso_nao_falha(tmp_path):
 def test_script_morto_continua_reprovando(tmp_path):
     """O que o navegador carrega junto com a página não virou aviso nenhum."""
     res = uiverify.verify(
-        make_dist(tmp_path, LINK_OK + '<script src="/_astro/app.js"></script>',
-                  body=NAV_MORTO),
+        make_dist(tmp_path, LINK_OK + '<script src="/_astro/app.js"></script>', body=NAV_MORTO),
         shot_out=tmp_path / "shot.png",
     )
     assert res.failures == ("asset 404: /_astro/app.js",)
@@ -136,8 +142,11 @@ def test_strict_links_reprova_a_pagina_linkada(tmp_path, monkeypatch, capsys):
 
 def test_style_inline_conta_como_css(tmp_path):
     """O Astro inlina folha pequena; exigir `<link>` reprovaria build legítimo."""
-    res = uiverify.verify(make_dist(tmp_path, f"<style>{CSS}</style>", css=False),
-                          expect=("css",), shot_out=tmp_path / "shot.png")
+    res = uiverify.verify(
+        make_dist(tmp_path, f"<style>{CSS}</style>", css=False),
+        expect=("css",),
+        shot_out=tmp_path / "shot.png",
+    )
     assert res.failures == ()
 
 
@@ -176,8 +185,10 @@ def test_cli_exit_code(tmp_path, monkeypatch, capsys):
     dist = make_dist(tmp_path, LINK_MORTO, css=False)
     monkeypatch.chdir(tmp_path)
     assert cli.main(["ui-verify", str(dist), "--expect-asset", "css"]) == 1
-    assert cli.main(["ui-verify", str(make_dist(tmp_path / "bom", LINK_OK)),
-                     "--expect-asset", "css"]) == 0
+    assert (
+        cli.main(["ui-verify", str(make_dist(tmp_path / "bom", LINK_OK)), "--expect-asset", "css"])
+        == 0
+    )
     assert (tmp_path / uiverify.SHOT_NAME).is_file()
     assert "falhas=0" in capsys.readouterr().out
 
@@ -186,8 +197,7 @@ def test_policy_le_toggle_do_graph_toml(tmp_path):
     """O hook do grafo é opt-in: sem `nodes.ui_verify` ninguém abre navegador."""
     assert run_graph.load_policy(tmp_path / "nao-existe.toml").ui_verify is False
     toml = tmp_path / "graph.toml"
-    toml.write_text('ui_verify_dist = "build"\n[nodes]\nui_verify = true\n',
-                    encoding="utf-8")
+    toml.write_text('ui_verify_dist = "build"\n[nodes]\nui_verify = true\n', encoding="utf-8")
     policy = run_graph.load_policy(toml)
     assert (policy.ui_verify, policy.ui_verify_dist) == (True, "build")
 
@@ -224,13 +234,13 @@ def test_url_path_aponta_para_outra_pagina(tmp_path):
         f"<!DOCTYPE html><html><head>{LINK_MORTO}</head><body>x</body></html>",
         encoding="utf-8",
     )
-    res = uiverify.verify(dist, url_path="/sobre/", expect=("css",),
-                          shot_out=tmp_path / "shot.png")
+    res = uiverify.verify(dist, url_path="/sobre/", expect=("css",), shot_out=tmp_path / "shot.png")
     assert res.failures[0] == "asset 404: ../styles/global.css"
 
 
 def test_pagina_inexistente_reprova(tmp_path):
-    res = uiverify.verify(make_dist(tmp_path, LINK_OK), url_path="/faltando/",
-                          shot_out=tmp_path / "shot.png")
+    res = uiverify.verify(
+        make_dist(tmp_path, LINK_OK), url_path="/faltando/", shot_out=tmp_path / "shot.png"
+    )
     assert res.failures == ("página /faltando/ respondeu 404",)
     assert res.shot is None

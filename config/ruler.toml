@@ -35,3 +35,18 @@ sec_tolerance_pct = 0.10
 #   model = "openai:qwen3.5-9b-mlx"   # LM Studio local, $0 por run (config/models.toml)
 backend = "mock"
 model = ""
+
+# [frontier]
+# Quem EXECUTA o screening da quarentena (harness/improve/coevolve.py): o
+# candidato só entra na fronteira se ESTE executor falha nele. Seção ausente =>
+# vale o `[exam]` acima (e, sem ele, mock).
+#
+# Screening mock não discrimina dificuldade: o mock falha em quase tudo, então a
+# fronteira satura e `harness seal` deixa passar exame que o backend real já
+# resolve. Para currículo de verdade, aponte para o mesmo executor da prova:
+#   backend = "deepagents"
+#   model = "openai:qwen3.5-9b-mlx"
+# `max_units`/`deadline_s` são tetos do screening (0 / 0.0 = sem teto): backend
+# real custa tempo e dinheiro por candidato.
+# max_units = 0
+# deadline_s = 0.0

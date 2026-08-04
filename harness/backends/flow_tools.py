@@ -333,9 +333,7 @@ def _install_python(workspace: Path, stack: dict, timeout: float) -> str:
     _audita_install(workspace, antes, depois, "python")
     sec = time.monotonic() - inicio
     if proc.returncode != 0:
-        return (
-            f"ok=false gerenciador=uv sec={sec:.1f}\n{_erro_filtrado(_saida(proc))}"
-        )
+        return f"ok=false gerenciador=uv sec={sec:.1f}\n{_erro_filtrado(_saida(proc))}"
     novos = len(set(depois) - set(antes))
     return f"ok=true gerenciador=uv pacotes={len(depois)} novos={novos} sec={sec:.1f}"
 
@@ -378,7 +376,9 @@ def _install_node(workspace: Path, stack: dict, timeout: float) -> str:
     sec = time.monotonic() - inicio
     cmd = " ".join(primeiro)
     if proc.returncode != 0:
-        return f"ok=false gerenciador={gerenciador} cmd={cmd!r} sec={sec:.1f}\n{_erro_filtrado(saida)}"
+        return (
+            f"ok=false gerenciador={gerenciador} cmd={cmd!r} sec={sec:.1f}\n{_erro_filtrado(saida)}"
+        )
     return (
         f"ok=true gerenciador={gerenciador} cmd={cmd!r} "
         f"pacotes={len(depois)} novos={len(set(depois) - set(antes))} sec={sec:.1f}"
@@ -570,8 +570,7 @@ def run_tests(
             return f"{cabeca}\n{_erro_filtrado(saida)}"
         return cabeca
     detalhe = "\n".join(
-        f"- {f['file']}:{f['line']} {f['test']}: {f['msg']}".rstrip(": ")
-        for f in dados["failures"]
+        f"- {f['file']}:{f['line']} {f['test']}: {f['msg']}".rstrip(": ") for f in dados["failures"]
     )
     return f"{cabeca}\n{detalhe}"
 

@@ -29,9 +29,7 @@ def test_padrao_sai(texto, segredo):
 
 def test_esquema_do_bearer_fica():
     # Diagnóstico depende de saber QUE havia Authorization; o token é que não.
-    assert redact("Authorization: Bearer abcdef1234567890") == (
-        f"Authorization: Bearer {MASK}"
-    )
+    assert redact("Authorization: Bearer abcdef1234567890") == (f"Authorization: Bearer {MASK}")
 
 
 def test_texto_sem_segredo_intacto():

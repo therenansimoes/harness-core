@@ -28,8 +28,9 @@ def repo(tmp_path):
     for rel, content in TREE.items():
         p = tmp_path / rel
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(SHIPPED.read_text(encoding="utf-8") if content is None else content,
-                     encoding="utf-8")
+        p.write_text(
+            SHIPPED.read_text(encoding="utf-8") if content is None else content, encoding="utf-8"
+        )
     return tmp_path
 
 

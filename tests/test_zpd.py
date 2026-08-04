@@ -24,9 +24,19 @@ def _run(unit_id: str, run_id: str, scores: list[float], db: Path) -> None:
     """Uma run no ledger + o payload do verify de cada tentativa dela."""
     store.record_run(
         RunRow(
-            run_id=run_id, unit_id=unit_id, project=None, backend="mock", model=None,
-            tier=None, kind="code", ok=False, exit_reason="verify_failed",
-            sec_total=1.0, sec_provision=0.1, cost_usd=0.0, intervention=False,
+            run_id=run_id,
+            unit_id=unit_id,
+            project=None,
+            backend="mock",
+            model=None,
+            tier=None,
+            kind="code",
+            ok=False,
+            exit_reason="verify_failed",
+            sec_total=1.0,
+            sec_provision=0.1,
+            cost_usd=0.0,
+            intervention=False,
             created_at=store.now_iso(),
         ),
         db,
@@ -35,8 +45,14 @@ def _run(unit_id: str, run_id: str, scores: list[float], db: Path) -> None:
         store.record_node(
             run_id,
             "verify",
-            {"passed": False, "exit_code": 64, "log_path": "v.log", "sec": 0.1,
-             "score": score, "failed": ["c1"]},
+            {
+                "passed": False,
+                "exit_code": 64,
+                "log_path": "v.log",
+                "sec": 0.1,
+                "score": score,
+                "failed": ["c1"],
+            },
             db,
             attempt=attempt,
         )
@@ -54,9 +70,9 @@ def _units(tmp_path: Path, *names: str) -> list[Path]:
 
 def test_escolhe_a_da_zona(tmp_path, data_dir):
     db = data_dir / store.DB_NAME
-    _run("fechada", "r1", [0.95, 1.0], db)     # acima da zona: já resolvida
-    _run("perdida", "r2", [0.05, 0.1], db)     # abaixo: sem gradiente para subir
-    _run("na-zona", "r3", [0.5, 0.6], db)      # média 0.55
+    _run("fechada", "r1", [0.95, 1.0], db)  # acima da zona: já resolvida
+    _run("perdida", "r2", [0.05, 0.1], db)  # abaixo: sem gradiente para subir
+    _run("na-zona", "r3", [0.5, 0.6], db)  # média 0.55
     units = _units(tmp_path, "fechada", "perdida", "na-zona")
 
     assert zpd.next_unit(units=units, db=db).name == "na-zona"
@@ -112,16 +128,28 @@ def test_payload_sem_score_nao_conta(tmp_path, data_dir):
     db = data_dir / store.DB_NAME
     store.record_run(
         RunRow(
-            run_id="r-velho", unit_id="u", project=None, backend="mock", model=None,
-            tier=None, kind=None, ok=False, exit_reason="verify_failed",
-            sec_total=1.0, sec_provision=0.1, cost_usd=0.0, intervention=False,
+            run_id="r-velho",
+            unit_id="u",
+            project=None,
+            backend="mock",
+            model=None,
+            tier=None,
+            kind=None,
+            ok=False,
+            exit_reason="verify_failed",
+            sec_total=1.0,
+            sec_provision=0.1,
+            cost_usd=0.0,
+            intervention=False,
             created_at=store.now_iso(),
         ),
         db,
     )
     store.record_node(
-        "r-velho", "verify",
-        {"passed": False, "exit_code": 1, "log_path": "v.log", "sec": 0.1}, db,
+        "r-velho",
+        "verify",
+        {"passed": False, "exit_code": 1, "log_path": "v.log", "sec": 0.1},
+        db,
     )
 
     assert zpd.unit_scores(db=db) == {}
@@ -132,9 +160,7 @@ def test_order_poe_a_escolha_na_frente(tmp_path, data_dir):
     _run("03-tres", "r1", [0.6], db)
     units = _units(tmp_path, "01-um", "02-dois", "03-tres")
 
-    assert [p.name for p in zpd.order(units, db=db)] == [
-        "03-tres", "01-um", "02-dois"
-    ]
+    assert [p.name for p in zpd.order(units, db=db)] == ["03-tres", "01-um", "02-dois"]
     # Sem candidata a ordem do chamador fica intacta.
     assert zpd.order(_units(tmp_path, "a", "b"), db=db)[0].name == "a"
 
@@ -155,8 +181,7 @@ def fila(tmp_path, monkeypatch) -> Path:
         d.mkdir(parents=True)
         (d / UNIT_FILE).write_text(f'id = "{name}"\n', encoding="utf-8")
     (cfg / "projects.toml").write_text(
-        f'[projects.t]\nrepo = {json.dumps(str(tmp_path))}\n'
-        f'queue_dir = {json.dumps(str(queue))}\n',
+        f"[projects.t]\nrepo = {json.dumps(str(tmp_path))}\nqueue_dir = {json.dumps(str(queue))}\n",
         encoding="utf-8",
     )
     return queue

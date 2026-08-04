@@ -65,9 +65,7 @@ def test_ingest_verdicts_reais(fixtures_dir):
     # Conta esperada derivada da própria fixture (judges/verdicts/ é diretório
     # VIVO — novos juízes/tracks entram; hardcode aqui quebra a cada verdict novo).
     # Mesmo glob de ingest_verdicts: <judge>/<arquivo>.json, sem summary_*.
-    expected = len(
-        [p for p in fixtures_dir.glob("*/*.json") if not p.name.startswith("summary_")]
-    )
+    expected = len([p for p in fixtures_dir.glob("*/*.json") if not p.name.startswith("summary_")])
     assert n == expected
 
     rows = graph.judge_history(n=100, db_path=db_path)
@@ -117,9 +115,7 @@ def test_ingest_verdicts_ignora_summary(fixtures_dir):
 
 def test_ingest_verdicts_idempotente(fixtures_dir):
     db_path = _fresh_db()
-    expected = len(
-        [p for p in fixtures_dir.glob("*/*.json") if not p.name.startswith("summary_")]
-    )
+    expected = len([p for p in fixtures_dir.glob("*/*.json") if not p.name.startswith("summary_")])
     n1 = graph.ingest_verdicts(verdicts_dir=fixtures_dir, db_path=db_path)
     n2 = graph.ingest_verdicts(verdicts_dir=fixtures_dir, db_path=db_path)
     assert n1 == expected
@@ -147,14 +143,28 @@ def test_record_judgement_upsert_direto():
     db_path = _fresh_db()
     ts = "2026-08-02T00:00:00+00:00"
     id1 = graph.record_judgement(
-        judge_id="j_b2b", harness_version="v9.9", rubric_version="J1",
-        judge_score=10, deterministic_json="{}", persona_json="{}",
-        veto=0, persona_vetoed=0, ts=ts, db_path=db_path,
+        judge_id="j_b2b",
+        harness_version="v9.9",
+        rubric_version="J1",
+        judge_score=10,
+        deterministic_json="{}",
+        persona_json="{}",
+        veto=0,
+        persona_vetoed=0,
+        ts=ts,
+        db_path=db_path,
     )
     id2 = graph.record_judgement(
-        judge_id="j_b2b", harness_version="v9.9", rubric_version="J1",
-        judge_score=20, deterministic_json="{}", persona_json="{}",
-        veto=1, persona_vetoed=0, ts=ts, db_path=db_path,
+        judge_id="j_b2b",
+        harness_version="v9.9",
+        rubric_version="J1",
+        judge_score=20,
+        deterministic_json="{}",
+        persona_json="{}",
+        veto=1,
+        persona_vetoed=0,
+        ts=ts,
+        db_path=db_path,
     )
     assert id1 == id2  # mesma linha, atualizada
 
@@ -170,15 +180,32 @@ def test_schema_antigo_intacto(fixtures_dir):
     db_path = _fresh_db()
 
     graph.record_proposal(
-        pid="pj1", from_version="v1", to_version_intended="v2",
-        hypothesis="teste de convivência com judgements", diff_summary="nada",
-        path="evolution/proposals/pj1", db_path=db_path,
+        pid="pj1",
+        from_version="v1",
+        to_version_intended="v2",
+        hypothesis="teste de convivência com judgements",
+        diff_summary="nada",
+        path="evolution/proposals/pj1",
+        db_path=db_path,
     )
-    graph.record_run("task_01", "v2", "sealed", success=1, seconds=1.0,
-                      tokens=100, cost_usd=0.01, proposal_id="pj1", db_path=db_path)
+    graph.record_run(
+        "task_01",
+        "v2",
+        "sealed",
+        success=1,
+        seconds=1.0,
+        tokens=100,
+        cost_usd=0.01,
+        proposal_id="pj1",
+        db_path=db_path,
+    )
     graph.record_decision(
-        proposal_id="pj1", outcome="merge", scores_summary="ok",
-        reason="ok", gates_json="{}", db_path=db_path,
+        proposal_id="pj1",
+        outcome="merge",
+        scores_summary="ok",
+        reason="ok",
+        gates_json="{}",
+        db_path=db_path,
     )
 
     # ingesta judgements no MESMO db

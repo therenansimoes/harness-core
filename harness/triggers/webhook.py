@@ -28,10 +28,11 @@ import sys
 import time
 import tomllib
 from collections import deque
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any
 
 from harness.routing import config_dir
 
@@ -159,9 +160,7 @@ def token_ok(cfg: WebhookConfig, presented: str | None) -> bool:
     """Comparação em tempo constante. Sem token configurado: sempre False."""
     if not cfg.token:
         return False
-    return hmac.compare_digest(
-        cfg.token.encode("utf-8"), (presented or "").encode("utf-8")
-    )
+    return hmac.compare_digest(cfg.token.encode("utf-8"), (presented or "").encode("utf-8"))
 
 
 def screen_request(
@@ -210,7 +209,7 @@ def serve_webhook(
         print(NO_TOKEN_HELP, file=sys.stderr)
 
     class _Handler(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:  # noqa: N802 - contrato do BaseHTTPRequestHandler
+        def do_POST(self) -> None:
             n = _content_length(self.headers.get("Content-Length"))
             status = screen_request(
                 cfg,

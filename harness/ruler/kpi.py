@@ -22,10 +22,11 @@ from __future__ import annotations
 import subprocess
 import sys
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from math import isnan, nan
 from pathlib import Path
-from typing import Literal, Mapping
+from typing import Literal
 
 KPI_FILE = "kpis.toml"
 DEFAULT_TIMEOUT_S = 60.0
@@ -75,13 +76,19 @@ def load_kpis(repo: Path) -> dict[str, KpiSpec]:
         try:
             timeout_s = None if timeout_raw is None else float(timeout_raw)
         except (TypeError, ValueError):
-            print(f"kpi: [kpi.{name}] timeout_s={timeout_raw!r} inválido, usando o "
-                  f"default do chamador ({path})", file=sys.stderr)
+            print(
+                f"kpi: [kpi.{name}] timeout_s={timeout_raw!r} inválido, usando o "
+                f"default do chamador ({path})",
+                file=sys.stderr,
+            )
             timeout_s = None
         direction = str(spec.get("direction", DEFAULT_DIRECTION)).strip().lower()
         if direction not in (HIGHER, LOWER):
-            print(f"kpi: [kpi.{name}] direction={spec.get('direction')!r} desconhecido, "
-                  f"usando {DEFAULT_DIRECTION!r} ({path})", file=sys.stderr)
+            print(
+                f"kpi: [kpi.{name}] direction={spec.get('direction')!r} desconhecido, "
+                f"usando {DEFAULT_DIRECTION!r} ({path})",
+                file=sys.stderr,
+            )
             direction = DEFAULT_DIRECTION
         out[str(name)] = KpiSpec(
             name=str(name), cmd=str(spec["cmd"]), direction=direction, timeout_s=timeout_s

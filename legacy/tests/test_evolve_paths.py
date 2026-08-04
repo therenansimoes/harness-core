@@ -52,8 +52,9 @@ def row(v, task, sec, tok, cost, i, suite="fixed", success=1):
     )
 
 
-def run_case(pid, fixed_cand, expect_rc, sealed=None, sealed_base=None,
-             expect_credited=None) -> list[str]:
+def run_case(
+    pid, fixed_cand, expect_rc, sealed=None, sealed_base=None, expect_credited=None
+) -> list[str]:
     """Um ciclo completo com a suite stubada.
 
     fixed_cand / sealed: (seconds, tokens, cost, success) da candidata.
@@ -79,17 +80,15 @@ def run_case(pid, fixed_cand, expect_rc, sealed=None, sealed_base=None,
         ]
         if sealed_base:
             s, t, c, ok = sealed_base
-            lines += [
-                row("vA", f"task_s0{i % 2 + 1}", s, t, c, i, "sealed", ok) for i in range(4)
-            ]
+            lines += [row("vA", f"task_s0{i % 2 + 1}", s, t, c, i, "sealed", ok) for i in range(4)]
         (tmp / "results.tsv").write_text("\n".join(lines) + "\n")
 
         os.environ["HARNESS_GRAPH"] = str(tmp / "critique.db")
         sys.path.insert(0, str(tmp))
         for m in ("evolve", "score", "graph"):
             sys.modules.pop(m, None)
-        import evolve  # noqa: E402
-        import graph  # noqa: E402
+        import evolve
+        import graph
 
         calls = []
 
@@ -141,7 +140,9 @@ def run_case(pid, fixed_cand, expect_rc, sealed=None, sealed_base=None,
             if "## Juízes" not in txt:
                 fails.append("decision não tem a seção ## Juízes")
             if "sem dados" not in txt:
-                fails.append("sem judges/verdicts/ no sandbox, judge_ok deveria ser None (sem dados)")
+                fails.append(
+                    "sem judges/verdicts/ no sandbox, judge_ok deveria ser None (sem dados)"
+                )
 
         if sealed is None and "sealed" in calls:
             fails.append("rodou sealed sem suite sealed existir")
@@ -159,7 +160,7 @@ def run_case(pid, fixed_cand, expect_rc, sealed=None, sealed_base=None,
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-_BOM = (18.0, 1400, 0.0420, 1)   # -25% tempo, -30% custo
+_BOM = (18.0, 1400, 0.0420, 1)  # -25% tempo, -30% custo
 _RUIM = (26.0, 2200, 0.0660, 1)  # mais lenta e mais cara
 
 CASES = [

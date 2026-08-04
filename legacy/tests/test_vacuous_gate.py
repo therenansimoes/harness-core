@@ -60,11 +60,20 @@ def fake_suite(monkeypatch, resultado: dict) -> None:
     monkeypatch.setattr(delivery, "run_ui_suite", lambda _p, **_k: resultado)
 
 
-VERDE = {"ran": True, "passed": 3, "total": 3,
-         "tests": [{"name": f"t{i}", "ok": True, "reason": ""} for i in range(3)],
-         "reason": ""}
-NAO_RODOU = {"ran": False, "tests": [], "passed": 0, "total": 0,
-             "reason": "npx não encontrado — Node/Playwright não instalado"}
+VERDE = {
+    "ran": True,
+    "passed": 3,
+    "total": 3,
+    "tests": [{"name": f"t{i}", "ok": True, "reason": ""} for i in range(3)],
+    "reason": "",
+}
+NAO_RODOU = {
+    "ran": False,
+    "tests": [],
+    "passed": 0,
+    "total": 0,
+    "reason": "npx não encontrado — Node/Playwright não instalado",
+}
 ZERO_TESTES = {"ran": True, "tests": [], "passed": 0, "total": 0, "reason": ""}
 
 
@@ -78,7 +87,9 @@ def test_gate_ligado_que_nao_rodou_reprova(monkeypatch):
     v = delivery.verify(p, "s001")
     assert v["ui_vacuous"], "gate ligado que não rodou deveria ser vacuous"
     assert v["delivery_success"] == 0, "ausência de falha não pode virar verde"
-    assert "npx" in v["ui_vacuous_reason"], f"motivo deveria citar a causa: {v['ui_vacuous_reason']}"
+    assert "npx" in v["ui_vacuous_reason"], (
+        f"motivo deveria citar a causa: {v['ui_vacuous_reason']}"
+    )
 
 
 def test_gate_ligado_com_zero_testes_reprova(monkeypatch):
@@ -97,8 +108,9 @@ def test_vacuous_pede_humano_e_nao_fecha(monkeypatch):
     r = delivery.post_work(p, "s001", actor="teste")
     assert r["needs_human_ui_review"], "gate sem veredito deveria chamar o dono"
     assert r["next_action"] == "await_renan", f"não pode fechar sozinho, veio {r['next_action']}"
-    assert any(i.startswith("ui_gate:vacuous") for i in r["open_issues"]), \
+    assert any(i.startswith("ui_gate:vacuous") for i in r["open_issues"]), (
         f"faltou a nota ui_gate:vacuous: {r['open_issues']}"
+    )
     report = (p / "sessions" / "s001" / "delivery_report.md").read_text(encoding="utf-8")
     assert "ui_gate:vacuous" in report, "o report precisa dizer por que não fechou"
 
@@ -118,8 +130,7 @@ def test_ui_desligada_nao_e_vacuous():
     """Gate desligado não é gate falhando: sem suite, a regra não se aplica."""
     p = fresh()
     cfg = p / ".harness" / "config.toml"
-    cfg.write_text(cfg.read_text(encoding="utf-8") + "\n[ui]\nenabled = false\n",
-                   encoding="utf-8")
+    cfg.write_text(cfg.read_text(encoding="utf-8") + "\n[ui]\nenabled = false\n", encoding="utf-8")
     v = delivery.verify(p, "s001")
     assert not v["ui_vacuous"], "ui desligada não pode ser reprovação de gate"
     assert v["delivery_success"] == 1, f"resto verde deveria fechar: {v}"
@@ -127,9 +138,14 @@ def test_ui_desligada_nao_e_vacuous():
 
 def test_decide_next_action_vacuous_vai_para_humano():
     v = {
-        "governance_violations": [], "regression_passed": 1, "regression_total": 1,
-        "acceptance_passed": 1, "acceptance_total": 1, "ui_failed": False,
-        "ui_vacuous": True, "ui_vacuous_reason": "suite de UI rodou e coletou 0 testes",
+        "governance_violations": [],
+        "regression_passed": 1,
+        "regression_total": 1,
+        "acceptance_passed": 1,
+        "acceptance_total": 1,
+        "ui_failed": False,
+        "ui_vacuous": True,
+        "ui_vacuous_reason": "suite de UI rodou e coletou 0 testes",
     }
     assert delivery.decide_next_action(v, [], False, []) == "await_renan"
     v["ui_vacuous"] = False
@@ -158,8 +174,9 @@ def test_cli_ui_test_verde_continua_zero(monkeypatch):
 
 def test_cli_ui_baseline_nao_registra_zero_testes(monkeypatch, capsys):
     chamadas = []
-    monkeypatch.setattr(harness_cli.graph, "record_governance_event",
-                        lambda **kw: chamadas.append(kw))
+    monkeypatch.setattr(
+        harness_cli.graph, "record_governance_event", lambda **kw: chamadas.append(kw)
+    )
     rc = _cli_ui(monkeypatch, ZERO_TESTES, harness_cli.cmd_ui_baseline)
     assert rc == 2, "baseline vazia não pode sair 0"
     assert not chamadas, "não pode registrar governança de baseline que não cobre nada"
@@ -168,7 +185,8 @@ def test_cli_ui_baseline_nao_registra_zero_testes(monkeypatch, capsys):
 
 def test_cli_ui_baseline_com_testes_registra(monkeypatch):
     chamadas = []
-    monkeypatch.setattr(harness_cli.graph, "record_governance_event",
-                        lambda **kw: chamadas.append(kw))
+    monkeypatch.setattr(
+        harness_cli.graph, "record_governance_event", lambda **kw: chamadas.append(kw)
+    )
     assert _cli_ui(monkeypatch, VERDE, harness_cli.cmd_ui_baseline) == 0
     assert len(chamadas) == 1, "baseline real continua sendo ato registrado"

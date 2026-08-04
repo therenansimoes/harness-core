@@ -211,8 +211,15 @@ def test_spent_usd_conta_so_as_linhas_novas(tmp_path, monkeypatch):
     p.write_text("timestamp\tcost_usd\tnotes\n" + "t\t0.5000\tvelho\n" * 4)
     monkeypatch.setattr(autopilot, "results_files", lambda: [p])
 
-    s = autopilot.State(session="s", project=None, wall_s=60, budget=1.0,
-                        max_iterations=1, self_every=3, probation_runs=3)
+    s = autopilot.State(
+        session="s",
+        project=None,
+        wall_s=60,
+        budget=1.0,
+        max_iterations=1,
+        self_every=3,
+        probation_runs=3,
+    )
     s.baseline_lines = autopilot.baseline_lines()
     assert autopilot.spent_usd(s) == 0.0
 
@@ -234,20 +241,35 @@ def probation(tmp_path, monkeypatch):
 
     monkeypatch.setattr(autopilot, "DECISIONS", tmp_path / "decisions")
     monkeypatch.setattr(autopilot, "LOG_DIR", tmp_path / "log")
-    monkeypatch.setattr(autopilot.graph, "record_governance_event",
-                        lambda **kw: kw and 1)
+    monkeypatch.setattr(autopilot.graph, "record_governance_event", lambda **kw: kw and 1)
     real_restore = autopilot.restore_genome
-    monkeypatch.setattr(autopilot, "restore_genome",
-                        lambda snap, root=None: real_restore(snap, tmp_path))
+    monkeypatch.setattr(
+        autopilot, "restore_genome", lambda snap, root=None: real_restore(snap, tmp_path)
+    )
 
-    s = autopilot.State(session="sess-prob", project="demo", wall_s=60, budget=0,
-                        max_iterations=5, self_every=3, probation_runs=2)
+    s = autopilot.State(
+        session="sess-prob",
+        project="demo",
+        wall_s=60,
+        budget=0,
+        max_iterations=5,
+        self_every=3,
+        probation_runs=2,
+    )
     return s, snap, tmp_path
 
 
 def _arm(s, snap, pre, post_rows, monkeypatch):
-    s.probation = {"snap": str(snap), "left": 1, "code": "max_turns", "pid": "auto-x",
-                   "project": "demo", "idx": len(pre), "pre": pre, "n_signal": 3}
+    s.probation = {
+        "snap": str(snap),
+        "left": 1,
+        "code": "max_turns",
+        "pid": "auto-x",
+        "project": "demo",
+        "idx": len(pre),
+        "pre": pre,
+        "n_signal": 3,
+    }
     monkeypatch.setattr(autopilot, "project_rows", lambda name: pre + post_rows)
 
 
@@ -264,7 +286,7 @@ def test_probation_reverte_quando_success_zera(probation, monkeypatch):
     pre = [row("", success="1"), row("", success="1")]
     _arm(s, snap, pre, [row("erro"), row("erro")], monkeypatch)
     assert autopilot.probation_check(s) == "revert"
-    assert "max_turns" in s.blocked_codes          # não é reproposto na sessão
+    assert "max_turns" in s.blocked_codes  # não é reproposto na sessão
     assert s.probation is None
     assert (autopilot.DECISIONS / "auto-x-revert.md").exists()
 
@@ -284,7 +306,7 @@ def test_probation_so_julga_ao_zerar_a_contagem(probation, monkeypatch):
     pre = [row("", success="1")]
     _arm(s, snap, pre, [row("erro")], monkeypatch)
     s.probation["left"] = 2
-    assert autopilot.probation_check(s) is None    # ainda observando
+    assert autopilot.probation_check(s) is None  # ainda observando
     assert s.probation["left"] == 1
 
 
@@ -303,9 +325,7 @@ def test_probation_reverte_por_kpi_worse(probation, monkeypatch):
 
 def test_autopilot_e_imutavel_no_genoma():
     """Quem propõe não se muda: proposta que toca o loop/catálogo é violação."""
-    bad = evolve.genome_violations(
-        ["autopilot.py", "mockagent.py", "evolution/catalog.toml"]
-    )
+    bad = evolve.genome_violations(["autopilot.py", "mockagent.py", "evolution/catalog.toml"])
     assert sorted(bad) == ["autopilot.py", "evolution/catalog.toml", "mockagent.py"]
 
 
@@ -318,8 +338,15 @@ def test_step_project_loga_tier(tmp_path, monkeypatch):
     monkeypatch.setattr(autopilot, "LOG_DIR", tmp_path / "log")
 
     class FakeProject:
-        LAST_RUN = {"unit": "0001", "tier": "haiku", "class": "haiku", "score": 0,
-                    "attempt": 0, "success": False, "escalated": True}
+        LAST_RUN = {
+            "unit": "0001",
+            "tier": "haiku",
+            "class": "haiku",
+            "score": 0,
+            "attempt": 0,
+            "success": False,
+            "escalated": True,
+        }
 
         @staticmethod
         def try_run_one(name, keep):
@@ -328,8 +355,15 @@ def test_step_project_loga_tier(tmp_path, monkeypatch):
     monkeypatch.setattr(autopilot, "_project", lambda: FakeProject)
     monkeypatch.setattr(autopilot, "spent_usd", lambda s: 0.0)
 
-    s = autopilot.State(session="s-tier", project="demo", wall_s=60, budget=1.0,
-                        max_iterations=1, self_every=3, probation_runs=1)
+    s = autopilot.State(
+        session="s-tier",
+        project="demo",
+        wall_s=60,
+        budget=1.0,
+        max_iterations=1,
+        self_every=3,
+        probation_runs=1,
+    )
     assert autopilot.step_project(s) == "ran"
 
     ev = json.loads((tmp_path / "log" / "s-tier.jsonl").read_text().splitlines()[-1])

@@ -26,7 +26,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -34,7 +34,7 @@ ROOT = Path(__file__).resolve().parent
 NOTES_HEADER = ["ts", "task_id", "score", "tags", "why", "author"]
 SCORE_MIN, SCORE_MAX = 0, 5
 DEFAULT_WINDOW = 6
-MIN_NOTES = 3        # espelha score.KPI_MIN_N: abaixo disso não há veredito
+MIN_NOTES = 3  # espelha score.KPI_MIN_N: abaixo disso não há veredito
 
 
 def _projects_root() -> Path:
@@ -56,14 +56,14 @@ def load_notes(project: str) -> list[dict]:
     path = notes_path(project)
     if not path.exists():
         return []
-    lines = [l for l in path.read_text(errors="replace").splitlines() if l.strip()]
+    lines = [ln for ln in path.read_text(errors="replace").splitlines() if ln.strip()]
     if len(lines) < 2:
         return []
     header = lines[0].split("\t")
     rows = []
     for ln in lines[1:]:
         cells = (ln.split("\t") + [""] * len(header))[: len(header)]
-        rows.append(dict(zip(header, cells)))
+        rows.append(dict(zip(header, cells, strict=False)))
     return rows
 
 
@@ -72,7 +72,7 @@ def known_task_ids(project: str) -> list[str]:
     path = _projects_root() / project / "results.tsv"
     if not path.exists():
         return []
-    lines = [l for l in path.read_text(errors="replace").splitlines() if l.strip()]
+    lines = [ln for ln in path.read_text(errors="replace").splitlines() if ln.strip()]
     if len(lines) < 2:
         return []
     header = lines[0].split("\t")
@@ -107,7 +107,7 @@ def add(project: str, task_id: str, score: int, tags: str, why: str) -> Path:
     if not path.exists():
         path.write_text("\t".join(NOTES_HEADER) + "\n")
     row = {
-        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "ts": datetime.now(UTC).isoformat(timespec="seconds"),
         "task_id": task_id,
         "score": score,
         "tags": tags,
@@ -150,8 +150,9 @@ def cmd_add(a: argparse.Namespace) -> int:
     full = resolve_task_id(a.project, a.task_id)
     if full is None:
         known = known_task_ids(a.project)
-        print(f"note: task_id {a.task_id!r} não está no results.tsv de {a.project}",
-              file=sys.stderr)
+        print(
+            f"note: task_id {a.task_id!r} não está no results.tsv de {a.project}", file=sys.stderr
+        )
         if known:
             print("últimos ids: " + ", ".join(known[-5:]), file=sys.stderr)
         else:
@@ -163,17 +164,19 @@ def cmd_add(a: argparse.Namespace) -> int:
 
 
 def cmd_kpi(a: argparse.Namespace) -> int:
-    xs = _valid_scores(a.project)[-a.window:]
+    xs = _valid_scores(a.project)[-a.window :]
     if len(xs) < MIN_NOTES:
-        print(f"note: {len(xs)} nota(s) na janela de {a.window}, mínimo {MIN_NOTES} "
-              f"— sem veredito", file=sys.stderr)
+        print(
+            f"note: {len(xs)} nota(s) na janela de {a.window}, mínimo {MIN_NOTES} — sem veredito",
+            file=sys.stderr,
+        )
         return 1
     print(sum(xs) / len(xs))
     return 0
 
 
 def cmd_list(a: argparse.Namespace) -> int:
-    rows = load_notes(a.project)[-a.n:]
+    rows = load_notes(a.project)[-a.n :]
     for r in rows:
         print("\t".join(_cell(r.get(c, "")) for c in NOTES_HEADER))
     return 0

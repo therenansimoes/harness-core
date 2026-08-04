@@ -17,7 +17,7 @@ clock controlável não tem teste determinístico.
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from harness.ledger import store
@@ -45,7 +45,7 @@ def _parse_ts(value: object) -> datetime | None:
         ts = datetime.fromisoformat(value)
     except ValueError:
         return None
-    return ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+    return ts if ts.tzinfo is not None else ts.replace(tzinfo=UTC)
 
 
 def _in_window(value: object, cutoff: datetime) -> bool:
@@ -83,8 +83,7 @@ def _runs_section(cutoff: datetime, db: Path) -> list[str]:
     tout = sum(r.tokens_out or 0 for r in rows)
     tok = f" tok={tin}/{tout}" if tin or tout else ""
     lines = [
-        f"- runs={len(rows)} accept={ok}/{len(rows)} ({ok / len(rows):.0%}) "
-        f"usd={usd:.4f}{tok}",
+        f"- runs={len(rows)} accept={ok}/{len(rows)} ({ok / len(rows):.0%}) usd={usd:.4f}{tok}",
         "",
         "| backend | kind | runs | accept | usd |",
         "| --- | --- | --- | --- | --- |",
@@ -97,9 +96,7 @@ def _runs_section(cutoff: datetime, db: Path) -> list[str]:
         t[1] += int(bool(r.ok))
         t[2] += r.cost_usd or 0.0
     for (backend, kind), (n, acc, cost) in sorted(tally.items()):
-        lines.append(
-            f"| {backend} | {kind} | {n} | {acc}/{n} ({acc / n:.0%}) | {cost:.4f} |"
-        )
+        lines.append(f"| {backend} | {kind} | {n} | {acc}/{n} ({acc / n:.0%}) | {cost:.4f} |")
     return lines
 
 
@@ -199,9 +196,7 @@ def _escalations_section(muts: list) -> list[str]:
     gente, não uma fila garantidamente aberta.
     """
     lines = [
-        f"- {m.applied_at} {m.rule_id} motivo={m.note or '?'}"
-        for m in muts
-        if m.verdict == ABORTED
+        f"- {m.applied_at} {m.rule_id} motivo={m.note or '?'}" for m in muts if m.verdict == ABORTED
     ]
     return lines
 
@@ -218,7 +213,7 @@ def build_report(
     """Markdown do que o loop fez nas últimas `since_hours`. Nunca levanta."""
     ref = now if isinstance(now, datetime) else _parse_ts(now)
     if ref is None:
-        ref = datetime.now(timezone.utc)
+        ref = datetime.now(UTC)
     cutoff = ref - timedelta(hours=since_hours)
     db = Path(db_path) if db_path is not None else store.db_path()
 

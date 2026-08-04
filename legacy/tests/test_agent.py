@@ -6,6 +6,7 @@ sempre apontado pra tmp_path nos testes).
 
     python3 -m pytest tests/test_agent.py -q
 """
+
 from __future__ import annotations
 
 import json
@@ -143,7 +144,7 @@ def test_900_eventos_trunca_pra_400_com_marcador_na_posicao_101(monkeypatch, tmp
     monkeypatch.setenv("HARNESS_TRACE_ROOT", str(tmp_path / "runs"))
     lines_in = [json.dumps({"type": "assistant", "seq": i}) for i in range(900)]
 
-    trace_path, n_lines = agent._write_trace(lines_in, run_id="run_900")
+    _trace_path, n_lines = agent._write_trace(lines_in, run_id="run_900")
 
     assert n_lines == agent.TRACE_MAX_LINES == 400
     trace_file = tmp_path / "runs" / "run_900" / "trace.jsonl"
@@ -162,7 +163,7 @@ def test_campo_grande_e_truncado_deterministicamente(monkeypatch, tmp_path):
     big = "x" * (agent.TRACE_MAX_FIELD + 500)
     lines_in = [json.dumps({"type": "assistant", "text": big})]
 
-    trace_path, n_lines = agent._write_trace(lines_in, run_id="run_big_field")
+    _trace_path, n_lines = agent._write_trace(lines_in, run_id="run_big_field")
 
     assert n_lines == 1
     out = (tmp_path / "runs" / "run_big_field" / "trace.jsonl").read_text().splitlines()

@@ -18,6 +18,7 @@ nada; só corrigir o bug.
 
 exit 0 = pass (teste selado verde E suíte completa sem falha).
 """
+
 from __future__ import annotations
 
 import hashlib

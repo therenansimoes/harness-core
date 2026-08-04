@@ -219,8 +219,15 @@ def test_events_are_the_trace(data_dir):
     final = run_unit(FIXTURE, "mock", None, data_dir, thread_id="t-trace")
     nodes = [e["node"] for e in final["events"]]
     assert nodes == [
-        "plan", "route", "provision", "execute", "verify",
-        "measure", "gate", "accept", "record",
+        "plan",
+        "route",
+        "provision",
+        "execute",
+        "verify",
+        "measure",
+        "gate",
+        "accept",
+        "record",
     ]
 
 
@@ -257,9 +264,23 @@ def test_retry_reexecutes_and_can_change_the_outcome(data_dir, tmp_path, flaky):
     # monta o hint da tentativa seguinte) — o resto do caminho é o de sempre.
     nodes = [e["node"] for e in final["events"]]
     assert nodes == [
-        "plan", "route", "provision", "execute", "verify", "measure", "gate",
-        "retry", "reflect", "route", "provision", "execute", "verify", "measure",
-        "gate", "accept", "record",
+        "plan",
+        "route",
+        "provision",
+        "execute",
+        "verify",
+        "measure",
+        "gate",
+        "retry",
+        "reflect",
+        "route",
+        "provision",
+        "execute",
+        "verify",
+        "measure",
+        "gate",
+        "accept",
+        "record",
     ]
     # Nenhum payload cacheado atravessou a fronteira da tentativa.
     assert not any(e.get("reused") for e in final["events"] if e["node"] != "provision")
@@ -311,9 +332,7 @@ def test_retry_escalada(data_dir, tmp_path, spies):
     """Verify falha no attempt 0 => o attempt 1 roda um tier acima. Sem isto o
     braço retry seria só repetição: mesma conta, mesmo resultado esperado."""
     unit = _unit(tmp_path, "escala", "test -f nao_existe.txt", kind="code")
-    final = run_unit(
-        unit, None, None, data_dir, thread_id="t-escala", max_attempts=2, route="auto"
-    )
+    final = run_unit(unit, None, None, data_dir, thread_id="t-escala", max_attempts=2, route="auto")
 
     assert final["attempt"] == 1
     assert final["decision"].action == "escalate_human"

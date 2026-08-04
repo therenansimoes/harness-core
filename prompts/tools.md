@@ -26,6 +26,9 @@ Duas famílias, com regras de path DIFERENTES:
 Falar sobre um arquivo não muda o arquivo. Só `write_file`, `edit_file` e
 `delete` mudam. Se você terminar sem chamar uma delas, a tarefa não foi feita.
 
+Se o projeto tem `AGENTS.md` (ou `AGENTS-exec.md`, que ganha dele), ele é lei
+local: o que estiver lá vence este manual quando os dois discordarem.
+
 ## ls
 
 Lista o conteúdo de um diretório do workspace.
@@ -661,6 +664,10 @@ Delega um sub-pedaço isolado a um subagente, que devolve um resumo.
 - Exemplo: `task(description="Liste os arquivos .py da raiz e resuma o que cada um faz")`
 - Pegadinha: o subagente não vê a sua conversa. Instrução vaga volta lixo. Para
   tarefa pequena, fazer você mesmo é mais barato.
+- Pedido com 2 ou mais frentes independentes (arquivos/assuntos que não se
+  cruzam): mande ao `conductor`, que quebra e delega e devolve um plano só.
+- Pedido de uma frente: `planner` direto — passar pelo `conductor` só gastaria
+  um turno a mais.
 
 ## Fechamento obrigatório
 

@@ -149,7 +149,11 @@ def pin_python(ws: Path) -> tuple[bool, str]:
     try:
         achou = subprocess.run(
             ["uv", "python", "find", versao],
-            cwd=ws, capture_output=True, text=True, timeout=PIN_TIMEOUT, env=env,
+            cwd=ws,
+            capture_output=True,
+            text=True,
+            timeout=PIN_TIMEOUT,
+            env=env,
         )
     except FileNotFoundError:
         return True, "uv ausente, pin ignorado"
@@ -165,7 +169,11 @@ def pin_python(ws: Path) -> tuple[bool, str]:
     try:
         pin = subprocess.run(
             ["uv", "python", "pin", versao],
-            cwd=ws, capture_output=True, text=True, timeout=PIN_TIMEOUT, env=env,
+            cwd=ws,
+            capture_output=True,
+            text=True,
+            timeout=PIN_TIMEOUT,
+            env=env,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
         return True, f"pin falhou ({type(exc).__name__}), segue com {versao} presente"
@@ -238,7 +246,12 @@ def _run(ws: Path, cmd: str, timeout: int, env: dict[str, str] | None = None) ->
     histórico de tentativas fica junto do run que as fez)."""
     try:
         proc = subprocess.run(
-            cmd, shell=True, cwd=ws, capture_output=True, text=True, timeout=timeout,
+            cmd,
+            shell=True,
+            cwd=ws,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
             env=env,
         )
         out, rc = proc.stdout + proc.stderr, proc.returncode

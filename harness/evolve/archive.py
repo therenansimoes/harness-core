@@ -65,9 +65,7 @@ class Archive:
         return json.loads(row[0]), row[1]
 
     def niches(self) -> list[tuple[str, str]]:
-        cur = self._conn.execute(
-            "SELECT kind, cost_bucket FROM elites ORDER BY kind, cost_bucket"
-        )
+        cur = self._conn.execute("SELECT kind, cost_bucket FROM elites ORDER BY kind, cost_bucket")
         return [(k, b) for k, b in cur.fetchall()]
 
     def close(self) -> None:

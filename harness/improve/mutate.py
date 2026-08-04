@@ -86,7 +86,7 @@ class Mutation:
 def mutation_id(rule_id: str, ts: str) -> str:
     """Determinístico de propósito: o mesmo ciclo retomado depois de um crash
     recalcula o MESMO id e o `INSERT OR IGNORE` do ledger não duplica a linha."""
-    return hashlib.sha256(f"{rule_id}\0{ts}".encode("utf-8")).hexdigest()[:12]
+    return hashlib.sha256(f"{rule_id}\0{ts}".encode()).hexdigest()[:12]
 
 
 def check(rule, root: Path | str | None = None, genome: Genome | None = None) -> list[str]:
@@ -160,9 +160,7 @@ def apply(rule, ts: str, root: Path | str | None = None, genome: Genome | None =
     if applied != rule.to_value:
         # Escreveu e não virou o que devia: desfaz na hora, não deixa meio-termo.
         _write(path, text)
-        raise MutationError(
-            f"{path}: {rule.key} virou {applied!r} em vez de {rule.to_value!r}"
-        )
+        raise MutationError(f"{path}: {rule.key} virou {applied!r} em vez de {rule.to_value!r}")
     return Mutation(
         mutation_id=mutation_id(rule.id, ts),
         rule_id=rule.id,
@@ -236,7 +234,7 @@ def _write(path: Path, text: str) -> None:
     real = Path(os.path.realpath(path))
     tmp = real.with_name(f".{real.name}.{os.getpid()}.tmp")
     tmp.write_text(text, encoding="utf-8")
-    os.chmod(tmp, os.stat(real).st_mode & 0o7777)   # tmp novo nasce com o umask
+    os.chmod(tmp, os.stat(real).st_mode & 0o7777)  # tmp novo nasce com o umask
     os.replace(tmp, real)
 
 
@@ -263,9 +261,7 @@ def _descend(node: Any, name: str, key: str) -> Any:
 
 
 def _section_label(section: list[tuple[str, int | None]]) -> str:
-    return ".".join(
-        name if index is None else f"{name}[{index}]" for name, index in section
-    )
+    return ".".join(name if index is None else f"{name}[{index}]" for name, index in section)
 
 
 def _locate(text: str, key: str, path: Path) -> tuple[int, int]:

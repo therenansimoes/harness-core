@@ -9,6 +9,7 @@ esperados abaixo são os mesmos hardcoded em tests/test_outputs.py
 (test_summary_structure_and_counts) do task original — reproduzidos aqui
 rodando o gerador localmente e conferindo total ERROR=14160, WARNING=18772,
 INFO=56621. exit 0 = pass."""
+
 import csv
 import sys
 from pathlib import Path
@@ -51,7 +52,7 @@ else:
     if len(reader) - 1 != len(EXPECTED_ROWS):
         fails.append(f"esperado {len(EXPECTED_ROWS)} linhas, obtido {len(reader) - 1}")
 
-    for expected_row, actual_row in zip(EXPECTED_ROWS, reader[1:]):
+    for expected_row, actual_row in zip(EXPECTED_ROWS, reader[1:], strict=False):
         if actual_row != expected_row:
             fails.append(f"esperado {expected_row}, obtido {actual_row}")
 

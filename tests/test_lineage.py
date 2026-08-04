@@ -9,9 +9,7 @@ from harness.types import MutationRow
 
 
 def _write_jsonl(path, entries):
-    path.write_text(
-        "".join(json.dumps(e) + "\n" for e in entries), encoding="utf-8"
-    )
+    path.write_text("".join(json.dumps(e) + "\n" for e in entries), encoding="utf-8")
 
 
 def _entries():
@@ -24,8 +22,14 @@ def _entries():
 
 def _mutation(mid, verdict):
     return MutationRow(
-        mutation_id=mid, rule_id="r", verdict=verdict, arm_a="a", arm_b="b",
-        applied_at="t", reverted=False, note=None,
+        mutation_id=mid,
+        rule_id="r",
+        verdict=verdict,
+        arm_a="a",
+        arm_b="b",
+        applied_at="t",
+        reverted=False,
+        note=None,
     )
 
 
@@ -36,10 +40,13 @@ def test_load_arquivo_ausente(tmp_path):
 def test_load_linha_torta_pula_com_aviso(tmp_path, capsys):
     p = tmp_path / "lineage.jsonl"
     p.write_text(
-        json.dumps(_entries()[0]) + "\n"
+        json.dumps(_entries()[0])
+        + "\n"
         + "{isso nao e json\n"
-        + json.dumps({"id": "sem_campos"}) + "\n"
-        + json.dumps(_entries()[2]) + "\n",
+        + json.dumps({"id": "sem_campos"})
+        + "\n"
+        + json.dumps(_entries()[2])
+        + "\n",
         encoding="utf-8",
     )
     out = lineage.load_lineage(p)
@@ -75,8 +82,8 @@ def test_load_mescla_verdict_do_jsonl(tmp_path):
     p = tmp_path / "lineage.jsonl"
     _write_jsonl(
         p,
-        _entries()
-        + [
+        [
+            *_entries(),
             {"id": "aaaa1111bbbb", "verdict": "KEEP", "ts": "t4"},
             {"id": "cccc2222dddd", "verdict": "DISCARD", "ts": "t5"},
         ],
@@ -91,7 +98,7 @@ def test_load_mescla_verdict_do_jsonl(tmp_path):
 
 def test_load_verdict_sem_proposta_ignora_com_aviso(tmp_path, capsys):
     p = tmp_path / "lineage.jsonl"
-    _write_jsonl(p, _entries() + [{"id": "fantasma", "verdict": "KEEP", "ts": "t9"}])
+    _write_jsonl(p, [*_entries(), {"id": "fantasma", "verdict": "KEEP", "ts": "t9"}])
     out = lineage.load_lineage(p)
     assert [e["id"] for e in out] == [e["id"] for e in _entries()]
     err = capsys.readouterr().err
@@ -111,8 +118,8 @@ def test_render_verdict_do_jsonl_e_sem_marca_na_antiga(tmp_path):
     p = tmp_path / "lineage.jsonl"
     _write_jsonl(
         p,
-        _entries()
-        + [
+        [
+            *_entries(),
             {"id": "aaaa1111bbbb", "verdict": "KEEP", "ts": "t4"},
             {"id": "cccc2222dddd", "verdict": "DISCARD", "ts": "t5"},
         ],

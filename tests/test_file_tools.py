@@ -7,8 +7,8 @@ from harness.backends import file_tools as ft
 
 pytest.importorskip("deepagents", reason="extra deepagents não instalado")
 
-from harness.backends.safe_shell import SafeShellBackend  # noqa: E402
-from harness.backends.smart_fs import (  # noqa: E402
+from harness.backends.safe_shell import SafeShellBackend
+from harness.backends.smart_fs import (
     BIG_FILE_LINES,
     GUARD_HEAD_LINES,
     SmartFilesystemMiddleware,

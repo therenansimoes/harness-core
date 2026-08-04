@@ -26,8 +26,12 @@ def _arquivo(root, rel: str, size: int, dias: float) -> None:
 def test_sem_cache_nao_faz_nada(data):
     r = cache_gc.gc(max_gb=1 / cache_gc.GB, data=data)
     assert r == {
-        "before": 0, "after": 0, "removed": 0, "freed": 0,
-        "skipped_recent": 0, "max_bytes": 1,
+        "before": 0,
+        "after": 0,
+        "removed": 0,
+        "freed": 0,
+        "skipped_recent": 0,
+        "max_bytes": 1,
     }
 
 

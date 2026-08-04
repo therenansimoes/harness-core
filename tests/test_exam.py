@@ -135,9 +135,7 @@ def test_config_exam_roteia_backend_real(tmp_path, data_dir, monkeypatch):
     sealed = tmp_path / "sealed"
     _mk_unit(sealed, "u_ok", PASS_TOML)
     _mk_unit(sealed, "u_real", REAL_TOML)
-    assert (
-        exam.run_sealed_exam(sealed_dir=sealed, data_dir=data_dir, config_path=cfg) is True
-    )
+    assert exam.run_sealed_exam(sealed_dir=sealed, data_dir=data_dir, config_path=cfg) is True
     # backend real: NENHUMA unidade fica fora, e todas vão pro backend do config.
     assert calls == [
         ("u_ok", "deepagents", "openai:qwen3.5-9b-mlx"),
@@ -161,6 +159,18 @@ def test_config_torto_degrada_para_mock(tmp_path):
     torto.write_text("[exam]\nbackend = 7\n", encoding="utf-8")
     assert exam.exam_backend(torto) == ("mock", "")
     assert exam.exam_backend(REPO / "config" / "ruler.toml") == ("mock", "")
+
+
+def test_frontier_backend_cai_no_exam_quando_secao_falta(tmp_path):
+    cfg = tmp_path / "ruler.toml"
+    cfg.write_text('[exam]\nbackend = "deepagents"\nmodel = "x"\n', encoding="utf-8")
+    # Sem [frontier]: screening usa o executor da prova, não um mais fraco.
+    assert exam.frontier_backend(cfg) == ("deepagents", "x")
+    cfg.write_text(
+        '[exam]\nbackend = "deepagents"\n[frontier]\nbackend = "mock"\n', encoding="utf-8"
+    )
+    assert exam.frontier_backend(cfg) == ("mock", "")
+    assert exam.frontier_backend(tmp_path / "nao_existe.toml") == ("mock", "")
 
 
 def test_unidade_requires_real_fica_fora_do_exame_mock(tmp_path, data_dir, capsys):

@@ -1,4 +1,5 @@
 """Regression: site/index.html precisa existir e não estar vazio."""
+
 import sys
 from pathlib import Path
 

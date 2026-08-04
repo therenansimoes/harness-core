@@ -26,7 +26,8 @@ casa contra o kind da unidade, então seção órfã é lixo inerte, não erro.
 from __future__ import annotations
 
 import sys
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from harness.graph import run_graph as _rg
 from harness.graph import topology
@@ -43,9 +44,7 @@ def resolve_spec(spec: Mapping[str, Any], kind: str | None) -> dict:
     has_nodes = "nodes" in section
     has_edges = "edges" in section
     if not (has_nodes and has_edges):
-        raise topology.TopologyError(
-            f"{KINDS_KEY}.{kind}: seção parcial (precisa nodes e edges)"
-        )
+        raise topology.TopologyError(f"{KINDS_KEY}.{kind}: seção parcial (precisa nodes e edges)")
     return {"nodes": section["nodes"], "edges": section["edges"]}
 
 

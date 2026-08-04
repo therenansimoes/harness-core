@@ -185,8 +185,20 @@ CSS_FUNDO = "background-color"
 
 VOID_TAGS = frozenset(
     {
-        "area", "base", "br", "col", "embed", "hr", "img", "input",
-        "link", "meta", "param", "source", "track", "wbr",
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
     }
 )
 # input escondido ou botão não precisa de label: o rótulo dele é o próprio value.
@@ -271,7 +283,7 @@ def _parse_html(html: str) -> _Arvore:
     try:
         arvore.feed(html)
         arvore.close()
-    except Exception:  # noqa: BLE001 - HTML de entrada não derruba a tool
+    except Exception:
         pass
     return arvore
 
@@ -291,9 +303,7 @@ def _texto(no: _No) -> str:
 
 def _desc(no: _No) -> str:
     """`<img src="logo.png">` — o elemento como o humano vai procurá-lo no arquivo."""
-    marcas = "".join(
-        f' {k}="{no.attrs[k][:40]}"' for k in _DESC_ATTRS if no.attrs.get(k)
-    )
+    marcas = "".join(f' {k}="{no.attrs[k][:40]}"' for k in _DESC_ATTRS if no.attrs.get(k))
     return f"<{no.tag}{marcas}>"
 
 
@@ -470,9 +480,7 @@ def dump_dom(url: str, timeout_s: float = DOM_TIMEOUT_S) -> tuple[str | None, st
         # check=False: o returncode do Chrome não decide nada aqui — o sinal de
         # pronto é o stdout ter DOM, igual ao `screenshot` que olha o PNG e não o
         # código de saída.
-        proc = subprocess.run(
-            argv, capture_output=True, text=True, timeout=timeout_s, check=False
-        )
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout_s, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return None, f"dump-dom: {type(exc).__name__}: {exc}"
     if not proc.stdout.strip():
@@ -544,9 +552,13 @@ def inspect_dom(ws: str | Path, port: int, selector: str) -> str:
         f"existe: {quantos}",
         f"tag: {no.tag}",
         "atributos: " + (" ".join(f'{k}="{v}"' for k, v in no.attrs.items()) or "(nenhum)"),
-        f"texto ({MAX_TEXT} chars): " + ((texto[:MAX_TEXT] + "…") if len(texto) > MAX_TEXT else texto or "(vazio)"),
+        f"texto ({MAX_TEXT} chars): "
+        + ((texto[:MAX_TEXT] + "…") if len(texto) > MAX_TEXT else texto or "(vazio)"),
         "computed (parcial — só style= inline e regras literais de <style>): "
-        + ("; ".join(f"{p}={computed[p]}" for p in CSS_PROPS if p in computed) or "(nada declarado literalmente)"),
+        + (
+            "; ".join(f"{p}={computed[p]}" for p in CSS_PROPS if p in computed)
+            or "(nada declarado literalmente)"
+        ),
         BBOX,
     ]
     return "\n".join(linhas)
@@ -559,9 +571,7 @@ def inspect_dom(ws: str | Path, port: int, selector: str) -> str:
 
 def _labels_por_for(arvore: _Arvore) -> set[str]:
     return {
-        no.attrs["for"]
-        for no in _walk(arvore.raiz)
-        if no.tag == "label" and no.attrs.get("for")
+        no.attrs["for"] for no in _walk(arvore.raiz) if no.tag == "label" and no.attrs.get("for")
     }
 
 
@@ -589,8 +599,8 @@ def _varre(rotulo: str, arvore: _Arvore) -> tuple[list[str], list[str]]:
     for no in _walk(arvore.raiz):
         if no.tag == "img" and "alt" not in no.attrs:
             achados.append(
-                f"{rotulo}/{_desc(no)} — img sem alt: adicione alt=\"descrição do "
-                'conteúdo\", ou alt="" se a imagem for puramente decorativa'
+                f'{rotulo}/{_desc(no)} — img sem alt: adicione alt="descrição do '
+                'conteúdo", ou alt="" se a imagem for puramente decorativa'
             )
 
         if no.tag == "input" and no.attrs.get("type", "text").lower() not in TIPOS_SEM_LABEL:
@@ -602,7 +612,9 @@ def _varre(rotulo: str, arvore: _Arvore) -> tuple[list[str], list[str]]:
             if not tem_rotulo:
                 ident = no.attrs.get("id")
                 conserto = (
-                    f'<label for="{ident}">…</label>' if ident else 'envolva num <label> ou dê um id e use <label for="…">'
+                    f'<label for="{ident}">…</label>'
+                    if ident
+                    else 'envolva num <label> ou dê um id e use <label for="…">'
                 )
                 achados.append(
                     f"{rotulo}/{_desc(no)} — input sem label associado: {conserto} "

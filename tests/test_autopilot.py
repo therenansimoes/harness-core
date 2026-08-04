@@ -68,8 +68,11 @@ class KnobBackend:
 
     def capabilities(self) -> Capabilities:
         return Capabilities(
-            resumable=False, reports_cost=True, model_selectable=False,
-            tools=frozenset({"write"}), streaming=False,
+            resumable=False,
+            reports_cost=True,
+            model_selectable=False,
+            tools=frozenset({"write"}),
+            streaming=False,
         )
 
     def preflight(self) -> Preflight:
@@ -86,8 +89,14 @@ class KnobBackend:
             (req.workspace / OUTPUT).write_text("x", encoding="utf-8")
             changed = (OUTPUT,)
         return ExecResult(
-            ok=True, exit_reason="done", turns=1, cost_usd=0.0, tokens_in=0,
-            tokens_out=0, files_changed=changed, session_id=None,
+            ok=True,
+            exit_reason="done",
+            turns=1,
+            cost_usd=0.0,
+            tokens_in=0,
+            tokens_out=0,
+            files_changed=changed,
+            session_id=None,
             trace_path=req.trace_path,
         )
 
@@ -125,10 +134,20 @@ def seed_failures(sandbox: Path, n: int = 3) -> None:
     for i in range(n):
         store.record_run(
             RunRow(
-                run_id=f"seed{i}", unit_id="echo", project=None, backend="mock",
-                model=None, tier="t0", kind="code", ok=False,
-                exit_reason="verify_failed", sec_total=10.0, sec_provision=0.0,
-                cost_usd=0.0, intervention=False, created_at=store.now_iso(),
+                run_id=f"seed{i}",
+                unit_id="echo",
+                project=None,
+                backend="mock",
+                model=None,
+                tier="t0",
+                kind="code",
+                ok=False,
+                exit_reason="verify_failed",
+                sec_total=10.0,
+                sec_provision=0.0,
+                cost_usd=0.0,
+                intervention=False,
+                created_at=store.now_iso(),
             ),
             path=db(sandbox),
         )
@@ -146,9 +165,7 @@ def snapshot(root: Path) -> dict[str, bytes]:
 
 
 def autopilot(sandbox: Path, **kw):
-    return run_autopilot(
-        sandbox / "data", units=[UNIT], root=sandbox, **kw
-    )
+    return run_autopilot(sandbox / "data", units=[UNIT], root=sandbox, **kw)
 
 
 # --- veredito -------------------------------------------------------------------
@@ -218,7 +235,7 @@ def test_autopilot_interrupt_sem_gradiente(sandbox, knob):
     assert report.escalation["unit"] == [str(UNIT)]
     assert report.results == ()
     assert report.cycles == 0
-    assert snapshot(sandbox / "config") == antes   # não escreveu nada
+    assert snapshot(sandbox / "config") == antes  # não escreveu nada
     assert store.mutations(path=db(sandbox)) == []
 
 
@@ -247,7 +264,7 @@ def test_autopilot_escala_violacao_de_genoma(sandbox, knob):
 
     assert report.escalation["reason"] == escalate.GENOME_VIOLATION
     assert report.escalation["evidence"]["rule"] == "mexe_no_exame"
-    assert selado.read_text() == "[exam]\nfloor = 0.50\n"   # nada foi escrito
+    assert selado.read_text() == "[exam]\nfloor = 0.50\n"  # nada foi escrito
 
     linha = store.mutations(path=db(sandbox))[0]
     assert linha.verdict == "REJECTED"
@@ -280,7 +297,9 @@ def test_autopilot_resume_abort_encerra_limpo(sandbox, knob):
     report = autopilot(sandbox, backend="knob_b")
 
     fim = autopilot(
-        sandbox, backend="knob_b", thread_id=report.thread_id,
+        sandbox,
+        backend="knob_b",
+        thread_id=report.thread_id,
         resume={"action": escalate.ABORT},
     )
 
@@ -312,7 +331,9 @@ def test_autopilot_erro_no_experimento_nao_deixa_config_suja(sandbox, monkeypatc
         # A explosão foi na 1ª run do braço A, com a mutação já desligada pelo
         # `before_run` — o revert do abort tem que ser idempotente, não estourar.
         fim = autopilot(
-            sandbox, backend="boom", thread_id=report.thread_id,
+            sandbox,
+            backend="boom",
+            thread_id=report.thread_id,
             resume={"action": escalate.ABORT},
         )
     finally:
@@ -322,7 +343,7 @@ def test_autopilot_erro_no_experimento_nao_deixa_config_suja(sandbox, monkeypatc
     linha = store.mutations(path=db(sandbox))[0]
     # ABORTED, não INCONCLUSIVE: experimento sem amostra não é empate.
     assert (linha.verdict, linha.reverted, linha.note) == ("ABORTED", True, "error")
-    assert fim.results[0]["arm_a"] == "0/0"   # experimento sem amostra nenhuma
+    assert fim.results[0]["arm_a"] == "0/0"  # experimento sem amostra nenhuma
 
 
 def test_autopilot_exige_unidade(sandbox):
@@ -348,7 +369,9 @@ def test_autopilot_smoke_5runs(sandbox, knob):
     runs = [r for r in store.history(path=db(sandbox), limit=100) if r.run_id[:4] != "seed"]
     assert len(runs) >= 5
     assert len(report.results) == 1 and report.results[0]["verdict"] in (
-        "KEEP", "DISCARD", "INCONCLUSIVE"
+        "KEEP",
+        "DISCARD",
+        "INCONCLUSIVE",
     )
     assert report.intervention_rate == 0.0 and report.interventions == 0
     assert report.runs_window == len(runs) + 3
@@ -366,23 +389,33 @@ def test_cli_improve(sandbox, knob, capsys):
     from harness import cli
 
     seed_failures(sandbox)
-    rc = cli.main([
-        "improve", "--cycles", "1", "--deadline-s", "300",
-        "--unit", str(UNIT), "--backend", "knob_b",
-    ])
+    rc = cli.main(
+        [
+            "improve",
+            "--cycles",
+            "1",
+            "--deadline-s",
+            "300",
+            "--unit",
+            str(UNIT),
+            "--backend",
+            "knob_b",
+        ]
+    )
 
     assert rc == 0
     linhas = capsys.readouterr().out.strip().splitlines()
     assert linhas[0].startswith("ciclo0 floor_up router.prior_floor 0.50->0.65 KEEP")
     assert "a=0/6 b=6/6" in linhas[0] and "mantida" in linhas[0]
-    assert linhas[-1].startswith("improve ciclos=1 mutações=1 intervenções=0 "
-                                 "intervention_rate=0.00")
+    assert linhas[-1].startswith(
+        "improve ciclos=1 mutações=1 intervenções=0 intervention_rate=0.00"
+    )
 
 
 def test_cli_improve_sem_unidade_falha_claro(sandbox, capsys, monkeypatch):
     from harness import cli
 
-    monkeypatch.chdir(sandbox)   # sem benchmarks/held_in aqui
+    monkeypatch.chdir(sandbox)  # sem benchmarks/held_in aqui
     assert cli.main(["improve"]) == 1
     assert "unidade de avaliação" in capsys.readouterr().err
 

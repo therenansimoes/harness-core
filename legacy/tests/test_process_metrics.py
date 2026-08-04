@@ -6,6 +6,7 @@ Sem chamada a LLM — process_metrics.py é puro stdlib.
 
     python3 -m pytest tests/test_process_metrics.py -q
 """
+
 from __future__ import annotations
 
 import json
@@ -19,8 +20,8 @@ sys.path.insert(0, str(REPO / "attic" / "judges"))
 
 import process_metrics as pm  # noqa: E402
 
-
 # --------------------------------------------------------- trace sintético
+
 
 def _assistant(msg_id: str, blocks: list[dict]) -> dict:
     return {"type": "assistant", "message": {"id": msg_id, "content": blocks}}
@@ -33,7 +34,16 @@ def _tool_use(tool_use_id: str, name: str, tool_input: dict) -> dict:
 def _user_result(tool_use_id: str, is_error: bool, content: str) -> dict:
     return {
         "type": "user",
-        "message": {"content": [{"type": "tool_result", "tool_use_id": tool_use_id, "is_error": is_error, "content": content}]},
+        "message": {
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "is_error": is_error,
+                    "content": content,
+                }
+            ]
+        },
     }
 
 

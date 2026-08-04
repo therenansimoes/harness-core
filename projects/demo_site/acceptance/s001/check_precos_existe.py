@@ -1,4 +1,5 @@
 """Acceptance s001: site/precos.html precisa existir."""
+
 import sys
 from pathlib import Path
 
