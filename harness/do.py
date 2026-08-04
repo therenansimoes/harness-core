@@ -1,0 +1,308 @@
+"""`harness do`: da pasta do usuário até uma unidade rodável, sem ele saber nada.
+
+Todo o resto da CLI assume que existe um `unit.toml` escrito por alguém que
+conhece o vocabulário (id, kind, verify_cmd, project). Este módulo é a ponte:
+recebe uma frase em português e um diretório qualquer, e devolve as quatro
+coisas que o grafo exige — repositório git, projeto registrado, régua
+determinística e unidade em disco.
+
+Cada função aqui é conservadora de propósito: o repo do usuário é dele, e a
+única escrita que fazemos lá é `.harness/units/<id>/` (ignorada pelo git, e
+apagada no fim do run). O `git init` só acontece onde não havia repo nenhum.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import tomllib
+import unicodedata
+import uuid
+from pathlib import Path
+
+from harness import paths
+
+UNIT_FILE = "unit.toml"
+UNITS_REL = Path(".harness/units")
+GITIGNORE_LINE = ".harness/"
+INITIAL_COMMIT = "harness: snapshot inicial"
+
+# Identidade de commit própria: repo virgem pode não ter `user.name` configurado,
+# e o `harness do` não pode morrer por causa disso. Mesma dupla que o
+# `projects.integrate` usa no merge.
+GIT_IDENTITY = ("-c", "user.name=harness", "-c", "user.email=harness@harness.local")
+
+PYTEST_CMD = "python -m pytest -q"
+NPM_CMD = "npm test --silent"
+MAKE_CMD = "make test"
+CARGO_CMD = "cargo test -q"
+GO_CMD = "go test ./..."
+# Sem suíte nenhuma no repo, a única coisa verificável é que o agente ESCREVEU.
+# É régua fraca e assumida como tal — mas passa no `add.validate_verify_cmd`
+# (não é trivial: falha quando o run não mudou arquivo nenhum) e é infinitamente
+# melhor que aceitar um run que não fez nada.
+#
+# `git diff` e não `git status --porcelain`: o workspace do run tem os symlinks
+# de cache do provision (`node_modules`, `.venv`, `.cache`) como não rastreados,
+# e o status ficaria sujo mesmo com o agente parado. O preço é que run que só
+# CRIA arquivo sai vermelho aqui — falso negativo é o erro barato dos dois.
+FALLBACK_CMD = "! git diff --quiet"
+
+MAKE_TEST_RE = re.compile(r"^test:", re.MULTILINE)
+# Tamanho do pedaço legível do id. O sufixo aleatório é que garante unicidade;
+# o slug existe para o humano reconhecer a unidade no `git log` e na branch.
+SLUG_MAX = 24
+
+
+def slug(texto: str) -> str:
+    """Frase em português -> `[a-z0-9-]`. Acento vira a letra base.
+
+    `add.SLUG_RE` (que valida id de unidade em todo o resto da CLI) só aceita
+    ASCII minúsculo, e o id vira nome de branch e de diretório — normalizar
+    aqui é mais barato que descobrir no `git checkout`.
+    """
+    plano = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode("ascii")
+    bruto = re.sub(r"[^a-z0-9]+", "-", plano.lower())
+    return re.sub(r"-{2,}", "-", bruto).strip("-")
+
+
+def new_unit_id(texto: str) -> str:
+    """`do-<pedido>-<aleatório>`. O sufixo é o que deixa repetir o mesmo pedido."""
+    corpo = slug(texto)[:SLUG_MAX].strip("-") or "pedido"
+    return f"do-{corpo}-{uuid.uuid4().hex[:6]}"
+
+
+def pin_home_paths() -> None:
+    """Trava config/data no `~/.harness` ANTES de qualquer resolução de path.
+
+    `paths.config_dir()` prefere um `config/` do cwd — resolução legada correta
+    dentro do checkout do harness e errada aqui: `harness do` roda dentro do
+    repo do USUÁRIO, e um projeto Django com `config/` na raiz veria o harness
+    gravar `projects.toml` e o ledger dentro dele. Env explícita continua
+    vencendo (é `setdefault`), então quem aponta para uma árvore de propósito
+    não perde nada.
+    """
+    os.environ.setdefault(paths.CONFIG_DIR_ENV, str(paths.home_root() / paths.CONFIG_SUBDIR))
+    os.environ.setdefault(paths.DATA_DIR_ENV, str(paths.home_root() / paths.DATA_SUBDIR))
+
+
+# --------------------------------------------------------------------------- git
+
+
+def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(cwd), *args], capture_output=True, text=True, check=False
+    )
+
+
+def repo_root(cwd: Path) -> Path | None:
+    """Raiz do repo que contém `cwd`, ou None se não houver nenhum acima."""
+    proc = _git(cwd, "rev-parse", "--show-toplevel")
+    if proc.returncode != 0:
+        return None
+    top = proc.stdout.strip()
+    return Path(top).resolve() if top else None
+
+
+def current_branch(repo: Path) -> str:
+    proc = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+    return proc.stdout.strip() or "HEAD"
+
+
+def _has_commit(repo: Path) -> bool:
+    return _git(repo, "rev-parse", "--verify", "--quiet", "HEAD").returncode == 0
+
+
+def _commit_tudo(repo: Path, msg: str) -> None:
+    _git(repo, "add", "-A")
+    _git(repo, *GIT_IDENTITY, "commit", "-q", "-m", msg)
+
+
+def ensure_repo(cwd: Path) -> tuple[Path, bool]:
+    """Garante repo git COM pelo menos um commit. Devolve `(repo, criou_repo)`.
+
+    O grafo provisiona o workspace com `git worktree` a partir do HEAD do repo,
+    então "pasta sem git" e "repo sem commit" são as duas formas de não ter por
+    onde começar — as duas viram um snapshot inicial aqui.
+
+    Working tree suja NÃO bloqueia: o run acontece num worktree isolado e nada
+    do que o agente faz encosta no que o usuário estava editando. Só o merge do
+    fim exige limpeza, e aí o aviso daqui já foi dado.
+    """
+    achado = repo_root(cwd)
+    if achado is None:
+        repo = Path(cwd).resolve()
+        _git(repo, "-c", "init.defaultBranch=main", "init", "-q")
+        _semear_gitignore(repo)
+        _commit_tudo(repo, INITIAL_COMMIT)
+        return repo, True
+
+    if not _has_commit(achado):
+        _commit_tudo(achado, INITIAL_COMMIT)
+        return achado, False
+
+    sujo = _git(achado, "status", "--porcelain", "--untracked-files=no").stdout.strip()
+    if sujo:
+        print(
+            f"aviso: {achado} tem mudança não commitada — o run não encosta nela "
+            "(roda em worktree separado), mas o merge do fim vai pedir a árvore limpa",
+            file=sys.stderr,
+        )
+    return achado, False
+
+
+def _semear_gitignore(repo: Path) -> None:
+    """`.harness/` fora do git. Só em repo que acabamos de criar: mexer no
+    `.gitignore` de um repo que já existia é editar arquivo do usuário."""
+    alvo = repo / ".gitignore"
+    if alvo.exists():
+        return
+    alvo.write_text(f"{GITIGNORE_LINE}\n", encoding="utf-8")
+
+
+# --------------------------------------------------------------------------- régua
+
+
+def detect_verify(repo: Path) -> tuple[str, str]:
+    """Régua determinística a partir do que existe no repo. `(cmd, motivo)`.
+
+    Primeiro match vence, e a ordem é por força da evidência: suíte declarada em
+    config vale mais que diretório com nome sugestivo, que vale mais que
+    ecossistema. O motivo viaja junto porque é o que o usuário lê para saber se
+    adivinhamos certo (e trocar com `--verify-cmd` quando não).
+    """
+    repo = Path(repo)
+    pyproject = repo / "pyproject.toml"
+    if pyproject.is_file() and "[tool.pytest" in _texto(pyproject):
+        return PYTEST_CMD, "pyproject.toml [tool.pytest]"
+    if (repo / "tests").is_dir():
+        return PYTEST_CMD, "tests/"
+    if (repo / "pytest.ini").is_file():
+        return PYTEST_CMD, "pytest.ini"
+
+    package = repo / "package.json"
+    if package.is_file():
+        try:
+            scripts = json.loads(_texto(package)).get("scripts")
+        except ValueError:
+            scripts = None
+        if isinstance(scripts, dict) and scripts.get("test"):
+            return NPM_CMD, "package.json scripts.test"
+
+    makefile = repo / "Makefile"
+    if makefile.is_file() and MAKE_TEST_RE.search(_texto(makefile)):
+        return MAKE_CMD, "Makefile alvo test"
+
+    if (repo / "Cargo.toml").is_file():
+        return CARGO_CMD, "Cargo.toml"
+    if (repo / "go.mod").is_file():
+        return GO_CMD, "go.mod"
+    return FALLBACK_CMD, "nenhuma suíte encontrada — a régua só prova que houve escrita"
+
+
+def _texto(path: Path) -> str:
+    """Leitura best-effort: arquivo ilegível é a mesma coisa que ausente para a
+    detecção, e derrubar o `harness do` por causa de um `Makefile` binário seria
+    trocar um palpite por um traceback."""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+# --------------------------------------------------------------------------- projeto
+
+
+def ensure_project(repo: Path) -> str:
+    """Registra (ou atualiza) o repo em `projects.toml` e devolve o nome.
+
+    Idempotente pelo `init_project`. A fila fica em `data_dir()/projects/<nome>`
+    e não no default relativo (`projects/<nome>/queue`, que resolve contra o
+    cwd): o cwd aqui é o repo do usuário, e `harness do` não cria pasta de
+    infraestrutura dentro dele.
+    """
+    from harness.projects import init_project
+
+    repo = Path(repo).resolve()
+    nome = project_name(repo)
+    init_project(
+        repo,
+        nome,
+        verify_default=detect_verify(repo)[0],
+        queue_dir=paths.data_dir().resolve() / "projects" / nome / "queue",
+    )
+    return nome
+
+
+def project_name(repo: Path) -> str:
+    """`slug(nome da pasta)`, com sufixo de hash quando o nome já é de outro repo.
+
+    Duas pastas `api/` em árvores diferentes é o caso normal de quem tem muitos
+    projetos; deixar a segunda sobrescrever o registro da primeira apagaria o
+    histórico do ledger de um projeto que ainda existe.
+    """
+    from harness.projects import load_projects
+
+    repo = Path(repo).resolve()
+    base = slug(repo.name) or "projeto"
+    if len(base) < 2:  # `add.SLUG_RE` exige 2 caracteres no mínimo
+        base = f"{base}0"
+    registrado = load_projects().get(base)
+    if registrado is None or Path(registrado.repo).resolve() == repo:
+        return base
+    return f"{base}-{hashlib.sha1(str(repo).encode('utf-8')).hexdigest()[:6]}"
+
+
+# --------------------------------------------------------------------------- unidade
+
+
+def write_unit(
+    repo: Path,
+    unit_id: str,
+    prompt: str,
+    verify_cmd: str,
+    project: str,
+    kind: str | None = None,
+) -> Path:
+    """Grava `.harness/units/<id>/unit.toml` e devolve o diretório.
+
+    Dentro do repo (e não em tmp) porque a unidade é o registro do que foi
+    pedido: enquanto o run acontece, ela é o único lugar onde o pedido original
+    está escrito, e um crash não pode levá-la junto. Quem não passa
+    `--keep-unit` vê o diretório sumir no fim.
+    """
+    unit_dir = Path(repo) / UNITS_REL / unit_id
+    linhas = [
+        "# Gerado por `harness do`. Sem --keep-unit, some quando o run termina.",
+        f"id = {_toml_str(unit_id)}",
+        f"project = {_toml_str(project)}",
+    ]
+    if kind:
+        linhas.append(f"kind = {_toml_str(kind)}")
+    linhas += [
+        f"verify_cmd = {_toml_str(verify_cmd)}",
+        f"prompt = {_toml_str(prompt)}",
+        "",
+    ]
+    conteudo = "\n".join(linhas)
+    tomllib.loads(conteudo)  # round-trip: o que sai daqui SEMPRE carrega
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    (unit_dir / UNIT_FILE).write_text(conteudo, encoding="utf-8")
+    return unit_dir
+
+
+def _toml_str(value: str) -> str:
+    """Literal (`'''...'''`) quando o texto cabe nele, senão basic string.
+
+    O literal preserva o pedido EXATAMENTE como o usuário digitou (nenhum
+    escape) e é o que ele vai ler se abrir o arquivo — que é metade do ponto de
+    gravar a unidade no repo. Texto com a própria delimitação dentro cai no
+    `json.dumps`, que produz basic string TOML válida (mesmo truque do `add`).
+    """
+    if "'''" not in value and not value.startswith("\n") and not value.endswith("'"):
+        return f"'''{value}'''"
+    return json.dumps(value, ensure_ascii=False)

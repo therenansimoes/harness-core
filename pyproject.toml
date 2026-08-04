@@ -49,6 +49,22 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["harness"]
 
+# Dado versionado que o pacote precisa em runtime e que vive FORA de `harness/`
+# no checkout. Vira `harness/_defaults/*` na wheel — é o que `harness.paths`
+# procura antes de cair no checkout.
+#
+# PENDÊNCIA CONHECIDA: `config/projects.toml` é registro LOCAL (paths absolutos
+# da máquina do dono do checkout) e viaja junto. `exclude` NÃO filtra
+# force-include no hatchling — testado com "config/projects.toml",
+# "/config/projects.toml" e "**/projects.toml", os três no-op. Sair da wheel
+# exige decisão de layout (tirar o arquivo do `config/` versionado, ou
+# enumerar arquivo a arquivo no force-include, que quebra silenciosamente
+# quando nasce config nova).
+[tool.hatch.build.targets.wheel.force-include]
+"config" = "harness/_defaults/config"
+"skills" = "harness/_defaults/skills"
+"templates" = "harness/_defaults/templates"
+
 [tool.ruff]
 # Mesma largura do código existente do repo (docstrings e tabelas de regex
 # passam de 88 e quebrá-las piora a leitura).

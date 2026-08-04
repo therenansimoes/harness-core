@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from math import isnan
 from pathlib import Path
 
+from harness import paths
 from harness.ruler.wilson import INCONCLUSIVE, KEEP, AbVerdict
 
 # Os eixos, na ordem em que entram no motivo. Qualidade não está aqui: ela é o
@@ -29,8 +30,10 @@ from harness.ruler.wilson import INCONCLUSIVE, KEEP, AbVerdict
 AXES = ("cost_usd", "sec_total")
 
 # Mesmo arquivo (e mesma política) do gate: ausente/malformado => defaults
-# congelados abaixo, que são o comportamento de hoje — Pareto DESLIGADO.
-RULER_CONFIG = Path(__file__).resolve().parents[2] / "config" / "ruler.toml"
+# congelados abaixo, que são o comportamento de hoje — Pareto DESLIGADO. E,
+# como no gate, `RULER_CONFIG` é override: `None` deixa `harness.paths` decidir
+# em call-time.
+RULER_CONFIG: Path | None = None
 PARETO_ENABLED = False
 PARETO_COST_TOL = 0.10
 PARETO_SEC_TOL = 0.10
@@ -48,6 +51,10 @@ class ParetoConfig:
 DEFAULT_CONFIG = ParetoConfig(PARETO_ENABLED, PARETO_COST_TOL, PARETO_SEC_TOL)
 
 
+def _ruler_config() -> Path:
+    return RULER_CONFIG or paths.config_file("ruler.toml")
+
+
 def load_pareto(config_path: Path | None = None) -> ParetoConfig:
     """Lê `[pareto]` de `config/ruler.toml`.
 
@@ -56,7 +63,7 @@ def load_pareto(config_path: Path | None = None) -> ParetoConfig:
     só liga se for exatamente `true` no toml: "sim", 1 ou "true" não ligam
     nada — filtro extra nunca entra por coerção de tipo.
     """
-    path = RULER_CONFIG if config_path is None else config_path
+    path = _ruler_config() if config_path is None else config_path
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):

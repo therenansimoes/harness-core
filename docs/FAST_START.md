@@ -9,6 +9,26 @@ of truth). Nothing here is a plan.
 
 ---
 
+## Quickstart
+
+```bash
+uv tool install --from . "harness-core[deepagents]"   # once
+cd your-project
+harness quickstart                     # environment check
+harness do "fix the bug in target.py"
+```
+
+`harness do` decides model, route, plan and verification on its own; advanced
+flags live in `harness do --help`. The detailed flow below is the advanced mode.
+
+---
+
+## Advanced mode (explicit unit.toml)
+
+The rest of this page is the advanced mode: units with an explicit `unit.toml`.
+
+---
+
 ## 0. Install and prove the loop offline
 
 ```bash

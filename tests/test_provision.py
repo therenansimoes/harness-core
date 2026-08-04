@@ -138,16 +138,23 @@ def test_cache_versionado_nao_vira_symlink(repo, data_dir):
 
 
 def test_data_dir_relativo_nao_nasce_dentro_do_repo(repo, tmp_path, monkeypatch):
-    """Sem HARNESS_DATA_DIR o default é `data`, relativo ao cwd — e `git -C <repo>`
-    resolveria esse path dentro do repo do usuário."""
+    """Sem HARNESS_DATA_DIR, cwd LIMPO (sem `config/`) escreve em `$HARNESS_HOME`.
+
+    O `data/` relativo só vale dentro de uma árvore com `config/` (a resolução
+    legada do checkout); de um diretório qualquer, `harness.paths` manda o dado
+    para o home — que é o que impede `git -C <repo>` de resolver `data` dentro
+    do repo do usuário.
+    """
     monkeypatch.delenv("HARNESS_DATA_DIR", raising=False)
+    home = tmp_path / "home"
+    monkeypatch.setenv("HARNESS_HOME", str(home))
     cwd = tmp_path / "cwd"
     cwd.mkdir()
     monkeypatch.chdir(cwd)
 
     ws = prov.provision(repo, "run-rel", config_path=CONFIG)
 
-    assert ws.path == cwd / "data" / "ws" / "run-rel"
+    assert ws.path == home / "data" / "ws" / "run-rel"
     assert (ws.path / "src" / "app.py").is_file()  # o checkout está onde dizemos
     assert not (repo / "data").exists()  # e o repo alvo fica limpo
 

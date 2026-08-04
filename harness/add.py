@@ -24,11 +24,12 @@ import tomllib
 from pathlib import Path
 from typing import get_args
 
+from harness import paths
 from harness.backends.registry import get_backend
 from harness.improve.synthesize import QUARANTINE_DIR
 from harness.types import ExecRequest, Kind
 
-PROJECTS_FILE = Path("config/projects.toml")
+PROJECTS_FILE = "projects.toml"
 UNIT_FILE = "unit.toml"
 PROMPT_FILE = "prompt.md"
 ADD_BACKEND = "claude_code"
@@ -72,7 +73,7 @@ class AddError(RuntimeError):
 
 def load_project_repo(name: str, projects_file: Path | None = None) -> Path:
     """Repo registrado em `config/projects.toml`. Ler, não inventar."""
-    path = projects_file or PROJECTS_FILE
+    path = projects_file or paths.config_dir() / PROJECTS_FILE
     if not path.is_file():
         raise AddError(f"registro de projetos não encontrado: {path.as_posix()}")
     data = tomllib.loads(path.read_text(encoding="utf-8"))

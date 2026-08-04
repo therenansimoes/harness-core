@@ -20,8 +20,10 @@ import tomllib
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
+from harness import paths
 from harness.ab import ArmSpec, run_ab
 from harness.backends import registry
 from harness.improve.counterfactual import DEFAULT_LIMIT as WHATIF_LIMIT
@@ -30,7 +32,7 @@ from harness.improve.replay import DEFAULT_LIMIT
 from harness.ledger import store
 from harness.projects import SETUP_TIMEOUT
 from harness.report import DEFAULT_SINCE_HOURS as REPORT_SINCE
-from harness.routing import ROUTE_AUTO, ROUTE_MANUAL, ROUTE_MODES, router
+from harness.routing import MANUAL_TIER, ROUTE_AUTO, ROUTE_MANUAL, ROUTE_MODES, router
 from harness.ruler.gate import Decision, gate
 from harness.ruler.kpi import collect, load_kpis
 from harness.ruler.verify import VERIFY_CHECK_NAME, log_tail, run_log_dir, run_verify
@@ -52,6 +54,15 @@ WEBHOOK_PORT = 8787  # porta default do `harness webhook` (loopback)
 IMPROVE_ANSWER = '{"action":"abort"}'
 # Nome de check: curto e sem espaço porque ele viaja em log, payload e hint.
 CHECK_NAME_RE = re.compile(r"[a-z0-9_-]{1,32}")
+PACKAGE = "harness-core"
+
+
+def _versao() -> str:
+    """Versão instalada, ou `(checkout)` rodando direto do repo sem instalar."""
+    try:
+        return version(PACKAGE)
+    except PackageNotFoundError:
+        return "(checkout)"
 
 
 def _bootstrap() -> None:
@@ -401,14 +412,12 @@ def _last_event(final: dict, node: str) -> dict:
     return next((e for e in reversed(final.get("events", [])) if e.get("node") == node), {})
 
 
-def _run_via_graph(args: argparse.Namespace, unit: UnitSpec, sel: Selection) -> int:
-    """`run` de unidade com `project=`: entrega em branch só existe no grafo.
+def _graph_final(args: argparse.Namespace, unit: UnitSpec, sel: Selection) -> tuple[dict, float]:
+    """Roda a unidade no grafo e devolve `(estado final, segundos)`.
 
-    O worktree do repo (provision) e a poda no fim são nós do grafo; o fluxo
-    inline do `run_once` roda em tmpdir e por isso nunca entregaria a branch.
-    Rotear para cá é o que faz `harness run --unit` de projeto valer o mesmo que
-    a fila. Saída equivalente à do fluxo inline: uma linha com a decisão e, no
-    vermelho, o tail do verify no stderr (que o nó `verify` já gravou no ledger).
+    Separado do `_run_via_graph` porque o `harness do` precisa do estado (branch
+    de entrega, arquivos tocados, id do ledger) para montar o relatório dele; o
+    `run` só precisa do código de saída.
     """
     from harness.graph.run_graph import run_unit
 
@@ -439,7 +448,19 @@ def _run_via_graph(args: argparse.Namespace, unit: UnitSpec, sel: Selection) -> 
         thread_id=uuid.uuid4().hex[:12],
         route=args.route,
     )
-    sec_total = time.monotonic() - t0
+    return final, time.monotonic() - t0
+
+
+def _run_via_graph(args: argparse.Namespace, unit: UnitSpec, sel: Selection) -> int:
+    """`run` de unidade com `project=`: entrega em branch só existe no grafo.
+
+    O worktree do repo (provision) e a poda no fim são nós do grafo; o fluxo
+    inline do `run_once` roda em tmpdir e por isso nunca entregaria a branch.
+    Rotear para cá é o que faz `harness run --unit` de projeto valer o mesmo que
+    a fila. Saída equivalente à do fluxo inline: uma linha com a decisão e, no
+    vermelho, o tail do verify no stderr (que o nó `verify` já gravou no ledger).
+    """
+    final, sec_total = _graph_final(args, unit, sel)
 
     decision = final.get("decision")
     if decision is None:
@@ -506,6 +527,204 @@ def cmd_run(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
     return 0 if row.ok else 1
+
+
+# --------------------------------------------------------------------------- do
+
+
+def _linha_do(rotulo: str, valor: object) -> str:
+    """Rótulo alinhado à direita na largura de `resultado`, que é o mais longo."""
+    return f"{rotulo:>9}  {valor}"
+
+
+def _rota_txt(modo: str, sel: Selection) -> str:
+    return f"{modo} → {sel.tier or MANUAL_TIER} {sel.backend} {sel.model or '-'} (kind={sel.kind})"
+
+
+def _sem_turno(final: dict) -> bool:
+    """Nenhuma tentativa chegou a falar com um modelo — preflight barrou t0.
+
+    É o sintoma de servidor local desligado, e é diferente de "o agente tentou e
+    errou": não há o que reflexionar nem por que gastar retry no mesmo tier.
+    """
+    execs = [e for e in final.get("events", []) if e.get("node") == "execute"]
+    if not execs:
+        return True
+    if not all(e.get("exit_reason") == "blocked" for e in execs):
+        return False
+    res = final.get("exec")
+    return res is None or res.turns == 0
+
+
+def _proximo_tier(sel: Selection):
+    """Tier imediatamente mais caro que o da seleção, ou None se já é o topo (ou
+    se a seleção nem veio da tabela de custo)."""
+    try:
+        cfg = router.load_config()
+        atual = router.tier_by_name(cfg, sel.tier)
+    except (router.RouterError, OSError):
+        return None
+    acima = router.tier_by_rank(cfg, atual.cost_rank + 1)
+    return None if acima.name == atual.name else acima
+
+
+def _motivo_nao_aceito(decision) -> str:
+    """Tradução do vocabulário do gate para quem não conhece o vocabulário."""
+    reason = decision.reason if decision else ""
+    if not decision:
+        return "o grafo parou sem decisão"
+    if reason.startswith("verify_failed"):
+        return "verify vermelho"
+    if reason.startswith("kpi_regression"):
+        return f"regressão de KPI ({reason.split(':', 1)[-1]})"
+    return reason or decision.action
+
+
+def cmd_do(args: argparse.Namespace) -> int:
+    """`harness do "<pedido>"`: o comando de quem não conhece o resto da CLI.
+
+    Faz na ordem o que o usuário teria de fazer na mão — `init`, escrever a
+    unidade, escolher a régua, `run --route auto`, `integrate` — e imprime um
+    bloco legível em vez do vocabulário interno. Nenhum passo é novo: o que este
+    comando adiciona é a decisão de cada default.
+    """
+    from harness import do as do_mod
+    from harness.add import AddError, validate_verify_cmd
+    from harness.projects import IntegrateError, default_branch, delivery_branch, integrate
+
+    paths.ensure_user_config()
+    do_mod.pin_home_paths()
+    repo, criado = do_mod.ensure_repo(Path.cwd())
+    if criado:
+        print(f"repo git criado em {repo} (commit inicial com o que já estava lá)")
+
+    if args.verify_cmd:
+        try:
+            validate_verify_cmd(args.verify_cmd)
+        except AddError as exc:
+            print(exc, file=sys.stderr)
+            return 2
+        verify_cmd, motivo = args.verify_cmd, "você escolheu"
+    else:
+        verify_cmd, detectado = do_mod.detect_verify(repo)
+        motivo = f"detectado: {detectado}"
+
+    project = do_mod.ensure_project(repo)
+    unit_dir = do_mod.write_unit(
+        repo,
+        do_mod.new_unit_id(args.task),
+        args.task,
+        verify_cmd,
+        project,
+        kind=args.kind,
+    )
+
+    args.unit = str(unit_dir)
+    # Sem `--route`, quem manda é a presença de `--backend`/`--model`: pedir um
+    # executor no dedo E deixar o router escolher seria contradição, e o erro do
+    # `_resolve_route` não é vocabulário de quem chegou pelo `do`.
+    if args.route is None:
+        args.route = ROUTE_MANUAL if (args.backend or args.model) else ROUTE_AUTO
+    unit = load_unit(unit_dir)
+    sel = _resolve_route(args, unit)
+
+    print(f"harness do · {repo} ({do_mod.current_branch(repo)})")
+    print(_linha_do("pedido", args.task))
+    print(_linha_do("régua", f"{verify_cmd}  ({motivo})"))
+    if args.dry_run:
+        print(_linha_do("rota", _rota_txt(args.route, sel)))
+        print(_linha_do("unit", unit_dir))
+        return 0
+
+    try:
+        final, sec = _graph_final(args, unit, sel)
+        # Servidor local desligado não é fracasso da unidade: sobe um degrau de
+        # custo e tenta de novo, UMA vez. Teto de duas execuções por comando —
+        # subir tier em cascata é decisão de orçamento, não de disponibilidade.
+        if _sem_turno(final) and (acima := _proximo_tier(final.get("selection") or sel)):
+            print(f"LM Studio fora do ar (porta 1234) — subindo para {acima.name}")
+            args.route, args.backend, args.model = ROUTE_MANUAL, acima.backend, acima.model or None
+            sel = _resolve_route(args, unit)
+            final, sec = _graph_final(args, unit, sel)
+        elif _sem_turno(final):
+            print(
+                "nenhum executor respondeu e não há tier acima deste — rode `harness doctor`",
+                file=sys.stderr,
+            )
+            return 2
+
+        decision = final.get("decision")
+        aceito = decision is not None and decision.action == "accept"
+        res = final.get("exec")
+        print(_linha_do("rota", _rota_txt(args.route, final.get("selection") or sel)))
+        print(_linha_do("plano", "sim" if _last_event(final, "plan").get("needs_plan") else "não"))
+
+        aplicado = ""
+        if aceito and not args.no_apply:
+            branch = _last_event(final, "accept").get("branch") or delivery_branch(unit.id)
+            alvo = default_branch(repo)
+            try:
+                integrate(project, unit.id)
+                aplicado = f" · aplicado em {alvo} ({branch})"
+            except IntegrateError as exc:
+                print(exc, file=sys.stderr)
+                aplicado = f" · NÃO aplicado — está em {branch}, junte com: git merge {branch}"
+        elif aceito:
+            aplicado = f" · --no-apply: ficou em {delivery_branch(unit.id)}"
+
+        if aceito:
+            arquivos = len(res.files_changed) if res else 0
+            print(_linha_do("resultado", f"ACEITO em {sec:.1f}s · {arquivos} arquivo(s){aplicado}"))
+        else:
+            print(_linha_do("resultado", f"NÃO ACEITO ({_motivo_nao_aceito(decision)})"))
+        print(
+            _linha_do(
+                "ledger",
+                f"#{_last_event(final, 'record').get('row_id')} · run {final['run_id']} "
+                f"· detalhes: harness report",
+            )
+        )
+        if not aceito:
+            tail = _last_event(final, "verify").get("tail", "")
+            if tail:
+                print(f"verify falhou — últimas linhas do log:\n{tail}", file=sys.stderr)
+            print("nada foi aplicado no seu repo", file=sys.stderr)
+        return 0 if aceito else 1
+    finally:
+        if not args.keep_unit:
+            shutil.rmtree(unit_dir, ignore_errors=True)
+            with contextlib.suppress(OSError):
+                unit_dir.parent.rmdir()  # `.harness/units` vazio não fica de lembrança
+
+
+def cmd_quickstart(args: argparse.Namespace) -> int:
+    """Primeiros 30 segundos: semeia `~/.harness`, ensina o caminho e diz o que falta.
+
+    Roda o doctor inline porque a pergunta que vem logo depois de instalar é
+    sempre a mesma ("por que não rodou?"), e a resposta quase sempre é uma peça
+    de fora do harness (servidor local desligado, CLI não instalado). Só o que
+    NÃO está ok aparece — lista de 25 linhas verdes não é boas-vindas.
+    """
+    from harness import doctor
+
+    paths.ensure_user_config()
+    print(f"harness {_versao()} · config em {paths.home_root()}")
+    print()
+    print("1. instalar     uv tool install harness-core")
+    print("2. entrar       cd no seu projeto")
+    print('3. pedir        harness do "conserta o bug em target.py"')
+    print()
+
+    pendencias = [c for c in doctor.checks() if c.status != doctor.OK]
+    if not shutil.which("git"):
+        pendencias.append(doctor.Check("git", doctor.FAIL, "git não está no PATH — instale antes"))
+    if not pendencias:
+        print("ambiente pronto: nada faltando.")
+        return 0
+    print("o que falta (nada aqui impede tentar):")
+    for c in pendencias:
+        print(f"  {c.status:<5} {c.name:<20} {c.detail}")
+    return 0
 
 
 def _arm(text: str) -> Arm:
@@ -1495,11 +1714,87 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+# Duas prateleiras, e não uma lista alfabética de 29 subcomandos: quem chega
+# hoje não tem como saber que `do` é o começo e `evolve` é o fim. A separação é
+# só de apresentação — nenhum comando muda de comportamento por estar aqui.
+EPILOG = """\
+BÁSICO      quickstart · do · status · report
+AVANÇADO    run · queue · add · decompose · replan · ab · improve · evolve ·
+            frontier · seal · replay · whatif · lineage · skills · actions ·
+            procs · cache-gc · webhook · bench · ui-verify · vision-judge ·
+            init · export · import · doctor · backends
+
+Detalhe de qualquer um: harness <comando> --help
+"""
+
+
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="harness", description="agent harness provider-agnostic")
+    p = argparse.ArgumentParser(
+        prog="harness",
+        description="agent harness provider-agnostic",
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    run = sub.add_parser("run", help="executa uma unidade com um backend")
+    from harness.add import KINDS  # vocabulário de kind, num lugar só
+
+    quickstart = sub.add_parser(
+        "quickstart", help="[BÁSICO] o que instalar, o que rodar, e o que está faltando"
+    )
+    quickstart.set_defaults(func=cmd_quickstart, parser=quickstart)
+
+    d = sub.add_parser(
+        "do", help="[BÁSICO] faz o pedido na pasta atual (o default decide tudo)"
+    )
+    d.add_argument("task", help='o pedido em português, ex.: "conserta o bug em target.py"')
+    # Nada de SUPPRESS: flag escondida é flag que ninguém descobre, e a promessa
+    # do `do` é que o default resolve — não que não haja volante.
+    adv = d.add_argument_group("avançado (opcional — o default decide sozinho)")
+    adv.add_argument(
+        "--verify-cmd",
+        default=None,
+        dest="verify_cmd",
+        metavar="CMD",
+        help="a régua que prova que ficou pronto; sem ela o harness detecta "
+        "pela cara do repo (pytest, npm test, make test, cargo, go)",
+    )
+    adv.add_argument(
+        "--kind",
+        default=None,
+        choices=list(KINDS),
+        help="que tipo de trabalho é; sem ela o router classifica pelo pedido",
+    )
+    adv.add_argument(
+        "--route",
+        default=None,
+        choices=list(ROUTE_MODES),
+        help="auto (default): o router escolhe executor e modelo; manual: você escolhe",
+    )
+    adv.add_argument("--backend", default=None, help="força o executor (implica --route manual)")
+    adv.add_argument("--model", default=None, help="força o modelo (implica --route manual)")
+    adv.add_argument("--max-turns", type=int, default=None, dest="max_turns", metavar="N")
+    adv.add_argument(
+        "--no-apply",
+        action="store_true",
+        dest="no_apply",
+        help="não faz o merge no fim; o resultado fica na branch de entrega",
+    )
+    adv.add_argument(
+        "--keep-unit",
+        action="store_true",
+        dest="keep_unit",
+        help="mantém .harness/units/<id> depois do run (para inspeção)",
+    )
+    adv.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help="mostra régua, rota e a unidade que seria rodada, e para aí",
+    )
+    d.set_defaults(func=cmd_do, parser=d, project=None, repo=None)
+
+    run = sub.add_parser("run", help="[AVANÇADO] executa uma unidade com um backend")
     run.add_argument("--unit", required=True, help="diretório (ou arquivo) com unit.toml")
     run.add_argument("--backend", default=None, help="obrigatório sem --route auto")
     run.add_argument("--model", default=None)
@@ -1555,7 +1850,7 @@ def build_parser() -> argparse.ArgumentParser:
     ab.set_defaults(func=cmd_ab, parser=ab)
 
     init = sub.add_parser(
-        "init", help="registra um repo git real como projeto (config/projects.toml)"
+        "init", help="[AVANÇADO] registra um repo git real como projeto (config/projects.toml)"
     )
     init.add_argument("repo", help="path do repositório git do projeto")
     init.add_argument("--name", required=True)

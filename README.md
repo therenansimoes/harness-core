@@ -15,7 +15,21 @@ itself may **not** change. Without that, "the agent got better" is an opinion.
 
 MIT licensed (`LICENSE`). Python >= 3.11.
 
-## Quickstart (local model, $0)
+## Quickstart
+
+```bash
+uv tool install --from . "harness-core[deepagents]"   # once
+cd your-project
+harness quickstart                     # environment check
+harness do "fix the bug in target.py"
+```
+
+`harness do` decides model, route, plan and verification on its own; advanced
+flags live in `harness do --help`. The detailed flow below is the advanced mode.
+
+### Advanced mode (explicit unit.toml)
+
+Local model, $0:
 
 ```bash
 uv sync --extra deepagents

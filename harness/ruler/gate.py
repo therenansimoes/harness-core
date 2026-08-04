@@ -21,6 +21,7 @@ from math import isnan, nan
 from pathlib import Path
 from typing import Literal
 
+from harness import paths
 from harness.ruler.kpi import KpiSpec, regressed
 from harness.types import Verdict
 
@@ -31,8 +32,16 @@ TAMPER_PREFIX = "tamper:"
 # Overrides operacionais do juiz. Defaults congelados AQUI: config/ruler.toml
 # ausente/malformado/inválido => comportamento idêntico ao histórico. Mutação
 # do toml só entra via meta-exame (harness/improve/meta.py) + ack humano.
-RULER_CONFIG = Path(__file__).resolve().parents[2] / "config" / "ruler.toml"
+#
+# `RULER_CONFIG` é OVERRIDE, não resolução: com `None` (o normal) quem manda é
+# `harness.paths`, em call-time. Constante resolvida no import quebrava
+# instalado por wheel — `parents[2]` lá é site-packages.
+RULER_CONFIG: Path | None = None
 DEFAULT_KPI_REGRESSION_TOLERANCE = 0.0
+
+
+def _ruler_config() -> Path:
+    return RULER_CONFIG or paths.config_file("ruler.toml")
 
 
 def kpi_regression_tolerance(config_path: Path | None = None) -> float:
@@ -41,7 +50,7 @@ def kpi_regression_tolerance(config_path: Path | None = None) -> float:
     Qualquer falha (arquivo ausente, TOML inválido, valor não-numérico ou
     negativo) devolve o default congelado — o juiz nunca afrouxa por acidente.
     """
-    path = RULER_CONFIG if config_path is None else config_path
+    path = _ruler_config() if config_path is None else config_path
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):

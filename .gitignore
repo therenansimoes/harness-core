@@ -24,6 +24,11 @@ legacy/evolution/autopilot/
 legacy/evolution/rollbacks/
 legacy/evolution/decisions.jsonl
 
+# Registro LOCAL de projetos: paths absolutos da máquina de quem roda. O arquivo
+# continua existindo em disco (é o que `harness init`/`do` escrevem), só não
+# entra na história pública.
+config/projects.toml
+
 # Projetos privados/de família: nunca na história pública
 projects/website-faz-rogers/
 # Nota humana é avaliação subjetiva do operador

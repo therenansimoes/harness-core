@@ -12,6 +12,8 @@ import tomllib
 import uuid
 from pathlib import Path
 
+from harness import paths
+
 # Mesma convenção cwd-relativa de synthesize.SEALED_DIR.
 SEALED_DIR = Path("benchmarks/sealed")
 
@@ -19,7 +21,11 @@ SEALED_DIR = Path("benchmarks/sealed")
 # arquivo é guardado pelo meta-exame (harness/improve/meta.py): trocar o
 # backend do exame é mexer na própria régua, então exige exame + ack humano.
 # Ausente/malformado => mock, exatamente o comportamento histórico (custo $0).
-EXAM_CONFIG = Path(__file__).resolve().parents[2] / "config" / "ruler.toml"
+#
+# `EXAM_CONFIG` é OVERRIDE, não resolução: com `None` (o normal) quem decide é
+# `harness.paths`, em call-time. Constante resolvida no import quebrava
+# instalado por wheel — `parents[2]` lá é site-packages.
+EXAM_CONFIG: Path | None = None
 MOCK_BACKEND = "mock"
 DEFAULT_MODEL = ""
 
@@ -41,9 +47,13 @@ def _section_backend(data: dict, name: str) -> tuple[str, str] | None:
     return backend, model if isinstance(model, str) else DEFAULT_MODEL
 
 
+def _exam_config() -> Path:
+    return EXAM_CONFIG or paths.config_file("ruler.toml")
+
+
 def _load_config(config_path: Path | None) -> dict:
     """Toml de `config/ruler.toml`; qualquer falha de leitura vira dict vazio."""
-    path = EXAM_CONFIG if config_path is None else config_path
+    path = _exam_config() if config_path is None else config_path
     try:
         return tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError):

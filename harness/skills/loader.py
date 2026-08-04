@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
 
-_PACKAGE_SKILLS = Path(__file__).resolve().parents[2] / "skills"
+from harness import paths
 
 # Ranking: contexto é o recurso mais caro do executor pequeno. Mandar todas as
 # skills do kind (4 skills / 5.5KB num run medido, metade irrelevante pra tarefa)
@@ -97,16 +97,16 @@ def default_root() -> Path:
     Constante `Path("skills")` era relativa ao cwd: qualquer chamador que rode
     de fora do repo (ou com o cwd no workspace) carregava zero skill em
     silêncio. Ordem: `$HARNESS_ROOT` (mesmo mecanismo de cli/doctor, e é o que
-    o teste aponta pro tmpdir) > `skills/` do cwd > `skills/` ao lado do
-    pacote. O env, quando setado, MANDA — inclusive quando não tem skill
-    nenhuma lá, senão isolamento de teste vazaria pro repo real.
+    o teste aponta pro tmpdir) > o que `paths.skills_dir()` resolver (`skills/`
+    irmão do config em uso > `skills/` empacotada). O env, quando setado,
+    MANDA — inclusive quando não tem skill nenhuma lá, senão isolamento de
+    teste vazaria pro repo real.
     """
     from harness.improve import ROOT_ENV, root_dir
 
     if os.environ.get(ROOT_ENV):
         return root_dir() / "skills"
-    cwd_root = Path("skills")
-    return cwd_root if cwd_root.is_dir() else _PACKAGE_SKILLS
+    return paths.skills_dir()
 
 
 @dataclass(frozen=True)

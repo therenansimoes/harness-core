@@ -1,7 +1,8 @@
 """Ledger de runs em SQLite.
 
-Caminho do banco: `$HARNESS_DATA_DIR/runs.sqlite`, default `data/runs.sqlite`
-relativo ao cwd. O env var existe para o teste apontar para um tmpdir.
+Caminho do banco: `runs.sqlite` sob o `data_dir()` de `harness.paths`
+(`$HARNESS_DATA_DIR` > `data/` do checkout > `~/.harness/data`). O env var
+existe para o teste apontar para um tmpdir.
 
 Além das runs, guarda `node_events`: marca `(run_id, node, attempt)` de toda
 escrita externa feita por um nó do grafo. É o que torna o resume idempotente.
@@ -18,11 +19,11 @@ atribuir delta a uma mudança.
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
+from harness import paths
 from harness.types import MutationRow, RunRow
 
 DB_NAME = "runs.sqlite"
@@ -106,7 +107,7 @@ _MUT_COLUMNS = (
 
 
 def data_dir() -> Path:
-    return Path(os.environ.get("HARNESS_DATA_DIR", "data"))
+    return paths.data_dir()
 
 
 def db_path() -> Path:

@@ -31,8 +31,11 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from xml.sax.saxutils import escape as xml_escape
 
-# templates/ é irmão de harness/ no repo (dado versionado, não código).
-TEMPLATES_ROOT = Path(__file__).resolve().parent.parent / "templates"
+from harness import paths
+
+# templates/ é irmão de harness/ no checkout e `harness/_defaults/templates` na
+# wheel: quem sabe a diferença é `paths` (dado versionado, não código).
+TEMPLATES_ROOT = paths.packaged_defaults() / "templates"
 CATALOG_FILE = "catalog.toml"
 
 # Nome de projeto: sem separador de path, sem `..`, sem ponto inicial. É a
