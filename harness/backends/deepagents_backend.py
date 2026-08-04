@@ -114,6 +114,10 @@ class DeepagentsBackend:
         if not pre.ok:
             return _failure(req, "blocked", pre.reason)
 
+        # Blocker de tentativa ANTERIOR não vale para esta: sidecar vivo aqui
+        # viraria exit_reason="blocker" num run que nem chamou a tool.
+        _clear_blocker(req.workspace)
+
         before = _snapshot(req.workspace, exclude=req.trace_path)
         agent, usage_cb = _build_agent(req)
         tracer = _trace_collector()
@@ -161,7 +165,21 @@ class DeepagentsBackend:
         changed = _diff(before, after)
         turns = _turns(messages)
         hit_limit = _hit_call_limit(messages)
+        declared = _read_blocker(req.workspace)
         exit_reason: ExitReason
+        if declared is not None:
+            # Declarar vence stalled/done: o motivo dito pelo modelo é melhor
+            # sinal que qualquer um inferido daqui, e é o que o gate roteia.
+            return _result(
+                req,
+                before,
+                ok=False,
+                exit_reason="blocker",
+                turns=turns,
+                usage=usage_cb,
+                after=after,
+                blocker=declared[0],
+            )
         if hit_limit:
             exit_reason, ok = "max_turns", False
             turns = max(0, turns - 1)  # a mensagem-sentinela não é um turno do agente
@@ -345,6 +363,15 @@ def _build_agent(req: ExecRequest):
         )
     except Exception:
         pass
+    # ANTES do retry de propósito: primeiro = mais externo, então a guarda conta
+    # as calls que o MODELO fez e as tentativas de infra ficam invisíveis para
+    # ela. Invertido, erro de rede repetido sairia como "você está em loop".
+    try:
+        from harness.backends.loop_guard import LoopGuardMiddleware
+
+        middleware.append(LoopGuardMiddleware())
+    except Exception:
+        pass
     # Erro de tool transitório (rede da web_tools, lock de arquivo, subprocess
     # que morreu) gastava um turno do agente e virava texto de erro no contexto.
     try:
@@ -484,6 +511,18 @@ def _build_agent(req: ExecRequest):
         from harness.symbols import make_symbol_tools
 
         extra_tools += list(make_symbol_tools(req.workspace))
+    except Exception:
+        pass
+    try:
+        from harness.repomap import make_repomap_tools
+
+        extra_tools += list(make_repomap_tools(req.workspace))
+    except Exception:
+        pass
+    try:
+        from harness.backends.blocker_tools import make_blocker_tools
+
+        extra_tools += list(make_blocker_tools(req.workspace))
     except Exception:
         pass
     agent = create_deep_agent(
@@ -875,6 +914,25 @@ def _tokens(usage: Any) -> tuple[int, int]:
     return tin, tout
 
 
+def _clear_blocker(ws: Path) -> None:
+    """Sidecar de blocker fora do caminho. Fail-open como o resto do arquivo."""
+    try:
+        from harness.backends.blocker_tools import clear_blocker
+
+        clear_blocker(ws)
+    except Exception:
+        pass
+
+
+def _read_blocker(ws: Path) -> tuple[str, str] | None:
+    try:
+        from harness.backends.blocker_tools import read_blocker
+
+        return read_blocker(ws)
+    except Exception:
+        return None
+
+
 def _result(
     req: ExecRequest,
     before: dict[str, tuple[int, int]],
@@ -884,6 +942,7 @@ def _result(
     turns: int,
     usage: Any,
     after: dict[str, tuple[int, int]] | None = None,
+    blocker: str | None = None,
 ) -> ExecResult:
     tin, tout = _tokens(usage)
     return ExecResult(
@@ -901,6 +960,7 @@ def _result(
         ),
         session_id=req.session_id,
         trace_path=req.trace_path,
+        blocker=blocker,
     )
 
 

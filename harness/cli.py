@@ -306,7 +306,10 @@ def run_once(
         # workspace, então o verify só repetiria o resultado do run anterior.
         # "truncated" entra junto: a resposta foi cortada no teto de tokens, mas
         # o agente pode ter escrito o conserto antes — a régua tem o que julgar.
-        ran = result.exit_reason in ("done", "max_turns", "timeout", "truncated")
+        # "blocker" entra pelo mesmo motivo do "truncated": o agente explicou por
+        # que parou, mas pode ter escrito parte do conserto antes — a régua julga
+        # o que foi escrito, não a explicação.
+        ran = result.exit_reason in ("done", "max_turns", "timeout", "truncated", "blocker")
         verify_tail = ""
         if ran:
             # O verificador entra agora, com o agente já fora: durante o

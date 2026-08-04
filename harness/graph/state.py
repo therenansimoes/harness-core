@@ -58,4 +58,8 @@ class RunState(TypedDict):
     # de editar. Só um flag — o plano em si é do executor (planner + write_todos),
     # aqui não roda LLM. Quem lê usa `get(..., False)`: checkpoint antigo não tem.
     needs_plan: bool
+    # Segundos que o `retry` espera antes da próxima tentativa — o gate põe quando
+    # o agente declarou `external_wait`. 0.0 (o normal) = sem espera. Quem lê usa
+    # `get(..., 0.0)`: checkpoint antigo não tem a chave.
+    defer_s: float
     events: Annotated[list[Event], operator.add]

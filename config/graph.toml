@@ -4,6 +4,9 @@
 
 max_attempts = 2        # teto de tentativas por run (retry vira escalate ao bater)
 verify_timeout_s = 120.0
+# Espera do retry quando o agente declarou `external_wait` em declare_blocker.
+# Teto duro de 60s no nó: o defer roda dentro do grafo, não em timer.
+blocker_defer_s = 30
 
 [nodes]
 # false => o nó degrada para o stub antigo (sem KPI / sem prova de tamper).

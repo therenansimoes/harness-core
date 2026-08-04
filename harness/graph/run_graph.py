@@ -115,6 +115,17 @@ UI_VERIFY_EXIT = 65   # veredito derrubado pela TELA, não pelo `verify_cmd`
 DELTA_STAGNATIONS = 2
 DELTA_REASON = "sem_gradiente_de_score"
 
+# Blocker tipado (`backends/blocker_tools`): o agente DECLARA por que não conclui
+# e o gate roteia por tipo. `needs_user_input` é rota pro humano e não queima
+# tentativa; `external_wait` segue em retry, mas depois de esperar — retry imediato
+# contra serviço que não respondeu ainda é a mesma parede com outro nome.
+BLOCKER_NEEDS_USER = "needs_user_input"
+BLOCKER_EXTERNAL_WAIT = "external_wait"
+BLOCKER_DEFER_S = 30.0
+# Teto do adiamento: o defer roda DENTRO do nó (o grafo não tem timer), então
+# dormir mais que isto é o processo travado sem nada no ledger.
+BLOCKER_DEFER_MAX_S = 60.0
+
 
 # --- política calibrável ------------------------------------------------------
 
@@ -134,6 +145,8 @@ class GraphPolicy:
     # delta_gate: retry só continua enquanto a régua graduada MEXE. Ligado por
     # default — o objetivo é economizar turno; `false` volta ao retry cego.
     delta_gate: bool = True
+    # Quanto o retry espera quando o agente declarou `external_wait`.
+    blocker_defer_s: float = BLOCKER_DEFER_S
 
 
 def _policy_int(raw: Any, default: int) -> int:
@@ -182,6 +195,9 @@ def load_policy(path: Path | None = None) -> GraphPolicy:
         ui_verify=_policy_bool(nodes.get("ui_verify"), base.ui_verify),
         ui_verify_dist=_policy_str(data.get("ui_verify_dist"), base.ui_verify_dist),
         delta_gate=_policy_bool(nodes.get("delta_gate"), base.delta_gate),
+        blocker_defer_s=_policy_float(
+            data.get("blocker_defer_s"), base.blocker_defer_s
+        ),
     )
 
 
@@ -275,6 +291,7 @@ def _exec_payload(res: ExecResult) -> dict:
         "files_changed": list(res.files_changed),
         "session_id": res.session_id,
         "trace_path": str(res.trace_path),
+        "blocker": res.blocker,
     }
 
 
@@ -289,6 +306,8 @@ def _exec_from_payload(d: dict) -> ExecResult:
         files_changed=tuple(d["files_changed"]),
         session_id=d["session_id"],
         trace_path=Path(d["trace_path"]),
+        # `.get`: payload gravado antes do blocker tipado existir.
+        blocker=d.get("blocker"),
     )
 
 
@@ -875,6 +894,20 @@ def _gate(state: RunState, config=None) -> dict:
             specs,
         )
         action, reason = ruled.action, ruled.reason
+    # Blocker DECLARADO pelo agente: roteia por tipo, antes do teto de tentativas.
+    # `needs_user_input` não é desistência nem falha de execução — é pedido de
+    # decisão humana, e mandar pro humano agora não gasta a tentativa que sobrou
+    # (escalate vai direto pro record). `external_wait` continua em retry, só
+    # adiado. Os outros dois tipos seguem no retry normal: o motivo é interno e
+    # outra tentativa pode resolvê-lo.
+    blk: dict[str, Any] = {}
+    declared = state["exec"].blocker if state.get("exec") else None
+    if action == "retry" and declared:
+        if declared == BLOCKER_NEEDS_USER:
+            action = "escalate_human"
+            reason = f"{reason}; blocker:{declared}"
+        elif declared == BLOCKER_EXTERNAL_WAIT:
+            blk = {"blocker": declared, "defer_s": policy.blocker_defer_s}
     if action == "retry" and attempt + 1 >= max_attempts:
         action = "escalate_human"
         reason = f"{reason}; acabaram as {max_attempts} tentativas"
@@ -909,12 +942,19 @@ def _gate(state: RunState, config=None) -> dict:
                 "escalate_reason": _delta_escalate_reason(),
             }
     decision = Decision(action, reason)  # tipo do estado, não o do ruler
+    # O adiamento só vale se o retry sobreviveu aos tetos acima.
+    defer_s = float(blk.get("defer_s", 0.0)) if action == "retry" else 0.0
+    if action != "retry":
+        blk.pop("defer_s", None)
 
     return {
         "tamper": violations,
         "decision": decision,
+        "defer_s": defer_s,
         "events": [
-            _event("gate", action=decision.action, reason=decision.reason, **delta)
+            _event(
+                "gate", action=decision.action, reason=decision.reason, **delta, **blk
+            )
         ],
     }
 
@@ -972,12 +1012,19 @@ def _retry(state: RunState, config=None) -> dict:
     # tmpdir — em `--repo` o worktree é do alvo e não é nosso para limpar.
     if not state["unit"].project:
         (Path(state["workspace"]) / VERIFY_LOG).unlink(missing_ok=True)
+    # `external_wait`: o gate pediu adiamento. Dorme aqui (o grafo não tem timer)
+    # com teto, e o evento registra quanto — espera invisível no ledger é pane.
+    defer_s = min(max(0.0, float(state.get("defer_s") or 0.0)), BLOCKER_DEFER_MAX_S)
+    if defer_s:
+        time.sleep(defer_s)
+    extra = {"defer_s": defer_s} if defer_s else {}
     return {
         "attempt": attempt,
         "exec": None,
         "verdict": None,
         "decision": None,
-        "events": [_event("retry", attempt=attempt)],
+        "defer_s": 0.0,
+        "events": [_event("retry", attempt=attempt, **extra)],
     }
 
 
@@ -1050,7 +1097,16 @@ def _record(state: RunState, config=None) -> dict:
         ),
         path=db,
     )
-    return {"events": [_event("record", row_id=row_id, ok=ok, reused=not wrote)]}
+    # `note` no evento do record: o TIPO do blocker é o que explica a parada para
+    # quem lê o trace depois — `exit_reason` sozinho só diz que houve um.
+    note = (
+        {"note": f"blocker:{result.blocker}"}
+        if result is not None and result.blocker
+        else {}
+    )
+    return {
+        "events": [_event("record", row_id=row_id, ok=ok, reused=not wrote, **note)]
+    }
 
 
 def _after_gate(state: RunState) -> str:

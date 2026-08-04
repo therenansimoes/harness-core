@@ -13,7 +13,13 @@ Kind = Literal["code", "content", "config", "refactor", "infra"]
 # (finish_reason=length) — braço CORTADO, não braço ruim. Sem isto o A/B e o
 # bandit contam como "done" (ou "stalled") um run que nem chegou a terminar a
 # frase, e punem/premiam o braço pelo motivo errado.
-ExitReason = Literal["done", "max_turns", "timeout", "error", "blocked", "stalled", "truncated"]
+# "blocker": o modelo DECLAROU por que não conclui (`declare_blocker`). Vence
+# stalled/done: parada explicada é sinal de roteamento, não desistência muda — o
+# gate lê o tipo em `ExecResult.blocker` e decide se é rota pro humano, retry
+# adiado ou retry normal.
+ExitReason = Literal[
+    "done", "max_turns", "timeout", "error", "blocked", "stalled", "truncated", "blocker"
+]
 
 
 @dataclass(frozen=True)
@@ -96,6 +102,10 @@ class ExecResult:
     files_changed: tuple[str, ...]
     session_id: str | None
     trace_path: Path
+    # Tipo do blocker declarado pelo agente (vocabulário de
+    # `backends/blocker_tools.TYPES`), quando `exit_reason == "blocker"`. Default
+    # obrigatório: todo call site posicional existente não sabe deste campo.
+    blocker: str | None = None
 
 
 @dataclass(frozen=True)
