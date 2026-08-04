@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS runs (
     sec_total     REAL    NOT NULL,
     sec_provision REAL    NOT NULL,
     cost_usd      REAL,
+    tokens_in     INTEGER,
+    tokens_out    INTEGER,
     intervention  INTEGER NOT NULL,
     created_at    TEXT    NOT NULL
 );
@@ -74,7 +76,7 @@ CREATE INDEX IF NOT EXISTS idx_mutations_rule ON mutations(rule_id);
 _COLUMNS = (
     "run_id", "unit_id", "project", "backend", "model", "tier", "kind",
     "ok", "exit_reason", "sec_total", "sec_provision", "cost_usd",
-    "intervention", "created_at",
+    "tokens_in", "tokens_out", "intervention", "created_at",
 )
 
 _MUT_COLUMNS = (
@@ -112,11 +114,17 @@ def _migrate(conn: sqlite3.Connection) -> None:
     fica sem as colunas novas — o `ALTER TABLE` guardado por `PRAGMA table_info`
     é o que faz banco velho e novo convergirem sem migração manual.
     """
-    if _has_column(conn, "mutations", "action"):
-        return
-    conn.execute("ALTER TABLE mutations ADD COLUMN action TEXT")
-    _backfill_action(conn)
-    conn.commit()
+    if not _has_column(conn, "mutations", "action"):
+        conn.execute("ALTER TABLE mutations ADD COLUMN action TEXT")
+        _backfill_action(conn)
+        conn.commit()
+    # `tokens_in`/`tokens_out` não têm backfill: o usage do run antigo não foi
+    # gravado em lugar nenhum, então banco velho fica NULL — traço no report em
+    # vez de zero inventado.
+    for column in ("tokens_in", "tokens_out"):
+        if not _has_column(conn, "runs", column):
+            conn.execute(f"ALTER TABLE runs ADD COLUMN {column} INTEGER")
+            conn.commit()
 
 
 def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
@@ -338,6 +346,8 @@ def _row(r: sqlite3.Row) -> RunRow:
         sec_total=r["sec_total"],
         sec_provision=r["sec_provision"],
         cost_usd=r["cost_usd"],
+        tokens_in=r["tokens_in"],
+        tokens_out=r["tokens_out"],
         intervention=bool(r["intervention"]),
         created_at=r["created_at"],
     )

@@ -76,9 +76,15 @@ def _runs_section(cutoff: datetime, db: Path) -> list[str]:
         return []
     ok = sum(1 for r in rows if r.ok)
     usd = sum(r.cost_usd or 0.0 for r in rows)
+    # Token só aparece quando alguma run da janela reportou usage: banco velho
+    # (colunas NULL) ou backend que não conta token não ganham um "tok=0/0" que
+    # o leitor interpretaria como "o loop não gastou nada".
+    tin = sum(r.tokens_in or 0 for r in rows)
+    tout = sum(r.tokens_out or 0 for r in rows)
+    tok = f" tok={tin}/{tout}" if tin or tout else ""
     lines = [
         f"- runs={len(rows)} accept={ok}/{len(rows)} ({ok / len(rows):.0%}) "
-        f"usd={usd:.4f}",
+        f"usd={usd:.4f}{tok}",
         "",
         "| backend | kind | runs | accept | usd |",
         "| --- | --- | --- | --- | --- |",

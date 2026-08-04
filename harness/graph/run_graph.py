@@ -584,15 +584,29 @@ def _prompt(state: RunState) -> str:
     if not hint:
         return base
 
+    from harness import trust_boundary
     from harness.graph.reflect import HINT_HEADER
     from harness.improve.escalate import prior_decisions
 
-    out = f"{base}\n\n{HINT_HEADER}\n{hint}"
     # Mesmo bloco que a escalação mostra ao humano, do lado de quem vai tentar
     # de novo: se um humano já respondeu uma parada deste kind com este motivo,
     # a tentativa seguinte decide sabendo do precedente. "" quando não há.
     prior = prior_decisions(state["unit"].kind, hint)
-    return f"{out}\n\n{prior}" if prior else out
+    if not trust_boundary.enabled():
+        out = f"{base}\n\n{HINT_HEADER}\n{hint}"
+        return f"{out}\n\n{prior}" if prior else out
+
+    # Hint e precedente são texto de OUTRO run (checker e humano), não da
+    # unidade: vão no bloco de dado, antes da tarefa, para não competirem com
+    # ela como ordem. Único canal disponível aqui — `ExecRequest.prompt` é uma
+    # string — então o rótulo `TASK_HEADER` é o que marca o fim do dado.
+    block = trust_boundary.build_untrusted_block(
+        # `HINT_HEADER` já vem com o "## " do markdown; o bloco põe o dele.
+        {HINT_HEADER.lstrip("# "): hint, "Precedente humano": prior}
+    )
+    if not block:
+        return base
+    return f"{block}\n\n{trust_boundary.TASK_HEADER}\n{base}"
 
 
 def _execute(state: RunState, config=None) -> dict:
@@ -1028,6 +1042,8 @@ def _record(state: RunState, config=None) -> dict:
             sec_total=sec_total,
             sec_provision=float(prov_ev.get("sec", 0.0)),
             cost_usd=result.cost_usd if result else None,
+            tokens_in=result.tokens_in if result else None,
+            tokens_out=result.tokens_out if result else None,
             # `intervention` só vira True com humano no loop — PR-9 (interrupt).
             intervention=False,
             created_at=store.now_iso(),

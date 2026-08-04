@@ -154,7 +154,13 @@ class MutationRow:
 
 @dataclass(frozen=True)
 class RunRow:
-    """Uma linha do ledger. `backend` e `kind` existem desde a linha 1."""
+    """Uma linha do ledger. `backend` e `kind` existem desde a linha 1.
+
+    `tokens_in`/`tokens_out` são o usage do run, em colunas próprias: custo em
+    dólar depende da tabela de preço do dia, token não. None nas linhas gravadas
+    antes das colunas existirem e em backend que não reporta usage — sem
+    backfill possível, e zero seria invenção.
+    """
 
     run_id: str
     unit_id: str
@@ -171,3 +177,5 @@ class RunRow:
     intervention: bool
     created_at: str
     id: int | None = None
+    tokens_in: int | None = None
+    tokens_out: int | None = None

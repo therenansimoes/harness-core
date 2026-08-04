@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import threading
 import tomllib
 import urllib.error
@@ -17,6 +18,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable, ClassVar, Sequence
 
+from harness import trust_boundary
 from harness.backends.agent_roles import load_roles, roles_manual
 from harness.skills import render_prompt, select_skills
 from harness.types import Capabilities, ExecRequest, ExecResult, ExitReason, Preflight
@@ -66,6 +68,11 @@ EXECUTOR_PROMPT_PATH = Path("prompts/executor.md")
 # prompts/tools/<provider>.md ganham do geral quando existem.
 TOOLS_PROMPT_PATH = Path("prompts/tools.md")
 TOOLS_PROMPT_DIR = Path("prompts/tools")
+
+# Alvos de arquivo citados no prompt da unidade — a fonte barata de `files=` para
+# o path-trigger das skills: determinístico, sem plumbing novo e sem depender de
+# o run já ter mexido em nada (o `files_changed` só existe DEPOIS de executar).
+PROMPT_FILE_RE = re.compile(r"[\w./-]+\.(?:py|js|ts|html|css|toml|json|md)\b")
 
 
 class DeepagentsBackend:
@@ -117,7 +124,7 @@ class DeepagentsBackend:
             "callbacks": [usage_cb, tracer],
         }
 
-        payload = {"messages": [{"role": "user", "content": req.prompt}]}
+        payload = {"messages": _payload_messages(req)}
         try:
             state = _with_timeout(lambda: agent.invoke(payload, config), req.timeout_s)
         except TimeoutError:
@@ -386,15 +393,27 @@ def _build_agent(req: ExecRequest):
     # `query=` faz o ranking por relevância à unidade e o teto corta o resto:
     # mandar todas as skills do kind enchia o contexto do executor pequeno com
     # guidance que não tem nada a ver com a tarefa.
-    skills = select_skills(getattr(req, "kind", None), query=req.prompt)
-    skills_block = render_prompt(skills)
-    if skills_block:
-        system_prompt = f"{system_prompt}\n\n{skills_block}"
+    # `files=` liga o path-trigger: skill com glob (`paths = ["*.toml"]`) fura a
+    # fila do ranking fuzzy quando a unidade nomeia o arquivo que vai mexer.
+    skills = _selected_skills(req)
     _record_skill_usage(req, skills)
-
     recall_block = _episodic_block(getattr(req, "kind", None), req.prompt)
-    if recall_block:
-        system_prompt = f"{system_prompt}\n\n{recall_block}"
+    if trust_boundary.enabled():
+        # Corpo de skill e trace de falha antiga são texto que o loop escreveu
+        # sozinho: no system prompt eles ganham a NOSSA autoridade. Aqui sobra o
+        # índice (nome — descrição) mais o aviso de fronteira; os corpos vão no
+        # bloco não confiável da mensagem do usuário (ver `_untrusted_block`).
+        index = _skills_index(skills)
+        if index:
+            system_prompt = f"{system_prompt}\n\n{index}"
+        if index or recall_block:
+            system_prompt = f"{system_prompt}\n\n{trust_boundary.BOUNDARY_NOTE}"
+    else:
+        skills_block = render_prompt(skills)
+        if skills_block:
+            system_prompt = f"{system_prompt}\n\n{skills_block}"
+        if recall_block:
+            system_prompt = f"{system_prompt}\n\n{recall_block}"
 
     # Manual das tools depois das pontes: modelo pequeno não descobre sozinho
     # que tool é o único caminho para virar arquivo, nem as pegadinhas de cada
@@ -524,6 +543,70 @@ def _model_for(model: str | None):
         except Exception:
             continue
     return model
+
+
+def _prompt_files(prompt: str) -> list[str]:
+    """Paths de arquivo citados no prompt, em ordem de aparição e sem repetir.
+
+    Heurística de propósito: token com extensão conhecida. Falso positivo custa
+    no máximo uma skill a mais no topo da fila (o `limit` do select segue
+    valendo), e o eixo nem roda quando a lista sai vazia."""
+    vistos: dict[str, None] = {}
+    for match in PROMPT_FILE_RE.finditer(prompt):
+        vistos.setdefault(match.group(0), None)
+    return list(vistos)
+
+
+def _skills_index(skills: list[Any]) -> str:
+    """Índice das skills para o system prompt: nome — descrição, sem corpo.
+
+    O corpo é conteúdo minerado pelo loop (dado); o índice é a única parte que
+    o executor precisa ter com autoridade nossa — saber que a skill existe."""
+    if not skills:
+        return ""
+    linhas = [f"- {s.name} — {s.description}".rstrip(" —") for s in skills]
+    return "## Skills disponíveis\n" + "\n".join(linhas)
+
+
+def _selected_skills(req: ExecRequest) -> list[Any]:
+    """Seleção de skills deste request — determinística, então o `_build_agent`
+    e o `_payload_messages` chegam na mesma lista sem passar estado entre eles
+    (assinatura do `_build_agent` fica de pé)."""
+    return select_skills(
+        getattr(req, "kind", None), query=req.prompt, files=_prompt_files(req.prompt)
+    )
+
+
+def _untrusted_block(req: ExecRequest) -> str | None:
+    """Bloco `<untrusted_reference_data>` deste request, ou None se não há dado.
+
+    O que entra: corpo das skills selecionadas e a memória episódica. Os dois
+    saíram do system prompt em 2026-08-04 (ver harness/trust_boundary.py)."""
+    skills = _selected_skills(req)
+    return trust_boundary.build_untrusted_block(
+        {
+            "Skills (corpo)": render_prompt(skills),
+            "Histórico de runs anteriores": _episodic_block(getattr(req, "kind", None), req.prompt),
+        }
+    )
+
+
+def _payload_messages(req: ExecRequest) -> list[dict[str, str]]:
+    """Mensagens do invoke: dado não confiável ANTES da tarefa, em mensagem
+    própria.
+
+    Mensagem separada e não concatenação: o limite entre "isto é referência" e
+    "isto é o pedido" fica estrutural, não só textual. Com a fronteira
+    desligada (ou sem dado nenhum) volta a mensagem única de antes."""
+    if not trust_boundary.enabled():
+        return [{"role": "user", "content": req.prompt}]
+    block = _untrusted_block(req)
+    if not block:
+        return [{"role": "user", "content": req.prompt}]
+    return [
+        {"role": "user", "content": block},
+        {"role": "user", "content": f"{trust_boundary.TASK_HEADER}\n{req.prompt}"},
+    ]
 
 
 def _record_skill_usage(req: ExecRequest, skills: list[Any]) -> None:

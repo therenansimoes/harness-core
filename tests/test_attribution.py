@@ -123,7 +123,13 @@ class _FakeMsg:
 
 
 class _FakeAgent:
+    def __init__(self, captured: dict | None = None):
+        # O corpo da skill não está mais no system prompt (fronteira de
+        # confiança): quem quiser conferir onde ele foi precisa do payload.
+        self._captured = captured if captured is not None else {}
+
     def invoke(self, payload, config):
+        self._captured["payload"] = payload
         # Resposta final com texto: state sem nenhuma mensagem do agente é
         # desistência silenciosa (exit_reason "stalled"), e o assunto destes
         # testes é o system_prompt/atribuição, não o exit_reason.
@@ -139,7 +145,7 @@ def fake_agent(monkeypatch, tmp_path):
 
     def fake_create(**kwargs):
         captured.update(kwargs)
-        return _FakeAgent()
+        return _FakeAgent(captured)
 
     monkeypatch.setattr(deepagents, "create_deep_agent", fake_create)
     monkeypatch.chdir(tmp_path)
@@ -170,7 +176,10 @@ def test_backend_records_usage_and_prepends_executor_md(fake_agent, tmp_path):
     prompt = fake_agent["system_prompt"]
     assert prompt.startswith("BASE DO EXECUTOR")
     assert "Seu diretório de trabalho" in prompt
-    assert "Corpo da skill." in prompt
+    # Índice no system prompt; corpo entra como dado, no bloco da mensagem.
+    assert "- helper — d" in prompt
+    assert "Corpo da skill." not in prompt
+    assert "Corpo da skill." in fake_agent["payload"]["messages"][0]["content"]
 
     with sqlite3.connect(tmp_path / "data" / "runs.sqlite") as conn:
         rows = conn.execute("SELECT run_id, skill FROM skill_usage").fetchall()

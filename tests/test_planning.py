@@ -137,12 +137,18 @@ def test_needs_plan_prepende_a_ordem_no_prompt():
 
 
 def test_ordem_do_plano_vem_antes_do_hint_do_reflect():
-    """A ordem é a PRIMEIRA linha: modelo pequeno obedece o começo do prompt."""
+    """A ordem é a primeira linha DA TAREFA: modelo pequeno obedece o começo do
+    pedido. Com a fronteira de confiança o hint virou dado e foi para o bloco
+    antes da tarefa, então "primeira linha do prompt" não é mais o critério —
+    o critério é abrir a seção de instruções."""
     from harness.graph.reflect import HINT_HEADER
+    from harness.trust_boundary import TASK_HEADER
 
     out = rg._prompt({"unit": _unit("refatore o modulo"), "needs_plan": True, "reflect_hint": "h"})
-    assert out.startswith(rg.PLAN_ORDER)
-    assert out.endswith(f"{HINT_HEADER}\nh")
+    bloco, sep, tarefa = out.partition(f"{TASK_HEADER}\n")
+    assert sep
+    assert tarefa.startswith(rg.PLAN_ORDER)
+    assert HINT_HEADER.lstrip("# ") in bloco and "h" in bloco
 
 
 def test_no_carimba_o_flag_e_o_evento(tmp_path, monkeypatch):

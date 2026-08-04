@@ -327,12 +327,18 @@ def test_kind_no_request_injeta_skill_no_system_prompt(tmp_path, monkeypatch):
     ws = tmp_path / "ws"
     base = ExecRequest(prompt="x", workspace=ws, model="openai:qwen3.5-9b-mlx", kind="code")
     da._build_agent(base)
-    assert "MARCADOR-DA-SKILL" in capturado["system_prompt"]
+    # O system prompt fica com o índice; o corpo é dado e viaja no bloco não
+    # confiável (fronteira de confiança, harness/trust_boundary.py).
+    assert "fake-code-skill" in capturado["system_prompt"]
+    assert "MARCADOR-DA-SKILL" not in capturado["system_prompt"]
+    assert "MARCADOR-DA-SKILL" in (da._untrusted_block(base) or "")
 
     from dataclasses import replace
 
-    da._build_agent(replace(base, kind=None))
-    assert "MARCADOR-DA-SKILL" not in capturado["system_prompt"]
+    sem_kind = replace(base, kind=None)
+    da._build_agent(sem_kind)
+    assert "fake-code-skill" not in capturado["system_prompt"]
+    assert "MARCADOR-DA-SKILL" not in (da._untrusted_block(sem_kind) or "")
 
 
 def test_system_prompt_separa_shell_de_filesystem_virtual(tmp_path, monkeypatch):
@@ -569,6 +575,26 @@ def test_stalled_exige_as_duas_condicoes(tmp_path, monkeypatch, escreve, texto):
 
     res = _fake_backend(monkeypatch, invoke).execute(_req(tmp_path))
     assert (res.ok, res.exit_reason) == (True, "done")
+
+
+def test_usage_do_callback_vira_tokens_no_result(tmp_path, monkeypatch):
+    """Token é primeira classe no resultado: soma o usage de todos os modelos do
+    run. Custo em dólar depende da tabela de preço do dia, token não."""
+    monkeypatch.setattr(
+        FakeUsage,
+        "usage_metadata",
+        {
+            "modelo-a": {"input_tokens": 900, "output_tokens": 120},
+            "modelo-b": {"input_tokens": 100, "output_tokens": 30},
+        },
+    )
+
+    def invoke(payload, config):
+        (tmp_path / "x.py").write_text("print(1)\n", encoding="utf-8")
+        return {"messages": [FakeMsg("ai", "feito")]}
+
+    res = _fake_backend(monkeypatch, invoke).execute(_req(tmp_path))
+    assert (res.tokens_in, res.tokens_out) == (1000, 150)
 
 
 def test_resposta_cortada_no_teto_de_tokens_vira_truncated(tmp_path, monkeypatch):

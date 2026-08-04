@@ -103,8 +103,15 @@ def test_hint_cita_arquivo_exigido_e_entra_no_prompt_da_2a_tentativa(
 
     assert len(recorder) == 2, "duas tentativas, dois prompts"
     assert recorder[0] == "faça a coisa", "tentativa 0 não tem feedback de nada"
-    assert recorder[1].startswith("faça a coisa\n\n" + reflect.HINT_HEADER)
-    assert MISSING in recorder[1]
+    # O hint é dado (texto do checker), não ordem: entra no bloco não confiável
+    # ANTES da tarefa, que segue rotulada como única fonte de instrução.
+    from harness.trust_boundary import TASK_HEADER
+
+    bloco, sep, tarefa = recorder[1].partition(f"{TASK_HEADER}\n")
+    assert sep
+    assert tarefa == "faça a coisa"
+    assert reflect.HINT_HEADER.lstrip("# ") in bloco
+    assert MISSING in bloco
 
     nodes = [e["node"] for e in final["events"]]
     assert nodes[nodes.index("retry") : nodes.index("retry") + 3] == [

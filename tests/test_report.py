@@ -87,6 +87,23 @@ def test_report_populado(env, capsys):
     assert str(out) in capsys.readouterr().out
 
 
+def test_runs_mostra_token_agregado_quando_existe(env):
+    """`tok=in/out` soma a janela e IGNORA quem não reportou usage. Sem nenhum
+    token na janela a métrica não aparece: "tok=0/0" leria como "não gastou"."""
+    db = env / "data" / "runs.sqlite"
+    store.record_run(_run("r1", True, RECENT, tokens_in=1000, tokens_out=250), path=db)
+    store.record_run(_run("r2", True, RECENT, tokens_in=500, tokens_out=100), path=db)
+    store.record_run(_run("r3", False, RECENT), path=db)   # backend sem usage
+    store.record_run(_run("r-velha", True, OLD, tokens_in=999_999), path=db)
+
+    text = report.build_report(since_hours=24, db_path=db, now=NOW)
+    assert "tok=1500/350" in text
+
+    sem_db = env / "data" / "sem-token.sqlite"
+    store.record_run(_run("r1", True, RECENT), path=sem_db)
+    assert "tok=" not in report.build_report(since_hours=24, db_path=sem_db, now=NOW)
+
+
 def test_report_vazio_nunca_quebra(env, capsys):
     """Sem banco, sem jsonl: todas as seções em "(sem dados)" e exit 0.
 

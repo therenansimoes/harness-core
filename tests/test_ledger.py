@@ -1,3 +1,5 @@
+import sqlite3
+
 import pytest
 
 from harness.ledger import store
@@ -89,6 +91,64 @@ def test_filters_and_order(data_dir):
     assert [r.run_id for r in store.history(backend="mock", kind="code")] == ["a"]
     assert [r.run_id for r in store.history(project="q")] == ["c"]
     assert len(store.history(limit=1)) == 1
+
+
+# Schema de `runs` como era antes de `tokens_in`/`tokens_out` — banco legado que
+# a migração tem de aceitar sem perder as linhas já gravadas.
+OLD_RUNS_SCHEMA = """
+CREATE TABLE runs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id        TEXT    NOT NULL,
+    unit_id       TEXT    NOT NULL,
+    project       TEXT,
+    backend       TEXT    NOT NULL,
+    model         TEXT,
+    tier          TEXT,
+    kind          TEXT,
+    ok            INTEGER NOT NULL,
+    exit_reason   TEXT    NOT NULL,
+    sec_total     REAL    NOT NULL,
+    sec_provision REAL    NOT NULL,
+    cost_usd      REAL,
+    intervention  INTEGER NOT NULL,
+    created_at    TEXT    NOT NULL
+);
+"""
+
+
+def test_tokens_roundtrip(data_dir):
+    """Usage em coluna própria: custo em dólar depende da tabela de preço, token
+    não. Backend que não reporta usage continua gravando NULL."""
+    store.record_run(_row(run_id="com", tokens_in=1200, tokens_out=340))
+    store.record_run(_row(run_id="sem"))
+
+    by_id = {r.run_id: r for r in store.history()}
+    assert (by_id["com"].tokens_in, by_id["com"].tokens_out) == (1200, 340)
+    assert by_id["sem"].tokens_in is None
+    assert by_id["sem"].tokens_out is None
+
+
+def test_migracao_adiciona_colunas_de_token(tmp_path):
+    """Banco velho ganha as colunas no open; linha antiga fica NULL (não há de
+    onde fazer backfill) e a nova grava o usage normalmente."""
+    path = tmp_path / "old.sqlite"
+    conn = sqlite3.connect(path)
+    conn.executescript(OLD_RUNS_SCHEMA)
+    conn.execute(
+        "INSERT INTO runs (run_id, unit_id, project, backend, model, tier, kind, "
+        "ok, exit_reason, sec_total, sec_provision, cost_usd, intervention, "
+        "created_at) VALUES ('velha', 'u', 'p', 'mock', NULL, 'tier0', 'code', "
+        "1, 'done', 1.0, 0.1, 0.02, 0, 't')"
+    )
+    conn.commit()
+    conn.close()
+
+    store.record_run(_row(run_id="nova", tokens_in=10, tokens_out=20), path=path)
+
+    by_id = {r.run_id: r for r in store.history(path=path)}
+    assert by_id["velha"].tokens_in is None
+    assert by_id["velha"].cost_usd == 0.02   # a linha antiga continua legível
+    assert (by_id["nova"].tokens_in, by_id["nova"].tokens_out) == (10, 20)
 
 
 def _mut(i: int, rule: str = "floor_up") -> MutationRow:

@@ -339,6 +339,8 @@ def run_once(
         sec_total=sec_total,
         sec_provision=sec_provision,
         cost_usd=result.cost_usd,
+        tokens_in=result.tokens_in,
+        tokens_out=result.tokens_out,
         intervention=False,
         created_at=store.now_iso(),
     )

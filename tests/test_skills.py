@@ -252,8 +252,9 @@ def test_backend_injects_skills_and_mcp_tools(monkeypatch, tmp_path):
     assert seen["kind"] is None  # ExecRequest sem kind => None, não explode
     assert seen["query"] == "x"  # prompt da unidade vai pro ranking
     prompt = captured["system_prompt"]
-    assert "## Skills" in prompt
-    assert "### python-fixes\nDiff mínimo sempre." in prompt
+    assert "## Skills disponíveis" in prompt
+    assert "- python-fixes — d" in prompt  # índice no system; corpo é dado
+    assert "### python-fixes\nDiff mínimo sempre." in (da._untrusted_block(req) or "")
     assert "diretório de trabalho" in prompt  # base preservada
     # MCP entra junto das file/web tools das ondas de tool engineering
     assert sentinel_tool in captured["tools"]
@@ -308,9 +309,10 @@ def test_backend_injects_real_skills_from_foreign_cwd_and_records_usage(monkeypa
     )
     da._build_agent(req)
 
-    assert "### python-fixes" in captured["system_prompt"]
-    assert "### config-calibration" not in captured["system_prompt"]  # kind errado
-    assert captured["system_prompt"].count("### ") <= 2  # teto: 9B não lê 4 skills
+    assert "- python-fixes —" in captured["system_prompt"]  # índice
+    assert "config-calibration" not in captured["system_prompt"]  # kind errado
+    # Teto (9B não lê 4 skills): contado onde os corpos moram agora, o bloco.
+    assert (da._untrusted_block(req) or "").count("### ") <= 2
     rows = attribution.lift("python-fixes")
     assert rows["with"] == (0, 0)  # sem linha em `runs`: só o usage foi gravado
     with attribution._connect() as conn:
@@ -321,3 +323,49 @@ def test_backend_injects_real_skills_from_foreign_cwd_and_records_usage(monkeypa
             )
         ]
     assert "python-fixes" in used
+
+
+def test_backend_extrai_files_do_prompt_e_dispara_path_trigger(monkeypatch, tmp_path):
+    """O prompt da unidade é a fonte barata de `files=`: citou o .toml, a skill
+    de glob fura a fila. Sem isso o path-trigger dormia — o backend nunca
+    passava `files`, e o único eixo vivo era o ranking fuzzy.
+
+    A asserção é sobre a CHAMADA (e sobre a seleção com a fixture real do repo),
+    não sobre onde o corpo da skill aparece: o lugar do texto no prompt é
+    assunto de outro teste."""
+    deepagents = pytest.importorskip("deepagents")
+    from harness.backends import deepagents_backend as da
+    from harness.types import ExecRequest
+
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    seen: dict = {}
+
+    def fake_select(kind, root=None, **kw):
+        seen.update(kw)
+        return []
+
+    monkeypatch.setattr(deepagents, "create_deep_agent", lambda *a, **kw: object())
+    monkeypatch.setattr(da, "select_skills", fake_select)
+    monkeypatch.setattr(da, "load_mcp_tools", lambda *a, **k: [])
+
+    prompt = "Edite config/genome.toml para subir o piso e rode o verify"
+    da._build_agent(
+        ExecRequest(prompt=prompt, workspace=tmp_path / "ws", max_turns=2, kind="config")
+    )
+    assert seen["files"] == ["config/genome.toml"]
+    assert seen["query"] == prompt   # o ranking continua recebendo o prompt
+
+    # E com esse `files` a skill versionada de .toml ganha a fila de verdade.
+    got = select_skills("config", REPO_SKILLS, query=prompt, files=seen["files"])
+    assert got and got[0].name == "toml-calibration-safety"
+
+
+def test_prompt_files_dedup_e_prompt_sem_arquivo():
+    """Ordem de aparição, sem repetir, e lista vazia quando ninguém citou path —
+    aí o eixo de path-trigger nem roda e o comportamento é o de antes."""
+    pytest.importorskip("deepagents")
+    from harness.backends import deepagents_backend as da
+
+    prompt = "leia harness/x.py, edite harness/x.py e o config/agents.toml"
+    assert da._prompt_files(prompt) == ["harness/x.py", "config/agents.toml"]
+    assert da._prompt_files("suba o piso do bandit sem mexer em arquivo nenhum") == []
