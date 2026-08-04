@@ -19,8 +19,11 @@
 [[tier]]
 name = "t0"
 backend = "deepagents"
-model = "ollama:qwen2.5:3b"      # local, $0 por run; presente no ollama daqui
-max_turns = 12
+# LM Studio local (MLX, porta 1234), $0 por run. Auditoria 2026-08-03: substitui
+# ollama:qwen2.5:3b, que falhou todas as unidades do dia — 3B não fecha
+# ler+editar+verificar. O teto de turnos acompanha o modelo que agora paga o t0.
+model = "openai:qwen3.5-9b-mlx"
+max_turns = 40
 cost_rank = 0
 
 [[tier]]

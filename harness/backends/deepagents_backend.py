@@ -155,14 +155,20 @@ def _ollama_preflight(model: str) -> Preflight:
 
 def _build_agent(req: ExecRequest):
     from deepagents import create_deep_agent
-    from deepagents.backends import FilesystemBackend
+    from deepagents.backends.local_shell import LocalShellBackend
     from langchain.agents.middleware import ModelCallLimitMiddleware
     from langchain_core.callbacks import UsageMetadataCallbackHandler
 
     req.workspace.mkdir(parents=True, exist_ok=True)
-    # virtual_mode=True é o que bloqueia path traversal; o default do
-    # FilesystemBackend não dá garantia nenhuma.
-    fs = FilesystemBackend(root_dir=str(req.workspace), virtual_mode=True)
+    # LocalShellBackend herda o FilesystemBackend e ADICIONA `execute`: com o
+    # FilesystemBackend puro o FilesystemMiddleware filtra a tool `execute`
+    # antes do modelo em request-time (`FilesystemMiddleware.
+    # _unsupported_tools_and_execution_state` → `supports_execution`, que é um
+    # isinstance de SandboxBackendProtocol) — o agente nunca conseguia rodar o
+    # verify_cmd, mesmo com a tool registrada no grafo.
+    # O shell é real, mas o root/cwd é o workspace do run (worktree efêmero) e
+    # virtual_mode=True continua bloqueando path traversal nas tools de arquivo.
+    fs = LocalShellBackend(root_dir=str(req.workspace), virtual_mode=True)
 
     middleware: list[Any] = []
     allowed = _fs_allowlist(req.tools)
@@ -183,7 +189,8 @@ def _build_agent(req: ExecRequest):
         'tarefa estão em "/" (ex.: /arquivo.py). Use ls para conferir e as '
         "tools de arquivo (read_file, edit_file, write_file) para mexer neles."
     )
-    # `kind` ainda não é campo do ExecRequest — getattr segura os dois mundos.
+    # `kind` já é campo do ExecRequest (preenchido pelo router no run_graph e
+    # pela unit no cli); getattr segura request serializado de genoma antigo.
     skills = select_skills(getattr(req, "kind", None))
     skills_block = render_prompt(skills)
     if skills_block:
@@ -200,13 +207,45 @@ def _build_agent(req: ExecRequest):
 
     extra_tools = list(load_mcp_tools())  # contrato: [] em QUALQUER falha
     agent = create_deep_agent(
-        model=req.model,
+        model=_model_for(req.model),
         backend=fs,
         middleware=middleware,
         system_prompt=system_prompt,
         **({"tools": extra_tools} if extra_tools else {}),
     )
     return agent, usage_cb
+
+
+MODEL_TEMPERATURE = 0.2
+# `chat_template_kwargs` é o canal do vLLM/llama.cpp para ligar o modo de
+# raciocínio dos modelos que trazem dois templates (Qwen3 e afins).
+THINKING_EXTRA_BODY = {"chat_template_kwargs": {"enable_thinking": True}}
+
+
+def _model_for(model: str | None):
+    """Instância de chat model com temperature baixa e thinking ligado.
+
+    `create_deep_agent` aceita string OU BaseChatModel; a string usa o default
+    do provider (temperature 1, thinking off nos templates duplos). Nem todo
+    provider aceita `extra_body`, então qualquer falha na construção volta para
+    a string crua — o comportamento de antes."""
+    if not model:
+        return model
+    try:
+        from langchain.chat_models import init_chat_model
+
+        return init_chat_model(
+            model,
+            temperature=MODEL_TEMPERATURE,
+            extra_body=THINKING_EXTRA_BODY,
+        )
+    except Exception:
+        try:
+            from langchain.chat_models import init_chat_model
+
+            return init_chat_model(model, temperature=MODEL_TEMPERATURE)
+        except Exception:
+            return model
 
 
 def _record_skill_usage(req: ExecRequest, skills: list[Any]) -> None:

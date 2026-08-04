@@ -494,6 +494,7 @@ def _execute(state: RunState, config=None) -> dict:
             max_turns=sel.max_turns,
             trace_path=ws / TRACE_FILE,
             run_id=run_id,
+            kind=sel.kind,
         )
     )
     store.record_node(run_id, "execute", _exec_payload(result), db, attempt=attempt)

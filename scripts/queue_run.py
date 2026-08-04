@@ -10,7 +10,9 @@ Este script continua porque há loop rodando com ele; a assinatura das env vars
 MODEL (default ollama:qwen2.5:3b, vazio = default do backend) · DEADLINE_S
 (default 3600, teto do loop inteiro) · ATTEMPTS (default: teto de
 config/graph.toml) · MOVE=0 (não mexe na fila: ensaio) · INTEGRATE=0 (não faz
-merge da entrega aceita no branch default — a fila deixa de compor).
+merge da entrega aceita no branch default — a fila deixa de compor) ·
+REGRESSION=0 (não re-roda os verifies de done/ depois da integração — conflito
+semântico volta a passar silencioso).
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ DEADLINE_S = float(os.environ.get("DEADLINE_S", str(int(DEFAULT_DEADLINE_S))))
 ATTEMPTS = os.environ.get("ATTEMPTS")
 MOVE = os.environ.get("MOVE", "1") == "1"
 INTEGRATE = os.environ.get("INTEGRATE", "1") == "1"
+REGRESSION = os.environ.get("REGRESSION", "1") == "1"
 
 
 def main() -> int:
@@ -43,6 +46,7 @@ def main() -> int:
         attempts=int(ATTEMPTS) if ATTEMPTS else None,
         move=MOVE,
         integrate_accepted=INTEGRATE,
+        check_regression=REGRESSION,
     )
 
 

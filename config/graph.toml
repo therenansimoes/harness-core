@@ -9,3 +9,7 @@ verify_timeout_s = 120.0
 # false => o nó degrada para o stub antigo (sem KPI / sem prova de tamper).
 measure = true
 tamper = true
+# ui_verify: a régua olha a tela quando o run produz dist/ (fail-open sem
+# Chrome/dist — não derruba runs que não constroem UI). Auditoria 2026-08-03:
+# site buildava verde renderizando cru porque isto estava desligado.
+ui_verify = true

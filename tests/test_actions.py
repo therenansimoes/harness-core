@@ -60,9 +60,14 @@ def test_acoes_registradas():
         "dream",
         "node",
         "topology_kind",
+        "decompose",
+        "prompt",
+        "workflow",
+        "skill_prune",
     ):
         assert name in found, name
         assert found[name].name == name
+    assert len(found) == 13, sorted(found)
 
 
 def test_registro_sobrevive_modulo_opcional_ausente():

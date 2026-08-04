@@ -47,10 +47,10 @@ antes: piso mais alto faz o prior escalar mais cedo e troca falha por dinheiro."
 id = "max_turns_t0_12_to_8"
 target_file = "config/models.toml"
 key = "tier[0].max_turns"
-from = 12
+from = 40
 to = 8
 fails_on = ["timeout", "max_turns"]
-hypothesis = """Run local que não converge em 8 turnos raramente converge em 12;
+hypothesis = """Run local que não converge em 8 turnos raramente converge em 40;
 cortar o teto devolve o relógio para a próxima tentativa em vez de gastá-lo
 no mesmo beco."""
 

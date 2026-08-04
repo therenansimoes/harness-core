@@ -275,8 +275,10 @@ def test_mutate_edita_array_de_tabelas(sandbox):
     """`tier[0].max_turns` acerta o PRIMEIRO [[tier]], não o último."""
     alvo = sandbox / "config" / "models.toml"
     antes = alvo.read_bytes()
+    # from_value acompanha o max_turns real do t0 no models.toml do repo (40
+    # desde a troca do modelo local); apply() confere o `from` antes de escrever.
     r = Rule(id="turns", target_file="config/models.toml", key="tier[0].max_turns",
-             from_value=12, to_value=8)
+             from_value=40, to_value=8)
 
     m = mutate.apply(r, "t", root=sandbox)
 

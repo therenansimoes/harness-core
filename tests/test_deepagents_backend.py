@@ -48,6 +48,8 @@ def test_capabilities_are_declared():
     caps = da.DeepagentsBackend().capabilities()
     assert caps.model_selectable is True
     assert "edit_file" in caps.tools
+    # `execute` só é honesto porque o backend é sandbox (test_backend_suporta_execucao)
+    assert "execute" in caps.tools
 
 
 # --- pricing ---------------------------------------------------------------
@@ -144,6 +146,70 @@ def test_middleware_replacement_actually_restricts_tools(tmp_path):
     restrito, _ = da._build_agent(replace(base, tools=("ls", "read_file", "edit_file")))
     assert "execute" not in _agent_tool_names(restrito)
     assert {"ls", "read_file", "edit_file"} <= _agent_tool_names(restrito)
+
+
+def test_backend_suporta_execucao(tmp_path, monkeypatch):
+    """`execute` só chega ao modelo se o backend passa em `supports_execution`.
+
+    Com `FilesystemBackend` a tool existe no grafo mas o `FilesystemMiddleware`
+    a remove em request-time — o agente nunca rodava o verify_cmd."""
+    pytest.importorskip("deepagents")
+    import deepagents
+    from deepagents.middleware.filesystem import supports_execution
+
+    capturado: dict[str, object] = {}
+
+    def spy(*a, **kw):
+        capturado["backend"] = kw["backend"]
+        return object()
+
+    monkeypatch.setattr(deepagents, "create_deep_agent", spy)
+    da._build_agent(ExecRequest(prompt="x", workspace=tmp_path, model="ollama:qwen3:4b"))
+    assert supports_execution(capturado["backend"]) is True
+
+
+def test_kind_no_request_injeta_skill_no_system_prompt(tmp_path, monkeypatch):
+    """Sem `kind` no ExecRequest a skill de `kinds = ["code"]` nunca é injetada."""
+    pytest.importorskip("deepagents")
+    import deepagents
+
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    (skills / "fake.md").write_text(
+        '---\nname = "fake-code-skill"\nkinds = ["code"]\n'
+        'description = "fixture"\n---\nMARCADOR-DA-SKILL\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HARNESS_ROOT", str(tmp_path))
+
+    capturado: dict[str, str] = {}
+
+    def spy(*a, **kw):
+        capturado["system_prompt"] = kw["system_prompt"]
+        return object()
+
+    monkeypatch.setattr(deepagents, "create_deep_agent", spy)
+
+    ws = tmp_path / "ws"
+    base = ExecRequest(prompt="x", workspace=ws, model="ollama:qwen3:4b", kind="code")
+    da._build_agent(base)
+    assert "MARCADOR-DA-SKILL" in capturado["system_prompt"]
+
+    from dataclasses import replace
+
+    da._build_agent(replace(base, kind=None))
+    assert "MARCADOR-DA-SKILL" not in capturado["system_prompt"]
+
+
+def test_model_instance_tem_temperature_baixa():
+    """Fix do thinking/temperature: instância, não string crua (com fail-open)."""
+    pytest.importorskip("langchain")
+    for model in ("ollama:qwen3:4b", "anthropic:claude-sonnet-4-5"):
+        got = da._model_for(model)
+        if isinstance(got, str):
+            continue  # provider sem credencial local: fallback pra string crua
+        assert got.temperature == da.MODEL_TEMPERATURE
+    assert da._model_for(None) is None
 
 
 # --- ollama de verdade -----------------------------------------------------

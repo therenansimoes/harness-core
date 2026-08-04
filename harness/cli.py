@@ -37,7 +37,7 @@ from harness.workspace.sealing import is_verifier, verifier_visible
 
 UNIT_FILE = "unit.toml"
 SCRATCH_DIR = ".harness"   # log do verify; não conta como sujeira do repo-alvo
-DEFAULT_MAX_TURNS = 8
+DEFAULT_MAX_TURNS = 30
 HELD_IN = Path("benchmarks/held_in")   # unidades default do `harness improve`
 WEBHOOK_PORT = 8787   # porta default do `harness webhook` (loopback)
 # Resposta default do `--resume`: abortar. Retomar um loop sem dizer o que
@@ -245,6 +245,7 @@ def run_once(
                 max_turns=max_turns,
                 trace_path=ws / "trace.jsonl",
                 run_id=run_id,
+                kind=unit.kind,
             )
         )
         # A régua decide, não o executor: verify roda sempre que houve execução
@@ -880,6 +881,39 @@ def cmd_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_decompose(args: argparse.Namespace) -> int:
+    """Task grande vira fila de sub-units atômicas (a quebra que era humana)."""
+    from harness.add import AddError
+    from harness.improve.decompose import (
+        DECOMPOSE_MAX_USD,
+        DecomposeError,
+        apply_decompose,
+        propose_decompose,
+    )
+
+    try:
+        proposal = propose_decompose(
+            args.task,
+            args.project,
+            n_max=args.n_max,
+            model=args.model,
+            max_usd=DECOMPOSE_MAX_USD if args.max_usd is None else args.max_usd,
+            projects_file=Path(args.projects) if args.projects else None,
+            queue_dir=Path(args.queue_dir) if args.queue_dir else None,
+        )
+        if proposal is None:
+            print(
+                "decompose: plano inválido ou com menos de 2 passos — nada gravado",
+                file=sys.stderr,
+            )
+            return 1
+        apply_decompose(proposal, dry=args.dry)
+    except (DecomposeError, AddError) as exc:
+        print(f"decompose falhou: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_seal(args: argparse.Namespace) -> int:
     """Promove um exame da quarentena para sealed. Selar é ato humano."""
     from harness.improve import synthesize
@@ -1054,6 +1088,7 @@ def cmd_queue(args: argparse.Namespace) -> int:
             attempts=args.attempts,
             move=args.move,
             integrate_accepted=args.integrate,
+            check_regression=args.regression,
         )
     except ValueError as exc:
         print(exc, file=sys.stderr)
@@ -1183,6 +1218,11 @@ def build_parser() -> argparse.ArgumentParser:
                        help="merge da entrega aceita no branch default (default: "
                             "ligado). --no-integrate quebra a fila progressiva: a "
                             "unidade seguinte sai do HEAD e não vê a anterior")
+    queue.add_argument("--regression", action=argparse.BooleanOptionalAction,
+                       default=True,
+                       help="re-roda o verify das unidades de done/ no repo depois "
+                            "de cada integração (default: ligado). --no-regression "
+                            "deixa conflito semântico passar silencioso")
     queue.set_defaults(func=cmd_queue, parser=queue)
 
     backends = sub.add_parser("backends", help="lista backends registrados + preflight")
@@ -1316,6 +1356,31 @@ def build_parser() -> argparse.ArgumentParser:
     add_cmd.add_argument("--out-dir", default=None, dest="out_dir",
                          help="destino da unit (default: benchmarks/quarantine)")
     add_cmd.set_defaults(func=cmd_add)
+
+    # Import tardio como no cmd_decompose: só o teto do plano é preciso aqui, e
+    # o módulo puxa backends/registry — quem nunca decompõe não paga isso.
+    from harness.improve.decompose import DEFAULT_N_MAX
+
+    dec = sub.add_parser(
+        "decompose",
+        help="quebra uma tarefa grande numa fila ordenada de sub-units atômicas",
+    )
+    dec.add_argument("task", help="a tarefa grande, escrita em português")
+    dec.add_argument("--project", required=True,
+                     help="projeto registrado em config/projects.toml")
+    dec.add_argument("--n-max", type=int, default=DEFAULT_N_MAX, dest="n_max",
+                     help=f"teto de passos do plano (default {DEFAULT_N_MAX})")
+    dec.add_argument("--dry", action="store_true",
+                     help="mostra a fila planejada sem gravar nada")
+    dec.add_argument("--model", default=None,
+                     help="modelo do planejamento (default: haiku)")
+    dec.add_argument("--max-usd", type=float, default=None, dest="max_usd",
+                     help="teto de custo da chamada de planejamento")
+    dec.add_argument("--projects", default=None,
+                     help="registro de projetos alternativo")
+    dec.add_argument("--queue-dir", default=None, dest="queue_dir",
+                     help="fila destino (default: a do projeto no registro)")
+    dec.set_defaults(func=cmd_decompose)
 
     seal = sub.add_parser(
         "seal", help="promove um exame da quarentena para benchmarks/sealed"

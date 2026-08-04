@@ -12,6 +12,11 @@ senão a unidade seguinte sairia de um HEAD sem o trabalho da anterior.
 Aceita vai para `queue/done/`, travada vai para `queue/stuck/` — os buckets que
 `harness status` conta.
 
+Depois de cada integração os `verify_cmd` das unidades já em `done/` rodam de
+novo DENTRO do repo integrado (regressão). Sem isso um conflito semântico — o
+merge passa limpo e quebra o que a unidade anterior provou — acumularia
+silencioso no projeto. Verify é questão de segundos; o gap não.
+
 Módulo separado de `projects.py` de propósito: aquele é o registro (+ entrega em
 branch) e não conhece o grafo; aqui o driver importa `run_graph`, que já importa
 `projects` — juntar os dois fecharia ciclo.
@@ -21,6 +26,7 @@ from __future__ import annotations
 
 import shutil
 import time
+import tomllib
 from pathlib import Path
 
 from harness.graph.run_graph import run_unit
@@ -30,14 +36,18 @@ from harness.projects import (
     QUEUE_STUCK,
     UNIT_FILE,
     IntegrateError,
+    Project,
     get_project,
     integrate,
 )
+from harness.ruler.verify import log_tail, run_log_dir, run_verify
+from harness.types import UnitSpec
 
 DEFAULT_PROJECT = "oficina"
 DEFAULT_BACKEND = "deepagents"
 DEFAULT_MODEL = "ollama:qwen2.5:3b"
 DEFAULT_DEADLINE_S = 3600.0
+REGRESSION_TIMEOUT_S = 120.0   # regressão é barata: verify que demora não é régua
 
 
 def pending(queue: Path) -> list[Path]:
@@ -49,6 +59,59 @@ def pending(queue: Path) -> list[Path]:
     )
 
 
+def _verify_cmd(unit_dir: Path, proj: Project) -> str | None:
+    """`verify_cmd` declarado no `unit.toml` da unidade (ou o default do projeto).
+
+    Devolve `None` quando não há régua para rodar: unidade sem `unit.toml` (ou
+    com toml ilegível) é pulada com aviso, nunca derruba a fila — regressão é
+    guarda-corpo, não motivo novo de travar.
+    """
+    try:
+        data = tomllib.loads((unit_dir / UNIT_FILE).read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    cmd = data.get("verify_cmd") or proj.verify_default
+    return str(cmd).strip() or None if cmd else None
+
+
+def regressions(
+    proj: Project,
+    queue: Path,
+    data: Path,
+    timeout_s: float = REGRESSION_TIMEOUT_S,
+) -> str | None:
+    """Re-roda o verify das unidades de `done/` no repo integrado, em ordem.
+
+    Devolve o nome da PRIMEIRA unidade que quebrou (ou `None`, tudo verde). O
+    cwd é o repo do projeto, não o workspace: o que interessa é o resultado do
+    merge, e é lá que o conflito semântico aparece. Log fora do repo (mesmo
+    `run_log_dir` do verify normal) para não sujar a working tree do alvo.
+    """
+    done = queue / QUEUE_DONE
+    if not done.is_dir():
+        return None
+    for unit_dir in sorted(p for p in done.iterdir() if p.is_dir()):
+        cmd = _verify_cmd(unit_dir, proj)
+        if not cmd:
+            print(f"regression: {unit_dir.name} sem verify_cmd — pulei")
+            continue
+        unit = UnitSpec(id=unit_dir.name, path=unit_dir, prompt="", verify_cmd=cmd)
+        log_dir = run_log_dir(f"regression-{unit_dir.name}-{int(time.time())}", data)
+        verdict = run_verify(unit, proj.repo, timeout_s=timeout_s, log_dir=log_dir)
+        if verdict.passed:
+            print(f"regression: {unit_dir.name} ok ({verdict.sec:.1f}s)")
+            continue
+        print(
+            f"regression: {unit_dir.name} QUEBROU (exit {verdict.exit_code}, "
+            f"{verdict.sec:.1f}s) log={verdict.log_path}"
+        )
+        tail = log_tail(verdict.log_path)
+        if tail:
+            print(tail)
+        return unit_dir.name
+    return None
+
+
 def run_queue(
     project: str = DEFAULT_PROJECT,
     backend: str = DEFAULT_BACKEND,
@@ -57,6 +120,7 @@ def run_queue(
     attempts: int | None = None,
     move: bool = True,
     integrate_accepted: bool = True,
+    check_regression: bool = True,
     projects_path: Path | None = None,
 ) -> int:
     """Roda a fila do projeto até acabar, travar ou estourar o deadline.
@@ -66,6 +130,9 @@ def run_queue(
     `integrate_accepted=False` desliga o merge da entrega no branch default: a
     fila volta a ser uma sequência de branches que não compõem (só faz sentido
     quando o objetivo é justamente inspecionar cada entrega isolada).
+
+    `check_regression=False` desliga a re-rodada dos verifies de `done/` depois
+    da integração — só para quando o custo do verify passou a não ser barato.
     """
     proj = get_project(project, projects_path)
     queue = proj.queue_dir
@@ -102,6 +169,14 @@ def run_queue(
             except (IntegrateError, ValueError) as exc:
                 ok = False
                 print(f"{unit_dir.name}: integração falhou — {exc}")
+            # Merge limpo não é prova de nada: o que as unidades anteriores
+            # provaram tem que continuar valendo depois deste merge. Quebrou →
+            # a culpa é da recém-integrada (é ela que mudou o repo).
+            if ok and check_regression:
+                quebrou = regressions(proj, queue, data)
+                if quebrou:
+                    ok = False
+                    print(f"{unit_dir.name}: regression: {quebrou}")
         aceita = decision.action == "accept" and ok
         bucket = queue / (QUEUE_DONE if aceita else QUEUE_STUCK)
         bucket.mkdir(exist_ok=True)

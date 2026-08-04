@@ -70,6 +70,26 @@ def _fake_run_unit(acoes: dict[str, str], visto: list[str]):
     return run_unit
 
 
+def _regua(queue: Path, unit: str, cmd: str) -> None:
+    """Dá um `verify_cmd` à unidade da fila — é ele que a regressão re-roda."""
+    f = queue / unit / UNIT_FILE
+    atual = f.read_text(encoding="utf-8")
+    f.write_text(f"{atual}verify_cmd = {json.dumps(cmd)}\n", encoding="utf-8")
+
+
+def _entregas(repo: Path, arquivos: dict[str, tuple[str, str]], visto: list[str]):
+    """`run_unit` fake que, a cada accept, deixa a entrega da unidade no repo."""
+    base = _fake_run_unit({}, visto)
+
+    def run_unit(unit_dir, *a, **kw):
+        state = base(unit_dir, *a, **kw)
+        arquivo, conteudo = arquivos[unit_dir.name]
+        _entrega(repo, unit_dir.name, arquivo, conteudo)
+        return state
+
+    return run_unit
+
+
 def test_para_na_primeira_nao_aceita_e_move(fila, monkeypatch, capsys):
     visto: list[str] = []
     monkeypatch.setattr(
@@ -112,6 +132,9 @@ def test_cli_queue_defaults():
     # Integração é o default: sem ela a fila progressiva não compõe.
     assert args.integrate is True
     assert build_parser().parse_args(["queue", "--no-integrate"]).integrate is False
+    # Regressão também é default: desligar é opt-in explícito.
+    assert args.regression is True
+    assert build_parser().parse_args(["queue", "--no-regression"]).regression is False
 
 
 def test_entregas_aceitas_compoem_no_branch_default(fila, monkeypatch, capsys):
@@ -175,3 +198,69 @@ def test_conflito_de_merge_para_a_fila_e_aborta(fila, monkeypatch, capsys):
     assert (repo / "app.txt").read_text(encoding="utf-8") == "01-um\n"
     out = capsys.readouterr().out
     assert "integração falhou" in out and "abortado" in out
+
+
+def test_regressao_manda_a_recem_integrada_pra_stuck_e_para(fila, monkeypatch, capsys):
+    """Conflito semântico: o merge da 2ª passa limpo e quebra o verify da 1ª.
+    A culpada é a recém-integrada — stuck/ e a fila para."""
+    repo = fila.parent
+    _regua(fila, "01-um", "grep -q v1 app.txt")
+    visto: list[str] = []
+    monkeypatch.setattr(queue_mod, "run_unit", _entregas(repo, {
+        "01-um": ("um.txt", "um\n"),
+        # arquivo diferente do da 1ª (merge limpo), conteúdo que derruba a régua
+        "02-dois": ("app.txt", "v2\n"),
+        "03-tres": ("tres.txt", "tres\n"),
+    }, visto))
+
+    assert queue_mod.run_queue("t") == 0
+
+    assert [v.split(":")[0] for v in visto] == ["01-um", "02-dois"]
+    assert (fila / QUEUE_DONE / "01-um" / UNIT_FILE).is_file()
+    assert (fila / QUEUE_STUCK / "02-dois" / UNIT_FILE).is_file()
+    assert (fila / "03-tres" / UNIT_FILE).is_file()
+    out = capsys.readouterr().out
+    assert "regression: 01-um QUEBROU" in out and "02-dois: regression: 01-um" in out
+
+
+def test_regressao_verde_deixa_a_fila_andar_e_pula_unidade_sem_regua(
+    fila, monkeypatch, capsys
+):
+    repo = fila.parent
+    _regua(fila, "01-um", "grep -q v1 app.txt")
+    visto: list[str] = []
+    monkeypatch.setattr(queue_mod, "run_unit", _entregas(repo, {
+        "01-um": ("um.txt", "um\n"),
+        "02-dois": ("dois.txt", "dois\n"),
+        "03-tres": ("tres.txt", "tres\n"),
+    }, visto))
+
+    assert queue_mod.run_queue("t") == 0
+
+    assert len(visto) == 3
+    for name in ("01-um", "02-dois", "03-tres"):
+        assert (fila / QUEUE_DONE / name / UNIT_FILE).is_file()
+    assert not (fila / QUEUE_STUCK).exists()
+    out = capsys.readouterr().out
+    assert "regression: 01-um ok" in out
+    # done/ sem verify_cmd não trava nada: pula com aviso.
+    assert "regression: 02-dois sem verify_cmd — pulei" in out
+
+
+def test_no_regression_desliga_a_checagem(fila, monkeypatch, capsys):
+    repo = fila.parent
+    _regua(fila, "01-um", "grep -q v1 app.txt")
+    visto: list[str] = []
+    monkeypatch.setattr(queue_mod, "run_unit", _entregas(repo, {
+        "01-um": ("um.txt", "um\n"),
+        "02-dois": ("app.txt", "v2\n"),
+        "03-tres": ("tres.txt", "tres\n"),
+    }, visto))
+
+    assert queue_mod.run_queue("t", check_regression=False) == 0
+
+    # Mesma quebra do teste anterior, sem ninguém para pegar: a fila anda toda.
+    assert len(visto) == 3
+    assert (fila / QUEUE_DONE / "02-dois" / UNIT_FILE).is_file()
+    assert not (fila / QUEUE_STUCK).exists()
+    assert "regression" not in capsys.readouterr().out

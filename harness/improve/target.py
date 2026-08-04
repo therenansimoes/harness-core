@@ -317,6 +317,7 @@ _OPTIONAL_ACTION_MODULES = (
     "harness.improve.dream",
     "harness.improve.node_action",
     "harness.improve.topology_evolve",
+    "harness.improve.decompose",
 )
 
 

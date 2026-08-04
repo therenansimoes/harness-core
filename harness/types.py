@@ -58,6 +58,9 @@ class ExecRequest:
     session_id: str | None = None
     trace_path: Path = Path("trace.jsonl")
     run_id: str | None = None
+    # Roteamento decidiu o kind; sem ele no request o backend só acha skill de
+    # `kinds = []` — nenhuma seed tem — e a injeção nunca acontece.
+    kind: str | None = None
 
 
 @dataclass(frozen=True)

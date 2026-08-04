@@ -70,10 +70,12 @@ def test_policy_nunca_quebra_com_config_torta(tmp_path):
 
 
 def test_policy_do_repo_e_a_de_fabrica():
-    # O graph.toml versionado no repo tem que ser exatamente os defaults:
-    # mudar a política de fábrica é decisão, não efeito colateral.
+    # O graph.toml versionado no repo tem que ser os defaults, com UM override
+    # deliberado: ui_verify=true. Auditoria 2026-08-03 — site buildava verde
+    # renderizando cru porque o gate visual estava desligado; ligar é decisão
+    # tomada, não efeito colateral. Qualquer OUTRO desvio ainda quebra aqui.
     repo = Path(__file__).resolve().parent.parent
-    assert load_policy(repo / "config" / "graph.toml") == GraphPolicy()
+    assert load_policy(repo / "config" / "graph.toml") == GraphPolicy(ui_verify=True)
 
 
 # --- (b) tamper => revert ----------------------------------------------------

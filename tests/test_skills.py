@@ -87,6 +87,28 @@ def test_seed_skills_parse_and_route():
     assert "config-calibration" in {s.name for s in select_skills("config", REPO_SKILLS)}
 
 
+# --- root default: cwd não pode decidir se a skill existe ------------------
+
+
+def test_default_root_finds_repo_skills_from_foreign_cwd(monkeypatch, tmp_path):
+    """Regressão: cwd no workspace (sem skills/) carregava zero skill."""
+    monkeypatch.delenv("HARNESS_ROOT", raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert not (tmp_path / "skills").exists()
+    names = {s.name for s in load_skills()}
+    assert {"python-fixes", "config-calibration"} <= names
+    assert "python-fixes" in {s.name for s in select_skills("code")}
+
+
+def test_default_root_honours_harness_root(monkeypatch, tmp_path):
+    """Env setado manda — inclusive vazio, senão isolamento de teste vazaria."""
+    monkeypatch.setenv("HARNESS_ROOT", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    assert load_skills() == []
+    _write(tmp_path / "skills", "x.md", 'name = "x"\nkinds = ["code"]\ndescription = "d"')
+    assert [s.name for s in select_skills("code")] == ["x"]
+
+
 # --- injeção no backend ----------------------------------------------------
 
 
@@ -139,3 +161,40 @@ def test_backend_without_skills_or_tools_keeps_base_prompt(monkeypatch, tmp_path
 
     assert "## Skills" not in captured["system_prompt"]
     assert "tools" not in captured  # lista vazia não é passada adiante
+
+
+def test_backend_injects_real_skills_from_foreign_cwd_and_records_usage(monkeypatch, tmp_path):
+    """O caminho real: nada de fake_select. cwd fora do repo, kind vindo do
+    request, skills do repo no prompt e a atribuição gravada no ledger."""
+    deepagents = pytest.importorskip("deepagents")
+    from harness.backends import deepagents_backend as da
+    from harness.skills import attribution
+    from harness.types import ExecRequest
+
+    monkeypatch.delenv("HARNESS_ROOT", raising=False)
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.chdir(tmp_path)
+
+    captured: dict = {}
+    monkeypatch.setattr(
+        deepagents, "create_deep_agent", lambda *a, **kw: captured.update(kw) or object()
+    )
+    monkeypatch.setattr(da, "load_mcp_tools", lambda *a, **k: [])
+
+    req = ExecRequest(
+        prompt="x", workspace=tmp_path / "ws", max_turns=2, run_id="run-skill-1", kind="code"
+    )
+    da._build_agent(req)
+
+    assert "### python-fixes" in captured["system_prompt"]
+    assert "### config-calibration" not in captured["system_prompt"]  # kind errado
+    rows = attribution.lift("python-fixes")
+    assert rows["with"] == (0, 0)  # sem linha em `runs`: só o usage foi gravado
+    with attribution._connect() as conn:
+        used = [
+            r["skill"]
+            for r in conn.execute(
+                "SELECT skill FROM skill_usage WHERE run_id = ?", ("run-skill-1",)
+            )
+        ]
+    assert "python-fixes" in used
