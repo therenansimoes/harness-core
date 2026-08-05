@@ -1597,7 +1597,7 @@ def cmd_tune(args: argparse.Namespace) -> int:
     from harness.improve.tune import TuneAborted, TuneError, run_tune
 
     try:
-        outcome = run_tune(args.artifact, rounds=args.rounds, model=args.model)
+        outcome = run_tune(args.artifact, rounds=args.rounds, model=args.model, runner=args.runner)
     except TuneAborted as exc:
         print(f"tune abortado: {exc}", file=sys.stderr)
         return 1
@@ -1609,7 +1609,7 @@ def cmd_tune(args: argparse.Namespace) -> int:
         return 1
     for v in outcome.chain:
         print(f"v{v.version} overall={v.agg.overall:.3f} {v.reason}")
-    print(f"vencedor: v{outcome.winner}")
+    print(f"vencedor: v{outcome.winner} (runner={args.runner})")
     return 0
 
 
@@ -2510,6 +2510,12 @@ def build_parser() -> argparse.ArgumentParser:
     tune.add_argument("artifact", help="artefato tunável, ex.: skills/python-fixes.md")
     tune.add_argument("--rounds", type=int, default=2, help="rodadas de rewrite (default 2)")
     tune.add_argument("--model", default="openai:qwen/qwen3.5-9b", help="modelo do rewriter/runner")
+    tune.add_argument(
+        "--runner",
+        choices=("extractive", "real"),
+        default="extractive",
+        help="quem produz a saída julgada: extractive (o artefato, default) ou real (o modelo)",
+    )
     tune.set_defaults(func=cmd_tune)
 
     rb = sub.add_parser(

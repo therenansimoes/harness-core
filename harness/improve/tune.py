@@ -22,6 +22,13 @@ Três coisas separam isto de "peça ao modelo para melhorar a skill":
 A cadeia inteira é gravada em `$HARNESS_DATA_DIR/tune/<artefato>/`, NUNCA dentro
 do bundle: arquivo novo no bundle é `eval:unlisted-file`, e o loop derrubaria o
 próprio exame ao escrever o relatório dele.
+
+Quem PRODUZ a saída julgada é o runner, e ele tem dois modos: `extractive` (a
+saída é o próprio artefato — determinístico, zero token, o default) e `real` (a
+saída é a resposta do modelo local seguindo o artefato). O juiz é o mesmo nos
+dois: régua determinística, sem LLM. O modo escolhido vale para a cadeia
+INTEIRA e fica carimbado no `chain.json` e no `EVALUATION.md` — nota tirada com
+runner diferente da versão anterior não é comparável com ela.
 """
 
 from __future__ import annotations
@@ -47,7 +54,7 @@ from harness.evals.score import (
     score_trial,
 )
 from harness.improve import mutate, research, workflow_action
-from harness.improve.tunable import Tunable, tunable_for
+from harness.improve.tunable import Tunable, case_prompt, tunable_for
 from harness.ledger import store
 from harness.types import ExecRequest, MutationRow
 
@@ -98,6 +105,41 @@ REWRITE_ORDER = (
     "comentário em volta). Só depois responda uma linha dizendo que gravou. "
     f"O que vai ser medido é o conteúdo de `{REWRITE_FILE}`; texto solto no "
     "chat é descartado."
+)
+
+# Reescritor que devolve o corpo da skill e "esquece" o frontmatter é o modo de
+# falha nº 1 do 9B local — e custava uma rodada inteira por descarte de
+# "skill ilegível". O frontmatter do incumbente é reanexado por cópia, sem
+# segunda chamada de modelo: normalização determinística não é opinião nova.
+FRONTMATTER_NOTE = " [frontmatter reanexado do incumbente]"
+
+# Quem produz a saída que o juiz pontua. `extractive` é o default porque é ele
+# que a cadeia inteira sempre mediu: trocar o default mudaria, em silêncio, o
+# significado de toda nota já gravada.
+RUNNER_EXTRACTIVE = "extractive"
+RUNNER_REAL = "real"
+RUNNERS = (RUNNER_EXTRACTIVE, RUNNER_REAL)
+DEFAULT_RUNNER = RUNNER_EXTRACTIVE
+# Teto POR CASO. 60s (o primeiro palpite) reprovou na bancada: o 9B local é
+# modelo de RACIOCÍNIO — a medição de um caso de `python-fixes` gastou ~600
+# tokens só pensando antes da primeira letra da resposta, ~50s de relógio, e
+# todo caso caía no extrativo por timeout. 180s é o mesmo teto do rewriter e
+# vale pela mesma razão: abaixo disso não é guarda, é desligar o recurso.
+# Estourou => aquele caso cai no extrativo e a medição continua.
+RUN_TIMEOUT_S = 180.0
+# 2 e não 1 pelo motivo oposto ao do rewriter: com `run_limit=1` o
+# `ModelCallLimitMiddleware` encerra o grafo NO LUGAR da resposta (a última fala
+# vira "Model call limits exceeded") e o backend devolve `max_turns` — o run
+# real inteiro virava fallback extrativo. Com 2, responder direto termina em 1
+# turno e sobra folga; quem gastar o turno chamando tool estoura, e estourar
+# devolve `ok=False`, que é fallback e não resposta de mentira.
+RUN_MAX_TURNS = 2
+# Mesma lógica do `REWRITE_ORDER`, invertida: aqui o que vale é o texto do CHAT.
+# O 9B local, com tools na mesa, gasta o único turno chamando uma delas e volta
+# sem resposta — o que viraria fallback extrativo em todo caso.
+RUN_ORDER = (
+    "Responda AGORA, direto no chat, sem chamar nenhuma tool e sem preâmbulo: "
+    "o que for medido é esta resposta."
 )
 
 PROMOTED = "promoted"
@@ -197,17 +239,23 @@ def run_tune(
     trials: int | None = None,
     model: str = DEFAULT_MODEL,
     max_usd: float = DEFAULT_MAX_USD,
+    runner: str = DEFAULT_RUNNER,
 ) -> TuneOutcome:
     """Afina `artifact` contra o bundle congelado dele e devolve a cadeia.
 
     Não escreve o artefato: quem grava é o `apply_tune`, depois do genoma. Aqui
     só se mede e se registra a cadeia em `data/`.
+
+    `runner` é escolhido UMA vez e vale para as três medições de baseline e para
+    a cadeia inteira: runner que muda no meio compara versão com régua diferente.
     """
+    if runner not in RUNNERS:
+        raise ValueError(f"runner desconhecido: {runner!r} (esperado {' ou '.join(RUNNERS)})")
     violations = verify_frozen(artifact)
     if violations:
         raise TuneAborted(violations)
 
-    adapter = tunable_for(artifact, model=model, max_usd=max_usd)
+    adapter = tunable_for(artifact, model=model, max_usd=max_usd, runner=runner)
     cases = load_cases(artifact)
     train_cases, hold_cases = split_cases(cases)
     train_ids = {c.id for c in train_cases}
@@ -252,9 +300,13 @@ def run_tune(
                 feedback,
             )
             cand = _call_rewriter(prompt, model=model, max_usd=max_usd)
+            # Normalização ANTES do validate: é o validate que estava matando a
+            # rodada por um cabeçalho que o loop sabe reconstruir sozinho.
+            cand, fixed = _restore_frontmatter(best.text, cand)
+            nota = FRONTMATTER_NOTE if fixed else ""
             errs = adapter.validate(cand)
             if errs:
-                reason = f"v{n} descartada: {errs[0]}"
+                reason = f"v{n} descartada: {errs[0]}{nota}"
                 chain.append(TuneVersion(n, cand, _EMPTY, reason, valid=False, retained=False))
                 feedback.append(reason)
                 continue
@@ -262,12 +314,12 @@ def run_tune(
             # Treino decide, holdout veta: é o par que o reescritor pode
             # atacar e a parte que ele não pode ver, nessa ordem.
             if beats(v.train, best.train) and _holdout_ok(v, best):
-                v = replace(v, retained=True, reason=_reason(n, v.agg, best.agg))
+                v = replace(v, retained=True, reason=_reason(n, v.agg, best.agg) + nota)
                 chain.append(v)
                 best = v
                 feedback = []  # base nova -> feedback antigo expira
             else:
-                reason = _discard_reason(n, v, best)
+                reason = _discard_reason(n, v, best) + nota
                 chain.append(replace(v, retained=False, reason=reason))
                 feedback.append(reason)
 
@@ -279,7 +331,7 @@ def run_tune(
         "tuned": best.agg if best is not None else _EMPTY,
     }
     md = render_evaluation_md(artifact, scores=win.agg, baseline=baseline)
-    _persist(artifact, chain, md)
+    _persist(artifact, chain, md, runner)
     return TuneOutcome(
         artifact=artifact, baseline=baseline, chain=chain, winner=winner, evaluation_md=md
     )
@@ -293,6 +345,7 @@ def propose_tune(
     trials: int | None = None,
     model: str = DEFAULT_MODEL,
     max_usd: float = DEFAULT_MAX_USD,
+    runner: str = DEFAULT_RUNNER,
 ) -> TuneProposal:
     """Roda o loop e embrulha o vencedor na proposta do adapter.
 
@@ -300,7 +353,13 @@ def propose_tune(
     um `propose` barato aqui proporia texto que ninguém pontuou.
     """
     outcome = run_tune(
-        artifact, candidate=candidate, rounds=rounds, trials=trials, model=model, max_usd=max_usd
+        artifact,
+        candidate=candidate,
+        rounds=rounds,
+        trials=trials,
+        model=model,
+        max_usd=max_usd,
+        runner=runner,
     )
     win = outcome.winning
     return TuneProposal(
@@ -374,11 +433,48 @@ def chain_dir(artifact: str) -> Path:
 def _run_case(text: str, case: EvalCase, *, model: str | None, max_usd: float) -> str:
     """Medição extrativa determinística — a saída julgada É o artefato.
 
-    Runner real (LM Studio por caso) deliberadamente ADIADO: variância de runner
-    dentro do juiz mata a comparabilidade entre versões. Os params `model` e
-    `max_usd` ficam pela assinatura do futuro runner real e pelo seam de teste.
+    Continua sendo o DEFAULT e o fallback do runner real: é a única medição que
+    não depende de servidor de pé, e é ela que todas as notas já gravadas usaram.
+    Os params `model` e `max_usd` ficam pela simetria com o runner real e pelo
+    seam de teste.
     """
     return text
+
+
+def _run_case_real(text: str, case: EvalCase, *, model: str | None, max_usd: float) -> str:
+    """A saída do caso vinda do MODELO local, com o artefato como orientação.
+
+    É o que fecha o loop: no extrativo, "a skill contém a âncora" passa por "a
+    resposta contém a âncora", e skill boa é indistinguível de skill que só
+    recita as palavras certas. Aqui a nota volta a medir COMPORTAMENTO.
+
+    Três guardas, e todas caem no extrativo em vez de derrubar o tune: LM Studio
+    fora do ar (sonda de zero token, a mesma do rewriter), caso que estoura
+    `RUN_TIMEOUT_S`, e chamada que volta sem texto. O tune noturno nunca trava —
+    no pior caso ele mede o que media ontem.
+
+    O JUIZ não muda: quem pontua a resposta continua sendo a régua determinística
+    do `score.py`, sem LLM em lugar nenhum do veredito.
+    """
+    backend, m = _rewrite_target(model)
+    if backend == TUNE_BACKEND:
+        return _run_case(text, case, model=model, max_usd=max_usd)
+    try:
+        return _call(
+            f"{case_prompt(text, case)}\n\n{RUN_ORDER}",
+            model=m,
+            max_usd=max_usd,
+            purpose="run",
+            backend=backend,
+            # Leitura só: o caso é responder, não mexer em arquivo — e turno
+            # gasto em `write_file` é turno que não vira resposta.
+            tools=("read_file",),
+            max_turns=RUN_MAX_TURNS,
+            timeout_s=RUN_TIMEOUT_S,
+            chat_ok=True,
+        )
+    except Exception:
+        return _run_case(text, case, model=model, max_usd=max_usd)
 
 
 def _call_runner(prompt: str, *, model: str | None, max_usd: float) -> str:
@@ -418,8 +514,47 @@ def _call_rewriter(prompt: str, *, model: str | None, max_usd: float) -> str:
         return _call(prompt, model=model, max_usd=max_usd, purpose="rewrite")
 
 
+def _restore_frontmatter(original: str, cand: str) -> tuple[str, bool]:
+    """Reanexa ao candidato o frontmatter do incumbente, quando ele veio sem.
+
+    O 9B local devolve o corpo da skill e come o `---...---` do topo com
+    frequência; sem isto a versão morre em "skill ilegível" e a rodada inteira
+    vira lixo por causa de um cabeçalho que já existe no disco. Cópia literal, e
+    nunca uma segunda chamada de modelo: consertar formato com LLM é convidar o
+    modelo a mudar o conteúdo enquanto conserta.
+
+    Só dispara quando o ORIGINAL tem frontmatter e o candidato não tem nenhum —
+    workflow em TOML nunca cai aqui, e candidato que trouxe o dele volta
+    intocado. Se mesmo reanexado o texto não validar, o descarte segue normal.
+
+    A terceira guarda é o cabeçalho aparecer no MEIO do candidato: é a assinatura
+    de quem ecoou o prompt (o mock devolve exatamente isso) ou embrulhou o
+    artefato em cerca de código. Colar um segundo cabeçalho ali transformaria
+    lixo reconhecível em texto que passa no validate — e o descarte por
+    ilegibilidade é justamente o que segura essa porta.
+    """
+    head = _frontmatter(original)
+    if not head or _frontmatter(cand) or head in cand:
+        return cand, False
+    return f"{head}\n\n{cand.lstrip()}", True
+
+
+def _frontmatter(text: str) -> str:
+    """O bloco `---...---` do topo, delimitadores inclusos; "" se não houver.
+
+    `lstrip` antes de olhar porque a pergunta aqui é "esse texto TEM cabeçalho?",
+    e não "esse texto passa no parser?" — candidato com linha em branco na frente
+    tem o cabeçalho dele, reanexar outro só criaria um segundo.
+    """
+    lines = text.lstrip().splitlines()
+    if not lines or lines[0] != "---" or "---" not in lines[1:]:
+        return ""
+    return "\n".join(lines[: lines[1:].index("---") + 2])
+
+
 def _rewrite_target(model: str | None) -> tuple[str, str | None]:
-    """Qual backend (e com qual modelo) vai reescrever. Nunca levanta.
+    """Qual backend (e com qual modelo) vai rodar o modelo de verdade — reescrita
+    ou runner real, é a mesma pergunta e a mesma guarda. Nunca levanta.
 
     A sonda é o preflight do deepagents — `GET /v1/models`, zero token —, então
     perguntar "dá para usar o modelo de verdade?" é de graça. Import lá dentro
@@ -449,6 +584,7 @@ def _call(
     max_turns: int = 1,
     timeout_s: float = TUNE_TIMEOUT_S,
     out_file: str | None = None,
+    chat_ok: bool = False,
 ) -> str:
     """O padrão do `add._call_author`: workspace efêmero, teto de custo, texto
     ou erro — nunca string vazia passando por resposta."""
@@ -483,6 +619,10 @@ def _call(
             _out_file_text(ws / "out", out_file)
             or _result_text(trace)
             or _workspace_text(ws / "out", result.files_changed)
+            # Último recurso, e SÓ para quem pediu: a reescrita não aceita a fala
+            # do chat (ela volta cortada em 4000 chars e artefato cortado passaria
+            # por artefato inteiro); a resposta de um caso É a fala do chat.
+            or (_last_ai_text(trace) if chat_ok else "")
         )
         if not text:
             raise TuneError(f"backend {backend!r} não devolveu texto de {purpose}")
@@ -516,6 +656,32 @@ def _result_text(trace: Path) -> str:
         if isinstance(obj, dict) and isinstance(obj.get("result"), str):
             return obj["result"]
     return ""
+
+
+def _last_ai_text(trace: Path) -> str:
+    """A última fala do modelo no trace do deepagents.
+
+    Existe porque aquele trace NÃO tem chave `result` (só `type`/`content` por
+    mensagem) e a resposta de um caso não vem por arquivo: sem isto, todo caso do
+    runner real cairia no extrativo por "backend não devolveu texto". O corte em
+    4000 chars é do próprio backend e não muda veredito — a régua compara
+    substring, e resposta de caso não chega perto disso.
+    """
+    try:
+        lines = trace.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    out = ""
+    for line in lines:
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and obj.get("type") == "ai":
+            content = obj.get("content")
+            if isinstance(content, str) and content.strip():
+                out = content.strip()
+    return out
 
 
 def _workspace_text(ws: Path, files_changed: Sequence[str]) -> str:
@@ -675,7 +841,9 @@ def _inner_proposal(artifact: str, win: TuneVersion, outcome: TuneOutcome):
     )
 
 
-def _persist(artifact: str, chain: Sequence[TuneVersion], md: str) -> Path:
+def _persist(
+    artifact: str, chain: Sequence[TuneVersion], md: str, runner: str = DEFAULT_RUNNER
+) -> Path:
     """Cadeia + relatório em `data/`. FORA do bundle, sempre: um arquivo novo lá
     dentro é `eval:unlisted-file` e derrubaria o próprio exame."""
     d = chain_dir(artifact)
@@ -696,12 +864,16 @@ def _persist(artifact: str, chain: Sequence[TuneVersion], md: str) -> Path:
             # Por linha e não no topo: o arquivo é uma LISTA (o replay lê assim),
             # e cada versão foi medida sob a régua que valia quando ela rodou.
             "ruler_version": RULER_VERSION,
+            # Mesmo argumento da régua: nota sem o runner que a produziu não é
+            # comparável com a de amanhã, e a diferença entre extrativo e real é
+            # maior que qualquer mudança de scorer.
+            "runner": runner,
         }
         for v in chain
     ]
     payload = json.dumps(rows, indent=2, ensure_ascii=False) + "\n"
     (d / CHAIN_FILE).write_text(payload, encoding="utf-8")
-    (d / EVALUATION_FILE).write_text(_stamp_ruler(md), encoding="utf-8")
+    (d / EVALUATION_FILE).write_text(_stamp_ruler(md, runner), encoding="utf-8")
     return d
 
 
@@ -733,17 +905,21 @@ def _persist_trials(d: Path, v: TuneVersion) -> None:
     (d / f"v{v.version}{TRIALS_SUFFIX}").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _stamp_ruler(md: str) -> str:
-    """Carimba a versão da régua no cabeçalho do relatório.
+def _stamp_ruler(md: str, runner: str = DEFAULT_RUNNER) -> str:
+    """Carimba a versão da régua E o runner no cabeçalho do relatório.
 
     No relatório e não só no chain.json porque a manchete ("nota 0.301") é o que
-    alguém cola em outro lugar, e nota sem a régua que a produziu não é
-    comparável com a de amanhã.
+    alguém cola em outro lugar, e nota sem a régua e o runner que a produziram
+    não é comparável com a de amanhã.
     """
     lines = md.splitlines()
     if not lines:
         return md
-    head = [lines[0], "", f"Régua determinística: `ruler_version={RULER_VERSION}`."]
+    head = [
+        lines[0],
+        "",
+        f"Régua determinística: `ruler_version={RULER_VERSION}`. Runner: `{runner}`.",
+    ]
     return "\n".join([*head, *lines[1:]]) + "\n"
 
 
@@ -784,6 +960,12 @@ def replay_chain(artifact: str, *, trials: int | None = None) -> ReplayOutcome:
     `non-monotonic` (a sequência de retidas COLAPSA sob a régua atual). Bundle
     adulterado aborta antes de medir: re-pontuar contra exame violado não prova
     nada.
+
+    Re-mede SEMPRE no runner extrativo (o default do `tunable_for`): replay é
+    pergunta de reprodutibilidade, e reproduzir com modelo por caso mediria a
+    variância do modelo, não deriva de régua. Cadeia gravada com `runner=real`
+    (o campo está no `chain.json`) acusa `score-drift` aqui por construção — é
+    esperado, e não é a régua tendo mudado.
     """
     violations = verify_frozen(artifact)
     if violations:

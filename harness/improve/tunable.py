@@ -69,15 +69,20 @@ class SpecNode:
 class SkillTunable:
     """Skill: texto vira comportamento só através de um modelo.
 
-    `model`/`max_usd` moram no adapter (e não na assinatura do `produce`)
-    porque o loop não decide política de custo por caso — decide uma vez, no
-    `run_tune`, e o adapter carrega.
+    `model`/`max_usd`/`runner` moram no adapter (e não na assinatura do
+    `produce`) porque o loop não decide política de custo nem de runner por caso
+    — decide uma vez, no `run_tune`, e o adapter carrega. É isso que garante que
+    todas as versões da cadeia sejam medidas do mesmo jeito.
     """
 
     artifact: str
     model: str | None = None
     max_usd: float = 0.25
     root: Path | str | None = None
+    # String e não bool para o `chain.json` gravar o NOME do que rodou; o valor
+    # vem do `tune.RUNNERS`, e qualquer coisa que não seja `real` é extrativo —
+    # default seguro é o que não depende de servidor de pé.
+    runner: str = "extractive"
 
     def read(self) -> str:
         return (root_dir(self.root) / self.artifact).read_text(encoding="utf-8")
@@ -97,7 +102,11 @@ class SkillTunable:
         # call-time, nunca um `from ... import _run_case` no topo.
         from harness.improve import tune
 
-        return tune._run_case(text, case, model=self.model, max_usd=self.max_usd)
+        # Dois seams e não um com flag: o extrativo é o caminho que os testes (e
+        # o replay) trocam por stub há tempos, e enfiar o modo dentro dele mudaria
+        # a assinatura que meio repo já monkeypatcha.
+        run = tune._run_case_real if self.runner == tune.RUNNER_REAL else tune._run_case
+        return run(text, case, model=self.model, max_usd=self.max_usd)
 
     def write(self, text: str, version: int) -> Path:
         """Grava a skill no formato canônico. `version` fica na cadeia, não no
@@ -148,6 +157,10 @@ class WorkflowTunable:
     model: str | None = None
     max_usd: float = 0.25
     root: Path | str | None = None
+    # Aceito e IGNORADO: `produce` aqui é render puro da spec, então "runner
+    # real" não tem o que significar. O campo existe só para o `tunable_for`
+    # passar o mesmo kwargs para os dois adapters.
+    runner: str = "extractive"
 
     def read(self) -> str:
         return (root_dir(self.root) / self.artifact).read_text(encoding="utf-8")
@@ -211,6 +224,7 @@ def tunable_for(
     model: str | None = None,
     max_usd: float = 0.25,
     root: Path | str | None = None,
+    runner: str = "extractive",
 ) -> Tunable:
     """O adapter pelo PREFIXO do path — mesma regra do `bundle_dir`.
 
@@ -218,7 +232,7 @@ def tunable_for(
     `.md` em `config/workflows/` não seria uma skill, seria um erro.
     """
     key = PurePosixPath(Path(artifact).as_posix()).as_posix()
-    kw = {"model": model, "max_usd": max_usd, "root": root}
+    kw = {"model": model, "max_usd": max_usd, "root": root, "runner": runner}
     if key.startswith(WORKFLOWS_PREFIX):
         return WorkflowTunable(artifact=key, **kw)
     if key.startswith(SKILLS_PREFIX):
@@ -229,8 +243,14 @@ def tunable_for(
     )
 
 
-def _case_prompt(text: str, case: EvalCase) -> str:
-    """O prompt de UM caso: a skill como orientação, o caso como pedido."""
+def case_prompt(text: str, case: EvalCase) -> str:
+    """O prompt de UM caso: a skill como orientação, o caso como pedido.
+
+    Público (e não `_case_prompt`) desde que o runner real existe: é o `tune`
+    quem chama o modelo, e o formato do pedido é do artefato — deixá-lo aqui
+    mantém "como uma skill vira comportamento" no mesmo lugar que o resto do
+    conhecimento sobre skills.
+    """
     return (
         "Você responde seguindo ESTRITAMENTE a orientação abaixo.\n\n"
         f"--- orientação ---\n{text.strip()}\n--- fim ---\n\n"

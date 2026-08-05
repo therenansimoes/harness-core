@@ -158,7 +158,9 @@ def test_tune_cadeia_monotonica(env):
 
 def test_tune_versao_invalida_nao_e_scorada(env):
     _skill_tree(env)
-    env.rewriter.payload = ["isto não tem frontmatter nenhum\n"]
+    # Frontmatter presente e TOML torto: ilegibilidade que o loop NÃO sabe
+    # consertar sozinho (corpo sem cabeçalho ele reanexa — outro teste).
+    env.rewriter.payload = ["---\nname = sem aspas\n---\n\n# corpo\n"]
 
     # rounds=1 para o mínimo: com o default (2) o descarte NÃO encerra o loop e
     # haveria uma segunda tentativa.
@@ -347,6 +349,144 @@ def test_tune_sem_lm_studio_roda_a_cadeia_de_hoje(env, monkeypatch):
     assert len(out.chain) == 3
     assert [v.valid for v in out.chain] == [True, False, False]
     assert out.chain[1].text.startswith("Reescreva o artefato")
+
+
+# --------------------------------------------------------------------------- frontmatter
+
+
+def test_frontmatter_reanexado_salva_a_rodada(env):
+    """O modo de falha nº 1 do 9B local: volta o corpo, come o cabeçalho.
+
+    Antes, isso era `skill ilegível` e uma rodada inteira jogada fora. Agora o
+    cabeçalho do incumbente é reanexado por cópia e a candidata é MEDIDA — que é
+    o único jeito de descobrir se ela era boa.
+    """
+    _skill_tree(env)
+    env.rewriter.payload = ["# guia\n- passo alfa\n- passo beta\n"]
+
+    out = tune.run_tune(SKILL, rounds=1, trials=1)
+
+    v2 = out.chain[1]
+    assert v2.valid is True
+    assert v2.text.startswith('---\nname = "x"')
+    assert "- passo beta" in v2.text
+    assert tune.FRONTMATTER_NOTE.strip() in v2.reason
+    # Medida de verdade, e não só validada: a normalização devolve a rodada ao
+    # loop, não só ao validate.
+    assert v2.agg.n == 1
+    assert out.winner == 2
+
+
+def test_frontmatter_nao_e_reanexado_em_eco_do_prompt(env):
+    """Candidato que já carrega o cabeçalho (eco do mock, cerca de código) não
+    ganha um segundo: dois cabeçalhos passariam no validate e viraria promoção
+    de lixo."""
+    assert tune._restore_frontmatter(V1, "eco:\n" + V1) == ("eco:\n" + V1, False)
+    assert tune._restore_frontmatter(V1, V2) == (V2, False)
+    # Original sem cabeçalho (workflow em TOML) nunca dispara.
+    assert tune._restore_frontmatter("[nodes]\n", "corpo\n") == ("corpo\n", False)
+
+    texto, fixed = tune._restore_frontmatter(V1, "# guia\n- passo gama\n")
+    assert fixed is True
+    assert texto.endswith("# guia\n- passo gama\n")
+
+
+# --------------------------------------------------------------------------- runner real
+
+
+class _FakeChat:
+    """Backend que responde no CHAT, que é como a resposta de um caso volta:
+    trace com mensagens `ai`, sem `result` e sem arquivo."""
+
+    def __init__(self, resposta: str = "resposta com alfa e beta", fail: bool = False) -> None:
+        self.resposta, self.fail, self.reqs = resposta, fail, []
+
+    def preflight(self):
+        return SimpleNamespace(ok=True, reason="fake")
+
+    def execute(self, req):
+        self.reqs.append(req)
+        if self.fail:
+            return _exec_result(req, ok=False, exit_reason="timeout")
+        req.trace_path.parent.mkdir(parents=True, exist_ok=True)
+        req.trace_path.write_text(
+            json.dumps({"type": "human", "content": req.prompt}, ensure_ascii=False)
+            + "\n"
+            + json.dumps({"type": "ai", "content": self.resposta}, ensure_ascii=False)
+            + "\n",
+            encoding="utf-8",
+        )
+        return _exec_result(req, ok=True, exit_reason="done")
+
+
+def test_runner_real_julga_a_resposta_do_modelo(monkeypatch):
+    fake = _FakeChat()
+    _route(monkeypatch, fake)
+    case = EvalCase(id="s-1", kind="code_fix", prompt="como corrigir o import")
+
+    out = tune._run_case_real(V1, case, model=None, max_usd=1.0)
+
+    assert out == "resposta com alfa e beta"
+    (req,) = fake.reqs
+    # O artefato entra como ORIENTAÇÃO e o caso como pedido — a saída julgada
+    # deixa de ser o próprio artefato, que é o ponto do runner real.
+    assert "--- orientação ---" in req.prompt
+    assert "como corrigir o import" in req.prompt
+    assert req.timeout_s == tune.RUN_TIMEOUT_S
+    # >1 porque `run_limit=1` faz o middleware ocupar a última fala com o aviso
+    # de teto e a resposta do caso nunca chega.
+    assert req.max_turns == tune.RUN_MAX_TURNS > 1
+
+
+def test_runner_real_com_timeout_cai_no_extrativo(monkeypatch):
+    fake = _FakeChat(fail=True)
+    _route(monkeypatch, fake)
+    case = EvalCase(id="s-1", kind="code_fix", prompt="p")
+
+    # Fallback e não exceção: tune noturno não trava por servidor lento.
+    assert tune._run_case_real(V1, case, model=None, max_usd=1.0) == V1
+    assert len(fake.reqs) == 1
+
+
+def test_runner_real_sem_lm_studio_cai_no_extrativo(monkeypatch):
+    _no_lmstudio(monkeypatch)
+    case = EvalCase(id="s-1", kind="code_fix", prompt="p")
+
+    # Nem chega a chamar backend: a sonda de zero token já respondeu.
+    assert tune._run_case_real(V1, case, model=None, max_usd=1.0) == V1
+
+
+def test_runner_real_e_carimbado_na_cadeia(env, monkeypatch):
+    _skill_tree(env)
+    chamadas = []
+
+    def real(text, case, *, model=None, max_usd=0.0):
+        chamadas.append(case.id)
+        return "resposta do modelo com alfa e beta"
+
+    monkeypatch.setattr(tune, "_run_case_real", real)
+
+    out = tune.run_tune(SKILL, rounds=0, trials=1, runner=tune.RUNNER_REAL)
+
+    # O extrativo (o stub do fixture) não foi chamado NENHUMA vez: runner é
+    # escolhido uma vez e vale para baseline e cadeia inteira.
+    assert env.runner.calls == []
+    assert chamadas == ["s-1", "s-1"]
+    # A resposta do modelo é que foi julgada, e ela contém as duas âncoras.
+    assert out.winning.agg.overall > 0
+    rows = json.loads((tune.chain_dir(SKILL) / "chain.json").read_text(encoding="utf-8"))
+    assert [r["runner"] for r in rows] == [tune.RUNNER_REAL]
+    md = (tune.chain_dir(SKILL) / "EVALUATION.md").read_text(encoding="utf-8")
+    assert f"Runner: `{tune.RUNNER_REAL}`" in md.splitlines()[2]
+
+
+def test_runner_desconhecido_para_antes_de_medir(env):
+    _skill_tree(env)
+
+    with pytest.raises(ValueError, match="runner desconhecido"):
+        tune.run_tune(SKILL, rounds=0, trials=1, runner="chute")
+
+    assert env.runner.calls == []
 
 
 # --------------------------------------------------------------------------- rounds/feedback/holdout
