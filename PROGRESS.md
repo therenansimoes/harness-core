@@ -18,12 +18,11 @@ convenção `dist/` que causou a falha do dia.
 
 ## Fila do Renan (decisões de 1 linha, quando quiser)
 
-1. Fallback no caminho do grafo (`harness do`/fila) exige tocar genoma
-   (`run_graph._execute`) — hoje só o `harness run` avulso degrada. Autoriza?
-2. `replan --route retry` não devolve unidade de `stuck/` pra fila (fizemos na
-   mão). Consertar?
-3. As 5 propostas mineradas do tune seguem esperando selo (item antigo, sem
+1. As 5 propostas mineradas do tune seguem esperando selo (item antigo, sem
    pressa; frente meta segue congelada).
+
+~~Fallback no grafo~~ e ~~fix do replan~~: autorizados verbalmente e FEITOS
+(commits `e6b95a8` e `6133efe`, 2026-08-05).
 
 ## Fila do harness (pequena, sem decisão nova)
 
