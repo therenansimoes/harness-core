@@ -24,6 +24,10 @@ immutable = [
     "uv.lock",
     # exame selado: se o loop pode reescrever a prova, a nota não vale nada.
     "benchmarks/sealed/**",
+    # quem diz DE ONDE vêm skills de fora não se muda: um registry adicionado
+    # pelo loop é canal de contrabando de instrução; aprovar skill já é humano,
+    # a lista de fontes também é.
+    "config/skills_market.toml",
 ]
 
 mutable = [
