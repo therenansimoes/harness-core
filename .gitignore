@@ -36,3 +36,9 @@ projects/*/notes.tsv
 .claude/worktrees/
 .playwright-mcp/
 trace.jsonl
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
