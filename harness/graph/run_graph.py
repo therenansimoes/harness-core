@@ -42,6 +42,8 @@ from pathlib import Path
 from typing import Any
 
 from harness.backends import procs, registry
+from harness.backends.offgrid import LEDGER_NODE as OFFGRID_NODE
+from harness.backends.offgrid import resolve_backend
 from harness.genome import tamper
 from harness.genome.genome import DEFAULT_PATH as GENOME_PATH
 from harness.genome.genome import Genome
@@ -979,18 +981,71 @@ def _prompt(state: RunState) -> str:
 
 
 def _execute(state: RunState, config=None) -> dict:
-    """Chama o backend — uma vez por tentativa, custe o que custar o crash."""
+    """Chama o backend — uma vez por tentativa, custe o que custar o crash.
+
+    Quem executa sai do `offgrid.resolve_backend`: primário indisponível degrada
+    para o tier local e a `Selection` do fallback volta pro estado, porque é ela
+    que o `record` grava. A degradação viaja no nó `offgrid_fallback` do ledger,
+    keyed por tentativa — sem isso um resume gravaria o primário para um run que
+    rodou no local.
+    """
     run_id = state["run_id"]
     attempt = state.get("attempt", 0)
     db = _db(config)
     saved = store.get_node(run_id, "execute", db, attempt=attempt)
     if saved is not None:
-        return {
+        out: dict = {
             "exec": _exec_from_payload(saved),
             "events": [_event("execute", reused=True, attempt=attempt)],
         }
+        # Retomada de tentativa que degradou: sem devolver a seleção do fallback,
+        # o `record` gravaria o backend/tier do primário para um run que rodou no
+        # local — o par que o prior aprende nunca teria existido.
+        deg = store.get_node(run_id, OFFGRID_NODE, db, attempt=attempt)
+        if deg is not None:
+            out["selection"] = replace(
+                state["selection"],
+                backend=deg["backend"],
+                model=deg["model"] or "",
+                tier=deg["tier"],
+            )
+        return out
 
     sel = state["selection"]
+    # Preflight + fallback off-grid: primário indisponível degrada para o tier
+    # local em vez de parar o grafo (gate em `[fallback]` do models.toml).
+    resolved = resolve_backend(sel.backend, sel.model or None)
+    degraded = bool(resolved.degraded)
+    if degraded:
+        # O que executa é o fallback, e o tier acompanha o backend: gravar (tier
+        # do primário, backend local) sujaria o prior, que é keyed nos dois.
+        sel = replace(
+            sel,
+            backend=resolved.name,
+            model=resolved.model or "",
+            tier=resolved.tier,
+        )
+        # Fail-open igual ao `record_node` do `_route`: registro perdido cega o
+        # post-mortem, não derruba um execute que vai acontecer de qualquer jeito.
+        try:
+            store.record_node(
+                run_id,
+                OFFGRID_NODE,
+                dict(resolved.degraded)
+                | {
+                    "backend": sel.backend,
+                    "model": sel.model,
+                    "tier": sel.tier,
+                    "attempt": attempt,
+                },
+                db,
+                attempt=attempt,
+            )
+        except Exception:
+            pass
+    # `resolved.backend is None` (preflight ruim sem fallback) segue o caminho de
+    # hoje de propósito: quem julga backend quebrado é o exit_reason do execute,
+    # não o grafo — preflight não bloqueia a topologia.
     ws = Path(state["workspace"])
     result = registry.get_backend(sel.backend).execute(
         ExecRequest(
@@ -1013,6 +1068,9 @@ def _execute(state: RunState, config=None) -> dict:
         result.trace_path, run_id, attempt, _cfg(config, CFG_DATA_DIR, "data")
     )
     store.record_node(run_id, "execute", payload, db, attempt=attempt)
+    # Sem degradação o retorno é o de sempre, byte a byte: a seleção não mudou e
+    # o evento não ganha campo novo.
+    extra = {"selection": sel} if degraded else {}
     return {
         "exec": result,
         "events": [
@@ -1021,8 +1079,10 @@ def _execute(state: RunState, config=None) -> dict:
                 ok=result.ok,
                 exit_reason=result.exit_reason,
                 attempt=attempt,
+                **({"degraded": True} if degraded else {}),
             )
         ],
+        **extra,
     }
 
 
