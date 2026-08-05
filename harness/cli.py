@@ -1523,15 +1523,38 @@ def cmd_seal(args: argparse.Namespace) -> int:
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
-    """Exame congelado de um artefato: congela, confere e relata.
+    """Exame congelado de um artefato: congela, confere, relata, minera e sela.
 
     `verify` é o gate — violação imprime cada linha e sai != 0, porque medir
-    contra um exame adulterado é pior que não medir.
+    contra um exame adulterado é pior que não medir. `seal-case` é o oposto do
+    resto: o único subcomando que ESCREVE no bundle, e por isso o único que
+    exige `--yes` (mesmo guard do `harness seal`).
     """
     from harness.evals import bundle_dir, freeze, verify_frozen
+    from harness.evals.mining import mine, seal_case, write_pending
     from harness.evals.report import write_evaluation_md
 
     try:
+        if args.action == "mine":
+            propostas = mine(args.artifact, limit=args.limit, kind=args.kind or None)
+            for p in propostas:
+                print(f"{p.case_id}\t{p.source}\t{p.rationale}")
+            print(write_pending(args.artifact, propostas))
+            return 0
+        if args.action == "seal-case":
+            if not args.extra:
+                print("eval seal-case: falta o <case-id>", file=sys.stderr)
+                return 2
+            if not args.yes:
+                print(
+                    "eval seal-case: recusado — selar é ato humano: use --yes. "
+                    "Revise a proposta antes de confirmar; nada foi movido.",
+                    file=sys.stderr,
+                )
+                return 2
+            m = seal_case(args.artifact, args.extra)
+            print(f"sealed {args.extra} -> manifest v{m.version}")
+            return 0
         if args.action == "freeze":
             m = freeze(args.artifact, note=args.note)
             print(f"congelado: {bundle_dir(args.artifact)} v{m.version} {m.bundle_sha256[:12]}")
@@ -1549,6 +1572,31 @@ def cmd_eval(args: argparse.Namespace) -> int:
     except (OSError, ValueError) as exc:
         print(f"eval {args.action} falhou: {exc}", file=sys.stderr)
         return 1
+
+
+def cmd_tune(args: argparse.Namespace) -> int:
+    """Roda o tune loop offline contra o eval congelado e grava a evidência.
+
+    Não aplica a versão vencedora no artefato — aplicação é ato do ciclo
+    improve, com gate; aqui é bancada de medição.
+    """
+    from harness.improve.tune import TuneAborted, TuneError, run_tune
+
+    try:
+        outcome = run_tune(args.artifact, rounds=args.rounds, model=args.model)
+    except TuneAborted as exc:
+        print(f"tune abortado: {exc}", file=sys.stderr)
+        return 1
+    except TuneError as exc:
+        print(f"tune falhou: {exc}", file=sys.stderr)
+        return 1
+    except (OSError, ValueError) as exc:
+        print(f"tune falhou: {exc}", file=sys.stderr)
+        return 1
+    for v in outcome.chain:
+        print(f"v{v.version} overall={v.agg.overall:.3f} {v.reason}")
+    print(f"vencedor: v{outcome.winner}")
+    return 0
 
 
 def cmd_frontier(args: argparse.Namespace) -> int:
@@ -1751,7 +1799,7 @@ def cmd_report(args: argparse.Namespace) -> int:
 EPILOG = """\
 BÁSICO      quickstart · do · status · report
 AVANÇADO    run · queue · add · decompose · replan · ab · improve · evolve ·
-            frontier · seal · eval · replay · whatif · lineage · skills ·
+            frontier · seal · eval · tune · replay · whatif · lineage · skills ·
             actions · procs · cache-gc · webhook · bench · ui-verify ·
             vision-judge · init · export · import · doctor · backends
 
@@ -2373,15 +2421,34 @@ def build_parser() -> argparse.ArgumentParser:
     )
     seal.set_defaults(func=cmd_seal)
 
-    ev = sub.add_parser("eval", help="exame congelado de um artefato: freeze, verify e report")
+    ev = sub.add_parser("eval", help="exame congelado de um artefato: freeze, verify, report, mine")
     ev.add_argument(
         "action",
-        choices=("freeze", "verify", "report"),
-        help="freeze congela o bundle, verify prova que ele não mudou, report escreve EVALUATION.md",
+        choices=("freeze", "verify", "report", "mine", "seal-case"),
+        help=(
+            "freeze congela o bundle, verify prova que ele não mudou, report escreve "
+            "EVALUATION.md, mine propõe casos do ledger, seal-case sela um caso "
+            "proposto (--yes)"
+        ),
     )
     ev.add_argument("artifact", help="o artefato avaliado, ex.: skills/python-fixes.md")
+    # Positional extra em vez de um subparser por ação: `freeze/verify/report`
+    # já são posicionais de uma palavra, e o `seal-case` é o único que precisa de
+    # um segundo argumento. `nargs="?"` deixa os três antigos intactos.
+    ev.add_argument("extra", nargs="?", default=None, help="<case-id>, só no seal-case")
     ev.add_argument("--note", default="", help="nota da versão congelada (só no freeze)")
+    ev.add_argument("--limit", type=int, default=20, help="teto de propostas do mine")
+    ev.add_argument("--kind", default="", help="filtra a mineração por kind")
+    ev.add_argument(
+        "--yes", action="store_true", help="confirmação humana do seal-case; sem isto ele recusa"
+    )
     ev.set_defaults(func=cmd_eval)
+
+    tune = sub.add_parser("tune", help="tune loop offline: score → rewrite → gate monotônico")
+    tune.add_argument("artifact", help="artefato tunável, ex.: skills/python-fixes.md")
+    tune.add_argument("--rounds", type=int, default=2, help="rodadas de rewrite (default 2)")
+    tune.add_argument("--model", default="openai:qwen/qwen3.5-9b", help="modelo do rewriter/runner")
+    tune.set_defaults(func=cmd_tune)
 
     frontier = sub.add_parser(
         "frontier", help="lista os exames da quarentena em que o harness atual falha"
