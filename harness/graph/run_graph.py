@@ -46,6 +46,7 @@ from harness.genome import tamper
 from harness.genome.genome import DEFAULT_PATH as GENOME_PATH
 from harness.genome.genome import Genome
 from harness.genome.genome import load as load_genome
+from harness.governor import reorg
 from harness.governor.governor import (
     CUTOFF,
     check_cost,
@@ -511,6 +512,15 @@ def _route(state: RunState, config=None) -> dict:
         selection = replace(selection, max_turns=turns)
     deadline = _gov_deadline(state["run_id"], _db(config), gov)
 
+    # Reorg: o governor aperta a topologia dada, este pergunta se a topologia
+    # está certa. Só dois efeitos aqui — delta de tier e freio de escalada; as
+    # outras duas regras são decisões gravadas no gate. Try largo de propósito:
+    # reorg é opinião sobre o desenho do run, nunca motivo para derrubá-lo.
+    try:
+        selection = _reorg_route(state, selection, attempt, config, gov)
+    except Exception:
+        pass
+
     adapter = _adapter(state, selection, attempt)
     selection = replace(selection, adapter=adapter)
 
@@ -553,6 +563,123 @@ def _adapter(state: RunState, selection: Selection, attempt: int) -> str | None:
         return state.get("adapter")
     escolhido = select_adapter(state["unit"], selection.kind)
     return escolhido.id if escolhido else None
+
+
+def _reorg_spent(run_id: str, db: Path, attempt: int) -> float:
+    """Gasto acumulado das tentativas deste run, em dólar. Mesma fonte do
+    `_gov_cost` (payload de cada `execute`); custo torto conta zero."""
+    spent = 0.0
+    for a in range(max(0, int(attempt)) + 1):
+        ev = store.get_node(run_id, "execute", db, attempt=a) or {}
+        try:
+            spent += float(ev.get("cost_usd") or 0.0)
+        except (TypeError, ValueError):
+            continue
+    return spent
+
+
+def _reorg_signals(state: RunState, selection: Selection | None, attempt: int, config):
+    """O sinal das regras de reorg, montado igual no route e no gate.
+
+    `backend=None` de propósito: a repetição que interessa é a da unidade e do
+    kind. Filtrar pelo backend corrente faria o sinal se apagar sozinho — o bump
+    de tier troca o backend, e a evidência que justificou o bump sumiria da
+    janela na passagem seguinte, revertendo a decisão que acabou de ser tomada.
+
+    `task_value_usd=0.0` porque NÃO EXISTE fonte de valor de tarefa no harness
+    ainda; com valor desconhecido a regra de custo não dispara (ver `decide`).
+    """
+    unit = state["unit"]
+    db = _db(config)
+    return reorg.signals_from_ledger(
+        store,
+        project=unit.project,
+        kind=(selection.kind if selection is not None else unit.kind),
+        backend=None,
+        prompt_chars=len(unit.prompt or ""),
+        attempt=attempt,
+        spent_usd=_reorg_spent(state["run_id"], db, attempt),
+        task_value_usd=0.0,
+        path=db,
+    )
+
+
+def _reorg_route(state: RunState, selection: Selection, attempt: int, config, gov) -> Selection:
+    """A Selection do router depois das regras de reorg que TÊM efeito.
+
+    O delta cai sobre o `cost_rank` da seleção já pronta, não dentro do router:
+    reorg é uma segunda opinião sobre a escolha, e misturar as duas esconderia
+    de quem lê o trace qual das duas mandou. `escalate_blocked` desfaz a
+    escalada por tentativa (a única coisa que sobe tier sem evidência nova).
+    `tier_by_rank` clampa nas pontas, então o delta nunca sai do models.toml.
+    """
+    decisions = reorg.decide(_reorg_signals(state, selection, attempt, config), reorg.load_reorg())
+    aplicadas = [d for d in decisions if d.effect == reorg.APPLIED]
+    delta = sum(d.tier_delta for d in aplicadas)
+    blocked = any(d.escalate_blocked for d in aplicadas)
+    if not delta and not blocked:
+        return selection
+
+    cfg = router.load_config()
+    rank = router.tier_by_name(cfg, selection.tier).cost_rank
+    if blocked:
+        rank -= max(0, int(attempt))
+    tier = router.tier_by_rank(cfg, rank + delta)
+    if tier.name == selection.tier:
+        return selection
+    reason = f"reorg:{'+'.join(d.rule_id for d in aplicadas)}:{selection.tier}->{tier.name}"
+    return replace(
+        selection,
+        backend=tier.backend,
+        model=tier.model,
+        tier=tier.name,
+        # O taper do governor vale para o teto do tier NOVO: o número velho era
+        # do tier que não vai executar.
+        max_turns=taper_turns(tier.max_turns, attempt, gov),
+        reasons=(*selection.reasons, reason),
+    )
+
+
+def _reorg_record(state: RunState, attempt: int, config) -> None:
+    """Grava no ledger as decisões de topologia desta passagem, e as reversões.
+
+    Uma LINHA POR DECISÃO, inclusive as `recorded` (reviewer/fleet), que o
+    runtime não aplica: decisão anotada é o que deixa o efeito nascer depois com
+    série histórica em vez de estreia às cegas. O `attempt` da linha é número de
+    série — `node_events` é único em `(run_id, node, attempt)` e cabe mais de
+    uma decisão por tentativa, então a tentativa de verdade viaja no payload.
+    """
+    db = _db(config)
+    run_id = state["run_id"]
+    decisions = reorg.decide(
+        _reorg_signals(state, state.get("selection"), attempt, config), reorg.load_reorg()
+    )
+    prev = reorg.active_from_ledger(store, run_id, db)
+    novas, revertidas = reorg.diff_active(prev, decisions)
+    slot = len(prev)
+    for d in novas:
+        payload = {
+            "rule_id": d.rule_id,
+            "action": d.action,
+            "reason": d.reason,
+            "signal": d.signal,
+            "effect": d.effect,
+            "state": reorg.STATE_ACTIVE,
+            "attempt": attempt,
+            "run_id": run_id,
+        }
+        store.record_node(run_id, reorg.NODE, payload, db, attempt=slot)
+        slot += 1
+    for p in revertidas:
+        payload = {
+            "rule_id": p.get("rule_id"),
+            "state": reorg.STATE_REVERTED,
+            "cleared_signal": p.get("signal"),
+            "attempt": attempt,
+            "run_id": run_id,
+        }
+        store.record_node(run_id, reorg.NODE, payload, db, attempt=slot)
+        slot += 1
 
 
 def _provision(state: RunState, config=None) -> dict:
@@ -976,6 +1103,13 @@ def _gate(state: RunState, config=None) -> dict:
                 "stagnations": _stagnations(scores),
                 "escalate_reason": _delta_escalate_reason(),
             }
+    # Reorg: as decisões de topologia desta passagem viram linha no ledger,
+    # inclusive as que o runtime não aplica. Fora do caminho da decisão do gate
+    # de propósito — reorg registra, não vota no destino desta tentativa.
+    try:
+        _reorg_record(state, attempt, config)
+    except Exception:
+        pass
     decision = Decision(action, reason)  # tipo do estado, não o do ruler
     # O adiamento só vale se o retry sobreviveu aos tetos acima.
     defer_s = float(blk.get("defer_s", 0.0)) if action == "retry" else 0.0

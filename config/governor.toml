@@ -16,3 +16,15 @@ explore_frac_start = 0.5   # fração de exploração no início do ciclo
 explore_frac_end = 0.0     # perto do prazo só explota
 bench_after = 3            # propostas recentes sem KEEP -> ação vai pro banco
 bench_cycles = 2           # ciclos no banco antes de a ação voltar
+
+# Topologia do run, não modelo: quando o mesmo erro volta, o desenho é que está
+# errado. Só duas regras mexem no runtime (tier e freio de escalada); reviewer e
+# fleet são decisões GRAVADAS no ledger — ver harness/governor/reorg.py.
+[reorg]
+enabled = true          # false = nenhuma regra decide nada (nem grava)
+repeat_failures = 2     # mesma classe de falha N vezes -> sobe um tier
+area_ratio = 0.5        # fração dos runs numa área que pede revisor
+area_min_n = 4          # amostra mínima antes de a área acusar (ratio no vazio mente)
+cost_value_ratio = 1.0  # gasto > valor * ratio -> frota encolhe
+trivial_max_chars = 280 # prompt até este tamanho é candidato a trivial
+trivial_kinds = ["config", "content"]  # ...e só nestes kinds: trivial não é curto, é raso
