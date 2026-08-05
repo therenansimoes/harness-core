@@ -55,6 +55,15 @@ code = "t1"
 infra = "t1"
 refactor = "t2"
 
+# Fallback off-grid: primário indisponível (CLI ausente, sem auth, sem rede) não
+# bloqueia o run — degrada para o `tier` daqui e segue. É o único lugar que liga
+# isso; `offgrid = false` devolve o comportamento antigo (blocked). A degradação
+# nunca é silenciosa: uma linha no stderr e o nó `offgrid_fallback` no ledger,
+# senão o prior do router aprenderia com um run que não é do tier que ele acha.
+[fallback]
+offgrid = true
+tier = "t0"
+
 # Tabela de preço por modelo, em USD por 1M de tokens. Calibrável pelo loop
 # (arquivo mutável no genoma), a régua nunca depende dele.
 #
