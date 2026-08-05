@@ -2,6 +2,12 @@
 # A topologia (harness/graph/**) é imutável no genoma; este arquivo é a parte
 # mutável do comportamento. Ausente ou torto => defaults de run_graph.GraphPolicy.
 
+# Backend do checkpointer do grafo. "sqlite" persiste em <data_dir>/checkpoints.sqlite
+# e retoma entre processos; "memory" é efêmero (testes/execução descartável — kill -9
+# perde o thread). Valor desconhecido => erro na partida (fail-closed: aqui config
+# torta não degrada em silêncio, o resume depende deste backend).
+checkpointer = "sqlite"
+
 max_attempts = 2        # teto de tentativas por run (retry vira escalate ao bater)
 verify_timeout_s = 120.0
 # Espera do retry quando o agente declarou `external_wait` em declare_blocker.
