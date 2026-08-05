@@ -58,6 +58,36 @@ DEFAULT_MAX_USD = 0.25
 # a fatura; quem quiser cadeia longa passa `rounds`.
 DEFAULT_ROUNDS = 2
 
+# O rewriter é a única parte do loop que ganha modelo de verdade: propor texto
+# novo é o que o mock não sabe fazer (ele devolve o próprio prompt). O runner
+# fica onde está de propósito — juiz que muda entre versões não compara nada.
+REWRITE_BACKEND = "deepagents"
+REWRITE_MODEL = DEFAULT_MODEL
+# Reescrever artefato inteiro em modelo pequeno local é lento; o teto do runner
+# (600s) seria tempo demais para descobrir que o servidor travou.
+REWRITE_TIMEOUT_S = 180.0
+# O trace do deepagents corta conteúdo em 4000 chars e não tem chave `result`:
+# artefato reescrito volta por ARQUIVO ou não volta inteiro.
+REWRITE_FILE = "rewrite.out"
+# Escrever arquivo custa no MÍNIMO dois turnos (a tool call e o fecho depois do
+# resultado); com 1 o `ModelCallLimitMiddleware` corta no meio e todo run real
+# viraria fallback para o mock.
+REWRITE_MAX_TURNS = 4
+# Guarda dura de máquina, não de custo: 30B local trava o note inteiro. Modelo
+# grande pedido na linha de comando cai para o REWRITE_MODEL em silêncio.
+BANNED_LOCAL = ("30b", "32b", "27b")
+# Contradiz de propósito o "responda APENAS com o artefato" do `rewrite_prompt`:
+# o 9B local, deixado por conta dele, responde no chat e a resposta do chat volta
+# cortada. A ordem vem DEPOIS no prompt para ser a última coisa que ele lê.
+REWRITE_ORDER = (
+    "ATENÇÃO — isto muda a instrução acima: NÃO responda com o artefato no "
+    f"chat. Chame a tool `write_file` com `file_path` = `{REWRITE_FILE}` e o "
+    "artefato COMPLETO reescrito em `content` (sem cercas de código, sem "
+    "comentário em volta). Só depois responda uma linha dizendo que gravou. "
+    f"O que vai ser medido é o conteúdo de `{REWRITE_FILE}`; texto solto no "
+    "chat é descartado."
+)
+
 PROMOTED = "promoted"
 HELD = "held"
 
@@ -296,12 +326,63 @@ def _call_runner(prompt: str, *, model: str | None, max_usd: float) -> str:
 
 
 def _call_rewriter(prompt: str, *, model: str | None, max_usd: float) -> str:
-    """UMA chamada ao backend para reescrever o artefato. Seam de teste."""
-    return _call(prompt, model=model, max_usd=max_usd, purpose="rewrite")
+    """UMA chamada ao backend para reescrever o artefato. Seam de teste.
+
+    Tenta o modelo local; se o LM Studio não estiver de pé, ou se ele estiver e
+    a chamada falhar, cai no mock. Fallback importa mais aqui do que qualidade:
+    a cadeia é monotônica, então proposta ruim (ou a devolução crua do mock)
+    perde no gate e o vencedor continua sendo o mesmo de antes.
+    """
+    backend, m = _rewrite_target(model)
+    if backend == TUNE_BACKEND:
+        return _call(prompt, model=m, max_usd=max_usd, purpose="rewrite")
+    try:
+        return _call(
+            f"{prompt}\n\n{REWRITE_ORDER}",
+            model=m,
+            max_usd=max_usd,
+            purpose="rewrite",
+            backend=backend,
+            tools=("read_file", "write_file"),
+            max_turns=REWRITE_MAX_TURNS,
+            timeout_s=REWRITE_TIMEOUT_S,
+            out_file=REWRITE_FILE,
+        )
+    except Exception:
+        return _call(prompt, model=model, max_usd=max_usd, purpose="rewrite")
+
+
+def _rewrite_target(model: str | None) -> tuple[str, str | None]:
+    """Qual backend (e com qual modelo) vai reescrever. Nunca levanta.
+
+    A sonda é o preflight do deepagents — `GET /v1/models`, zero token —, então
+    perguntar "dá para usar o modelo de verdade?" é de graça. Import lá dentro
+    porque o backend é opcional: quem instalou só o core não paga por ele.
+    """
+    m = model if model and model.startswith("openai:") else REWRITE_MODEL
+    if any(big in m.lower() for big in BANNED_LOCAL):
+        m = REWRITE_MODEL
+    try:
+        from harness.backends.deepagents_backend import DeepagentsBackend
+
+        if DeepagentsBackend(model=m).preflight().ok:
+            return REWRITE_BACKEND, m
+    except Exception:
+        pass
+    return TUNE_BACKEND, model
 
 
 def _call(
-    prompt: str, *, model: str | None, max_usd: float, purpose: str, backend: str = TUNE_BACKEND
+    prompt: str,
+    *,
+    model: str | None,
+    max_usd: float,
+    purpose: str,
+    backend: str = TUNE_BACKEND,
+    tools: tuple[str, ...] = ("Read",),
+    max_turns: int = 1,
+    timeout_s: float = TUNE_TIMEOUT_S,
+    out_file: str | None = None,
 ) -> str:
     """O padrão do `add._call_author`: workspace efêmero, teto de custo, texto
     ou erro — nunca string vazia passando por resposta."""
@@ -311,15 +392,18 @@ def _call(
         raise TuneError(f"backend {backend} indisponível: {pre.reason}")
     ws = Path(tempfile.mkdtemp(prefix=f"harness-tune-{purpose}-"))
     trace = ws / "trace.jsonl"
+    # O workspace tem que existir ANTES: agente que recebe ordem de escrever
+    # arquivo num diretório inexistente falha na primeira tool call.
+    (ws / "out").mkdir(parents=True, exist_ok=True)
     try:
         result = b.execute(
             ExecRequest(
                 prompt=prompt,
                 workspace=ws / "out",
-                tools=("Read",),
+                tools=tools,
                 model=model,
-                max_turns=1,
-                timeout_s=TUNE_TIMEOUT_S,
+                max_turns=max_turns,
+                timeout_s=timeout_s,
                 trace_path=trace,
             )
         )
@@ -329,12 +413,27 @@ def _call(
             raise TuneError(
                 f"{purpose} custou ${result.cost_usd:.4f} > teto ${max_usd:.2f} — cadeia parada"
             )
-        text = _result_text(trace) or _workspace_text(ws / "out", result.files_changed)
+        text = (
+            _out_file_text(ws / "out", out_file)
+            or _result_text(trace)
+            or _workspace_text(ws / "out", result.files_changed)
+        )
         if not text:
             raise TuneError(f"backend {backend!r} não devolveu texto de {purpose}")
         return text
     finally:
         shutil.rmtree(ws, ignore_errors=True)
+
+
+def _out_file_text(ws: Path, out_file: str | None) -> str:
+    """O arquivo combinado, quando houve um. Vem antes do trace porque o trace do
+    deepagents corta conteúdo: artefato cortado passaria por artefato inteiro."""
+    if not out_file:
+        return ""
+    p = ws / out_file
+    if not p.is_file():
+        return ""
+    return p.read_text(encoding="utf-8").strip()
 
 
 def _result_text(trace: Path) -> str:
@@ -389,10 +488,7 @@ def _weak(results: Sequence[TrialResult]) -> list[TrialResult]:
 def _reason(n: int, agg: Aggregate, prev: Aggregate) -> str:
     ganhos = sorted(a for a, lo in agg.lower.items() if lo > prev.lower.get(a, 0.0))
     cmp = ">" if agg.overall > prev.overall else "<="
-    return (
-        f"v{n}: overall {agg.overall:.3f} {cmp} {prev.overall:.3f}; "
-        f"ganhos em {ganhos or ['—']}"
-    )
+    return f"v{n}: overall {agg.overall:.3f} {cmp} {prev.overall:.3f}; ganhos em {ganhos or ['—']}"
 
 
 def _inner_proposal(artifact: str, win: TuneVersion, outcome: TuneOutcome):

@@ -111,9 +111,7 @@ class SkillTunable:
         return path
 
     def rewrite_prompt(self, text: str, weak: Sequence[TrialResult]) -> str:
-        return _rewrite_prompt(
-            "skill (frontmatter TOML entre '---' e corpo markdown)", text, weak
-        )
+        return _rewrite_prompt("skill (frontmatter TOML entre '---' e corpo markdown)", text, weak)
 
 
 @dataclass
@@ -217,9 +215,7 @@ def _rewrite_prompt(shape: str, text: str, weak: Sequence[TrialResult]) -> str:
     do texto, e é o que transforma a rodada seguinte em correção dirigida em vez
     de rodada de dados.
     """
-    falhas = sorted(
-        {f"{r.case_id}:{axis}" for r in weak for axis, ok in r.axes.items() if not ok}
-    )
+    falhas = sorted({f"{r.case_id}:{axis}" for r in weak for axis, ok in r.axes.items() if not ok})
     evid = "\n".join(f"- {f}" for f in falhas) or "- (nenhuma falha isolada; melhore a margem)"
     return (
         f"Reescreva o artefato abaixo, que é um {shape}.\n\n"

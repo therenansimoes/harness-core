@@ -11,10 +11,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from harness import paths
+from harness.backends import deepagents_backend
+from harness.backends.registry import get_backend
 from harness.evals import freeze
 from harness.evals.bundle import EvalCase, bundle_dir
 from harness.evals.report import NOT_SCORED, render_evaluation_md
@@ -22,6 +25,7 @@ from harness.evals.score import aggregate, score_trial
 from harness.genome.genome import load as load_genome
 from harness.improve import ROOT_ENV, tune
 from harness.ledger import store
+from harness.types import ExecResult
 
 REPO = Path(__file__).resolve().parents[1]
 REAL_GENOME = load_genome(REPO / "config" / "genome.toml")
@@ -51,6 +55,10 @@ def _skill(*termos: str) -> str:
 
 
 V1, V2, V3 = _skill("alfa"), _skill("alfa", "beta"), _skill("gama")
+
+# Guardado ANTES do fixture `env` trocar o seam: é o rewriter de verdade, o que
+# decide entre modelo local e mock.
+REAL_REWRITER = tune._call_rewriter
 
 
 @pytest.fixture
@@ -127,8 +135,7 @@ def test_tune_cadeia_monotonica(env):
     assert out.chain[2].valid is False
     assert out.chain[2].agg.n == 1
     assert out.chain[2].reason == (
-        f"v3 descartada: overall {out.chain[2].agg.overall:.3f} <= "
-        f"{out.chain[1].agg.overall:.3f}"
+        f"v3 descartada: overall {out.chain[2].agg.overall:.3f} <= {out.chain[1].agg.overall:.3f}"
     )
     assert out.baseline["tuned"].overall > out.baseline["none"].overall
     # A cadeia inteira em data/, com o descartado junto: o motivo de parar é
@@ -201,3 +208,127 @@ def test_evaluation_md_substitui_not_scored(env):
     assert NOT_SCORED not in medido
     assert f"| structure | 4 | 4 | {agg.lower['structure']:.3f} |" in medido
     assert f"baseline: none {agg.overall:.3f} · tuned {agg.overall:.3f}" in medido
+
+
+# --------------------------------------------------------------------------- rewriter real
+
+
+def _no_lmstudio(monkeypatch):
+    """Servidor local morto, do jeito que o preflight vê: a sonda levanta."""
+
+    def boom(url):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(deepagents_backend, "_lmstudio_models", boom)
+
+
+def _exec_result(req, *, ok: bool, exit_reason: str) -> ExecResult:
+    return ExecResult(
+        ok=ok,
+        exit_reason=exit_reason,
+        turns=1,
+        cost_usd=0.0,
+        tokens_in=0,
+        tokens_out=0,
+        files_changed=(),
+        session_id=None,
+        trace_path=req.trace_path,
+    )
+
+
+class _FakeReal:
+    """O backend real, de mentira: guarda o pedido e escreve (ou falha)."""
+
+    def __init__(self, fail: bool = False) -> None:
+        self.fail, self.reqs = fail, []
+
+    def preflight(self):
+        return SimpleNamespace(ok=True, reason="fake")
+
+    def execute(self, req):
+        self.reqs.append(req)
+        if self.fail:
+            return _exec_result(req, ok=False, exit_reason="error")
+        # Deixado FORA de `files_changed` de propósito: quem lê o artefato é o
+        # `out_file`, não o que o backend declarou ter mexido.
+        (req.workspace / tune.REWRITE_FILE).write_text(V2, encoding="utf-8")
+        return _exec_result(req, ok=True, exit_reason="done")
+
+
+def _route(monkeypatch, fake: _FakeReal) -> None:
+    """`deepagents` vira o fake; `mock` continua sendo o mock de verdade — é ele
+    o fallback que o teste quer exercitar."""
+    monkeypatch.setattr(tune, "_rewrite_target", lambda model: (tune.REWRITE_BACKEND, "openai:m"))
+    monkeypatch.setattr(
+        tune,
+        "get_backend",
+        lambda name: fake if name == tune.REWRITE_BACKEND else get_backend(name),
+    )
+
+
+def test_rewrite_target_sem_lm_studio_cai_no_mock(monkeypatch):
+    _no_lmstudio(monkeypatch)
+
+    assert tune._rewrite_target(tune.DEFAULT_MODEL) == (tune.TUNE_BACKEND, tune.DEFAULT_MODEL)
+    assert tune._rewrite_target(None) == (tune.TUNE_BACKEND, None)
+
+
+def test_rewrite_target_troca_modelo_grande_antes_de_sondar(monkeypatch):
+    sondados = []
+
+    class Probe:
+        def __init__(self, model=None):
+            sondados.append(model)
+
+        def preflight(self):
+            return SimpleNamespace(ok=True, reason="fake")
+
+    monkeypatch.setattr(deepagents_backend, "DeepagentsBackend", Probe)
+
+    alvo = tune._rewrite_target("openai:qwen/qwen3-coder-30b")
+
+    # Modelo que trava a máquina nem chega a ser sondado: vira o default.
+    assert alvo == (tune.REWRITE_BACKEND, tune.REWRITE_MODEL)
+    assert sondados == [tune.REWRITE_MODEL]
+
+
+def test_rewriter_real_le_o_artefato_do_arquivo(monkeypatch):
+    fake = _FakeReal()
+    _route(monkeypatch, fake)
+
+    texto = tune._call_rewriter("reescreva", model=None, max_usd=1.0)
+
+    assert texto == V2.strip()
+    (req,) = fake.reqs
+    assert req.tools == ("read_file", "write_file")
+    assert req.timeout_s == tune.REWRITE_TIMEOUT_S
+    assert req.max_turns > 1  # escrever arquivo custa mais de um turno
+    assert tune.REWRITE_FILE in req.prompt
+
+
+def test_rewriter_real_falhando_cai_no_mock(monkeypatch):
+    fake = _FakeReal(fail=True)
+    _route(monkeypatch, fake)
+
+    texto = tune._call_rewriter("reescreva", model=None, max_usd=1.0)
+
+    # O mock devolve o prompt de hoje — sem a ordem de gravar `rewrite.out`,
+    # que só faz sentido para quem tem tool de escrita.
+    assert texto == "reescreva"
+    assert tune.REWRITE_FILE not in texto
+    assert len(fake.reqs) == 1
+
+
+def test_tune_sem_lm_studio_roda_a_cadeia_de_hoje(env, monkeypatch):
+    """Aceite da frente C: LM Studio fora do ar não muda nada do que já rodava."""
+    _no_lmstudio(monkeypatch)
+    monkeypatch.setattr(tune, "_call_rewriter", REAL_REWRITER)
+    _skill_tree(env)
+
+    out = tune.run_tune(SKILL, trials=1)
+
+    # Mock devolvendo o próprio prompt: v2 não é skill, some no `validate` e a
+    # cadeia para na v1 — exatamente o comportamento anterior.
+    assert out.winner == 1
+    assert out.chain[1].valid is False
+    assert out.chain[1].text.startswith("Reescreva o artefato")
