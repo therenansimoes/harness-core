@@ -107,6 +107,18 @@ Deliverable: a case that originated from a real recorded failure appears in a
 frozen suite, with the human seal recorded, and the artifact's score moves
 because of it.
 
+**D5 — runtime topology governor.** (Adopted 2026-08-05 from the "dynamic
+agent org" pattern: the org restructures itself mid-run; the extra structure
+exists only while the work needs it.) Rule-driven reorganization fed by the
+ledger, never by the eval scoreboard — frozen evals stay the only judge of
+quality. Four rules: same failure kind twice → escalate the route to a
+stronger model; failures concentrated in one area → insert a temporary
+reviewer step that dissolves when quality settles; run cost exceeding the
+task's value → collapse the fleet to one agent; trivial task → skip
+orchestration entirely. Deliverable: a recorded run where a rule fires,
+the topology change is written to the ledger with the triggering signal
+attached, and the change reverts on its own once the signal clears.
+
 ## Known backlog (carried)
 
 - `quickstart` / `doctor` polish — **resolved 2026-08-04** (fixed in this wave).
