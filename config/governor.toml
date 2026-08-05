@@ -39,3 +39,16 @@ default_value_usd = 0.0     # valor de kind fora da tabela abaixo; 0 = desconhec
 # content = 5.0
 # code = 25.0
 # refactor = 40.0
+
+# Freios do reorg: orçamento por run, parada atada ao verify e trava de
+# oscilação. Estourar orçamento PARA A ESCALADA (sem subir tier, sem revisor;
+# colapso continua valendo) — nunca mata o run no meio do nó. Campo torto
+# degrada para o default congelado em harness/governor/guards.py; 0 desliga o
+# teto individual.
+[guards]
+enabled = true
+max_cost_usd = 3.0      # gasto acumulado do run >= isto -> sem mais escalada
+max_attempts = 4        # tentativa (0-based) >= isto -> sem mais escalada
+max_wall_s = 600.0      # relógio desde o plan >= isto -> sem mais escalada
+verify_fail_stop = 3    # N verifies vermelhos seguidos no tier de cima -> parar de tentar
+flipflop_window = 6     # K últimas linhas de reorg examinadas pela trava de oscilação

@@ -14,7 +14,8 @@ import pytest
 
 from harness.backends import deepagents_backend as da
 from harness.backends import registry
-from harness.governor import reorg
+from harness.governor import guards, reorg
+from harness.graph import run_graph
 from harness.graph.run_graph import run_unit
 from harness.ledger import store
 from harness.routing import CONFIG_DIR_ENV
@@ -119,6 +120,28 @@ class CaroSpy(SpyBackend):
         )
 
 
+class FalhaSpy(SpyBackend):
+    """Nunca entrega o arquivo do verify: é o run que reprova em TODO tier —
+    o cenário do guard de parada atada ao verify."""
+
+    def execute(self, req: ExecRequest) -> ExecResult:
+        self.calls.append((self.name, req.model, req.max_turns))
+        SEEN.append(req)
+        req.workspace.mkdir(parents=True, exist_ok=True)
+        (req.workspace / LIXO_OUTPUT).write_text("x", encoding="utf-8")
+        return ExecResult(
+            ok=True,
+            exit_reason="done",
+            turns=1,
+            cost_usd=0.0,
+            tokens_in=0,
+            tokens_out=0,
+            files_changed=(LIXO_OUTPUT,),
+            session_id=None,
+            trace_path=req.trace_path,
+        )
+
+
 @pytest.fixture
 def data_dir(tmp_path, monkeypatch):
     d = tmp_path / "data"
@@ -147,6 +170,12 @@ def spies(auto_config):
 def spies_caros(auto_config):
     """Mesmos tiers, backend que cobra caro e falha o verify na primeira."""
     yield from _spies(CaroSpy)
+
+
+@pytest.fixture
+def spies_falhos(auto_config):
+    """Mesmos tiers, backend que reprova o verify em toda tentativa."""
+    yield from _spies(FalhaSpy)
 
 
 def _spies(cls):
@@ -465,3 +494,162 @@ def test_papel_exigido_vira_ordem_no_system_prompt(tmp_path, monkeypatch):
     assert "reviewer" in [s["name"] for s in kw["subagents"]]
     assert "antes de terminar, chame task(subagent_type='reviewer')" in prompt
     assert prompt.index("Você pode delegar") < prompt.index("Este run tem papel OBRIGATÓRIO")
+
+
+# --- guards: o freio do reorg --------------------------------------------------
+
+
+def _guards_fixos(monkeypatch, **over) -> None:
+    """`[guards]` deste teste sem escrever toml, no molde do `_valor_fixo`."""
+    cfg = guards.GuardsConfig(**over)
+    monkeypatch.setattr(guards, "load_guards", lambda *_a, **_k: cfg)
+
+
+def _route_reasons(final) -> list[str]:
+    return [r for e in final["events"] if e["node"] == "route" for r in e["reasons"]]
+
+
+def test_budget_estourado_para_escalada(data_dir, tmp_path, spies_caros, monkeypatch):
+    """Tentativa 0 custou mais que o teto: a segunda passagem NÃO sobe para o
+    spy1 — a escalada por tentativa do router é desfeita — mas o run segue e
+    fecha aceito. Guard para de escalar, nunca mata."""
+    _guards_fixos(monkeypatch, max_cost_usd=0.5)
+    db = data_dir / store.DB_NAME
+    final = run_unit(
+        _unit(tmp_path, "freio"), None, None, data_dir, thread_id="t-freio", route="auto"
+    )
+
+    assert final["decision"].action == "accept"
+    assert spies_caros == [("spy0", "m0", 3), ("spy0", "m0", 3)]
+    assert any(r.startswith("reorg:guard:budget:cost") for r in _route_reasons(final))
+
+    rows = [r for r in _reorg_rows(db) if r["rule_id"] == guards.G_BUDGET]
+    assert len(rows) == 1
+    assert (rows[0]["state"], rows[0]["effect"]) == ("applied", "applied")
+    assert rows[0]["signal"]["kind"] == "cost"
+    assert rows[0]["run_id"] == "t-freio"
+
+
+def test_budget_suprime_r1_e_revisor(data_dir, tmp_path, spies, monkeypatch):
+    """R1 (tier) e R2 (revisor) com sinal vivo no ledger, mas o relógio do run
+    estourou: nenhum dos dois chega ao request — sem subir tier, sem papel
+    exigido. O guard corta a ESCALADA, não a tentativa."""
+    _guards_fixos(monkeypatch, max_wall_s=1.0)
+    monkeypatch.setattr(run_graph, "_guard_elapsed", lambda *_a, **_k: 1e9)
+    db = data_dir / store.DB_NAME
+    _seed_falhas(db)
+    # n=3: com as 2 falhas dá 5 runs, abaixo do `min_n=6` do router — senão o
+    # prior bump do PRÓPRIO router subiria o tier e o teste mediria outra coisa.
+    _seed_area(db, n=3)
+    final = run_unit(
+        _unit(tmp_path, "parede"), None, None, data_dir, thread_id="t-parede", route="auto"
+    )
+
+    assert final["decision"].action == "accept"
+    assert spies == [("spy0", "m0", 3)]  # sem subida de tier apesar do R1
+    assert SEEN[0].roles_required == ()  # sem revisor apesar do R2
+    assert any(r.startswith("reorg:guard:budget:wall") for r in _route_reasons(final))
+
+    rows = _reorg_rows(db)
+    budget_rows = [r for r in rows if r["rule_id"] == guards.G_BUDGET]
+    assert len(budget_rows) == 1
+    assert budget_rows[0]["signal"]["kind"] == "wall"
+    # O sinal do R2 estava VIVO (o gate anotou a decisão) — a frota limpa do
+    # request acima é obra do guard, não de regra dormindo.
+    assert reorg.R_REVIEWER in [r["rule_id"] for r in rows]
+
+
+def test_verify_stop_no_topo_fecha_com_falha(data_dir, tmp_path, spies_falhos, monkeypatch):
+    """Dois verifies vermelhos seguidos no tier de cima: não há para onde
+    escalar, o gate para de tentar e o run fecha com relatório honesto de
+    falha — ok=False, verify_failed, ids de guard no evento do gate."""
+    _guards_fixos(monkeypatch, verify_fail_stop=2)
+    db = data_dir / store.DB_NAME
+    final = run_unit(
+        _unit(tmp_path, "teto"),
+        None,
+        None,
+        data_dir,
+        thread_id="t-teto",
+        route="auto",
+        max_attempts=5,
+    )
+
+    assert len(spies_falhos) == 3  # t0, t1, t1 — e o guard corta a quarta
+    assert final["decision"].action == "escalate_human"
+    gate = [e for e in final["events"] if e["node"] == "gate"][-1]
+    assert "guard:verify_stop:2x_top_tier" in gate["reason"]
+    assert "guard:verify_stop" in gate["guards"]
+
+    rows = [r for r in _reorg_rows(db) if r["rule_id"] == guards.G_VERIFY]
+    assert len(rows) == 1
+    row = store.history()[0]
+    assert row.ok is False
+    assert row.exit_reason == "verify_failed"
+
+
+def test_flipflop_congela_topologia(data_dir, tmp_path, spies):
+    """A mesma regra aplicada -> revertida -> aplicada neste run: oscilação.
+    O guard congela a topologia — nem o R1 com sinal vivo sobe tier — e a
+    linha de freeze fecha o nó do reorg pelo resto do run."""
+    db = data_dir / store.DB_NAME
+    _seed_falhas(db)
+    for i, estado in enumerate(["applied", "reverted", "applied"]):
+        store.record_node(
+            "t-flip",
+            reorg.NODE,
+            {"rule_id": reorg.R_ESCALATE, "state": estado, "run_id": "t-flip"},
+            db,
+            attempt=i,
+        )
+    final = run_unit(
+        _unit(tmp_path, "flip"), None, None, data_dir, thread_id="t-flip", route="auto"
+    )
+
+    assert final["decision"].action == "accept"
+    assert spies == [("spy0", "m0", 3)]  # sem subida de tier apesar do R1
+    assert "reorg:guard:freeze:escalate_route" in _route_reasons(final)
+
+    rows = _reorg_rows(db)
+    assert len(rows) == 4  # 3 semeadas + o freeze; o gate não gravou mais nada
+    assert rows[-1]["rule_id"] == guards.G_FREEZE
+    assert rows[-1]["state"] == "applied"
+    assert rows[-1]["signal"]["rule_id"] == reorg.R_ESCALATE
+
+
+def test_frozen_run_ignora_reorg_e_avisa(data_dir, tmp_path, spies):
+    """Run que já tem linha de freeze: o reorg nem decide nem grava — só o
+    aviso na rota de que a topologia está congelada."""
+    db = data_dir / store.DB_NAME
+    _seed_falhas(db)
+    store.record_node(
+        "t-frozen",
+        reorg.NODE,
+        {"rule_id": guards.G_FREEZE, "state": "applied", "run_id": "t-frozen"},
+        db,
+        attempt=0,
+    )
+    final = run_unit(
+        _unit(tmp_path, "frozen"), None, None, data_dir, thread_id="t-frozen", route="auto"
+    )
+
+    assert final["decision"].action == "accept"
+    assert spies == [("spy0", "m0", 3)]
+    assert "reorg:guard:freeze:active" in _route_reasons(final)
+    assert len(_reorg_rows(db)) == 1  # só a linha semeada: nada novo no nó
+
+
+def test_guards_desligado_mantem_comportamento(data_dir, tmp_path, spies, monkeypatch):
+    """`enabled=false` devolve o runtime pré-guards byte a byte: o R1 sobe o
+    tier como sempre e nenhuma linha de guard aparece no ledger."""
+    _guards_fixos(monkeypatch, enabled=False)
+    db = data_dir / store.DB_NAME
+    _seed_falhas(db)
+    final = run_unit(
+        _unit(tmp_path, "liga"), None, None, data_dir, thread_id="t-liga", route="auto"
+    )
+
+    assert final["selection"].tier == "t1"
+    assert spies == [("spy1", "m1", 5)]
+    assert "reorg:escalate_route:t0->t1" in _route_reasons(final)
+    assert [r for r in _reorg_rows(db) if str(r.get("rule_id", "")).startswith("guard:")] == []

@@ -46,7 +46,7 @@ from harness.genome import tamper
 from harness.genome.genome import DEFAULT_PATH as GENOME_PATH
 from harness.genome.genome import Genome
 from harness.genome.genome import load as load_genome
-from harness.governor import reorg
+from harness.governor import guards, reorg
 from harness.governor.governor import (
     CUTOFF,
     check_cost,
@@ -236,6 +236,39 @@ def _gov_cost(run_id: str, db: Path, attempt: int, gov=None) -> str:
         except (TypeError, ValueError):
             continue
     return check_cost(spent, gov)
+
+
+def _guard_elapsed(run_id: str, db: Path) -> float:
+    """Segundos desde o started_ts do plan; sem plan ou ts torto -> 0.0."""
+    plan_ev = store.get_node(run_id, "plan", db) or {}
+    try:
+        return max(0.0, time.time() - float(plan_ev["started_ts"]))
+    except (KeyError, TypeError, ValueError):
+        return 0.0
+
+
+def _top_tier_fails(state: RunState, attempt: int, config) -> int:
+    """Quantas tentativas SEGUIDAS (da corrente para trás) reprovaram o verify
+    rodando no tier de cima. Tier 'manual' conta como topo: não há degrau acima.
+    Rota sem payload (run antigo) ou tier desconhecido zera a contagem — o
+    guard prefere silêncio a chute."""
+    db = _db(config)
+    run_id = state["run_id"]
+    try:
+        top = router.tiers(router.load_config())[-1].name
+    except Exception:
+        top = None
+    count = 0
+    for a in range(max(0, int(attempt)), -1, -1):
+        v = store.get_node(run_id, "verify", db, attempt=a) or {}
+        r = store.get_node(run_id, "route", db, attempt=a) or {}
+        tier = r.get("tier")
+        at_top = tier == MANUAL_TIER or (top is not None and tier == top)
+        if v.get("passed") is False and at_top:
+            count += 1
+        else:
+            break
+    return count
 
 
 def _score_series(run_id: str, db: Path, attempt: int) -> list[float]:
@@ -532,6 +565,25 @@ def _route(state: RunState, config=None) -> dict:
     if selection.roles_required:
         frota["roles_required"] = list(selection.roles_required)
 
+    # Rota desta tentativa no ledger: é o que deixa o guard de verify saber em
+    # que tier cada tentativa REPROVOU. Fail-open: rota não gravada nunca
+    # derruba o route — o guard só fica cego.
+    try:
+        store.record_node(
+            state["run_id"],
+            "route",
+            {
+                "tier": selection.tier,
+                "backend": selection.backend,
+                "model": selection.model,
+                "attempt": attempt,
+            },
+            _db(config),
+            attempt=attempt,
+        )
+    except Exception:
+        pass
+
     return {
         "selection": selection,
         "adapter": adapter,
@@ -631,14 +683,44 @@ def _reorg_route(state: RunState, selection: Selection, attempt: int, config, go
     `insert_reviewer` não mexe em tier nenhum. Precedência explícita: colapso
     vence revisor, porque sem dinheiro não se compra revisor. Papel exigido é
     nome; quem instancia (ou ignora, se o papel não existe) é o executor.
+
+    Guards por cima: run congelado ignora reorg; oscilação congela; orçamento
+    estourado corta a escalada (delta positivo, revisor e a escalada por
+    tentativa do router) e MANTÉM o colapso — sem dinheiro, preferir encolher.
     """
     cfg = reorg.load_reorg()
+    gcfg = guards.load_guards()
+    run_id = state["run_id"]
+    db = _db(config)
+    prev = reorg.active_from_ledger(store, run_id, db) if gcfg.enabled else []
+    if gcfg.enabled and guards.frozen(prev):
+        return replace(selection, reasons=(*selection.reasons, "reorg:guard:freeze:active"))
+    if gcfg.enabled:
+        flip = guards.flipflop(prev, gcfg)
+        if flip.fired:
+            _guard_row(run_id, attempt, db, flip, prev)
+            return replace(selection, reasons=(*selection.reasons, f"reorg:{flip.reason}"))
+
     decisions = reorg.decide(_reorg_signals(state, selection, attempt, config, cfg), cfg)
     aplicadas = [d for d in decisions if d.effect == reorg.APPLIED]
     delta = sum(d.tier_delta for d in aplicadas)
     blocked = any(d.escalate_blocked for d in aplicadas)
     required = tuple(sorted({r for d in aplicadas for r in d.roles_required}))
     collapse = any(d.roles_cap == 1 for d in aplicadas)
+
+    budget = guards.NONE_FIRED
+    if gcfg.enabled:
+        budget = guards.budget_exceeded(
+            _reorg_spent(run_id, db, attempt), attempt, _guard_elapsed(run_id, db), gcfg
+        )
+    if budget.fired:
+        # Estourou orçamento: PARA a escalada (delta positivo fora, revisor
+        # fora, escalada por tentativa do router desfeita) e prefere colapsar.
+        # Nunca derruba o run: a tentativa corrente segue no tier de piso.
+        delta = min(0, delta)
+        required = ()
+        blocked = True
+        _guard_row(run_id, attempt, db, budget, prev)
 
     models = router.load_config()
     rank = router.tier_by_name(models, selection.tier).cost_rank
@@ -654,10 +736,16 @@ def _reorg_route(state: RunState, selection: Selection, attempt: int, config, go
     muda_tier = tier.name != selection.tier
     muda_frota = allow != selection.roles_allow or required != selection.roles_required
     if not muda_tier and not muda_frota:
+        # Guard que não mudou nada ainda precisa aparecer no evento de rota:
+        # "não escalei porque o orçamento acabou" é decisão, não silêncio.
+        if budget.fired:
+            return replace(selection, reasons=(*selection.reasons, f"reorg:{budget.reason}"))
         return selection
 
     reasons = list(selection.reasons)
-    if muda_tier:
+    if budget.fired:
+        reasons.append(f"reorg:{budget.reason}")
+    if muda_tier and aplicadas:
         reasons.append(
             f"reorg:{'+'.join(d.rule_id for d in aplicadas)}:{selection.tier}->{tier.name}"
         )
@@ -681,6 +769,38 @@ def _reorg_route(state: RunState, selection: Selection, attempt: int, config, go
     )
 
 
+def _guard_row(
+    run_id: str, attempt: int, db: Path, verdict: guards.GuardVerdict, prev: list[dict]
+) -> None:
+    """Uma linha de guard no nó do reorg — no MÁXIMO uma por guard por run.
+
+    Mesmo vocabulário das decisões (`effect`/`state`), `rule_id` com prefixo
+    `guard:` para o diff do reorg nunca 'reverter' um guard."""
+    if any(isinstance(p, Mapping) and p.get("rule_id") == verdict.guard_id for p in prev):
+        return
+    action = {
+        guards.G_BUDGET: guards.A_BUDGET,
+        guards.G_VERIFY: guards.A_VERIFY,
+        guards.G_FREEZE: guards.A_FREEZE,
+    }.get(verdict.guard_id, verdict.guard_id)
+    store.record_node(
+        run_id,
+        reorg.NODE,
+        {
+            "rule_id": verdict.guard_id,
+            "action": action,
+            "reason": verdict.reason,
+            "signal": verdict.signal,
+            "effect": reorg.APPLIED,
+            "state": reorg.STATE_ACTIVE,
+            "attempt": attempt,
+            "run_id": run_id,
+        },
+        db,
+        attempt=len(prev),
+    )
+
+
 def _reorg_record(state: RunState, attempt: int, config) -> None:
     """Grava no ledger as decisões de topologia desta passagem, e as reversões.
 
@@ -700,7 +820,21 @@ def _reorg_record(state: RunState, attempt: int, config) -> None:
         _reorg_signals(state, state.get("selection"), attempt, config, cfg), cfg
     )
     prev = reorg.active_from_ledger(store, run_id, db)
-    novas, revertidas = reorg.diff_active(prev, decisions)
+    if guards.load_guards().enabled and guards.frozen(prev):
+        # Topologia congelada: nem decisão nova nem reversão — só as linhas
+        # que já estão lá.
+        return
+    # Linha de guard não entra no diff: guard nunca aparece como "revertido".
+    prev_rules = [
+        p
+        for p in prev
+        if not str((p.get("rule_id") if isinstance(p, Mapping) else "") or "").startswith(
+            guards.GUARD_PREFIX
+        )
+    ]
+    novas, revertidas = reorg.diff_active(prev_rules, decisions)
+    # `slot` conta TODAS as linhas (guards inclusos): é a chave (run, nó,
+    # attempt) que não pode colidir.
     slot = len(prev)
     for d in novas:
         payload = {
@@ -1133,6 +1267,32 @@ def _gate(state: RunState, config=None) -> dict:
     if action == "retry" and _gov_cost(state["run_id"], _db(config), attempt) == CUTOFF:
         action = "escalate_human"
         reason = f"{reason}; governor:custo_estourado"
+    # Guard: verify vermelho N vezes seguidas no tier DE CIMA — não há para onde
+    # escalar e tentar de novo é queimar orçamento. Para de tentar e fecha com
+    # relatório de falha honesto. Fail-open: qualquer dúvida (config de tier
+    # ilegível, rota antiga sem payload) e o guard fica quieto.
+    guard_ids: set[str] = set()
+    try:
+        gcfg = guards.load_guards()
+        if gcfg.enabled:
+            rows = reorg.active_from_ledger(store, state["run_id"], _db(config))
+            guard_ids = {
+                str(p.get("rule_id"))
+                for p in rows
+                if str(p.get("rule_id") or "").startswith(guards.GUARD_PREFIX)
+            }
+            if action == "retry":
+                stop = guards.verify_stop(_top_tier_fails(state, attempt, config), gcfg)
+                if stop.fired:
+                    action = "escalate_human"
+                    reason = f"{reason}; {stop.reason}"
+                    _guard_row(state["run_id"], attempt, _db(config), stop, rows)
+                    guard_ids.add(stop.guard_id)
+    except Exception:
+        pass
+    # Marcação honesta: run tocado por guard carrega os ids no evento terminal
+    # do gate, além das linhas no ledger.
+    gmark = {"guards": sorted(guard_ids)} if guard_ids else {}
     # Gate de delta: tentativa que não move a régua graduada não ganha outra.
     # Exige `[checks]` — sem eles o score é 1.0 fixo e "não subiu" não é notícia,
     # então a unidade binária segue com o retry cego de sempre, bit a bit.
@@ -1169,7 +1329,9 @@ def _gate(state: RunState, config=None) -> dict:
         "tamper": violations,
         "decision": decision,
         "defer_s": defer_s,
-        "events": [_event("gate", action=decision.action, reason=decision.reason, **delta, **blk)],
+        "events": [
+            _event("gate", action=decision.action, reason=decision.reason, **delta, **blk, **gmark)
+        ],
     }
 
 
