@@ -18,7 +18,7 @@ import tempfile
 import time
 import tomllib
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -26,6 +26,8 @@ from pathlib import Path
 from harness import paths
 from harness.ab import ArmSpec, run_ab
 from harness.backends import registry
+from harness.backends.offgrid import LEDGER_NODE as OFFGRID_NODE
+from harness.backends.offgrid import resolve_backend
 from harness.improve.counterfactual import DEFAULT_LIMIT as WHATIF_LIMIT
 from harness.improve.counterfactual import MOCK_BACKEND
 from harness.improve.replay import DEFAULT_LIMIT
@@ -262,6 +264,9 @@ class RunOutcome:
     # Fim do log do verify quando ele reprovou: o workspace onde o log mora já
     # foi descartado quando quem chamou lê isto.
     verify_tail: str = ""
+    # Fallback off-grid que aconteceu neste run (`offgrid.Resolution.degraded`),
+    # para quem grava no ledger registrar a degradação. None = caminho normal.
+    degraded: Mapping[str, str] | None = None
 
 
 def _record_episode(unit: UnitSpec, trace: str) -> None:
@@ -293,14 +298,18 @@ def run_once(
     Não grava no ledger — quem chama escolhe o banco (o A/B passa o `data_dir`
     do experimento) e o momento.
     """
-    backend = registry.get_backend(backend_name)
-    if model is not None and hasattr(backend, "model"):
-        # Backend model-selectable checa o modelo pedido no próprio preflight.
-        backend.model = model
-
-    pre = backend.preflight()
-    if not pre.ok:
-        raise PreflightError(f"preflight falhou para {backend_name}: {pre.reason}")
+    # Preflight + fallback off-grid num lugar só: primário indisponível degrada
+    # para o tier local em vez de bloquear (gate em `[fallback]` do models.toml).
+    resolved = resolve_backend(backend_name, model)
+    if resolved.backend is None:
+        raise PreflightError(f"preflight falhou para {backend_name}: {resolved.preflight.reason}")
+    backend = resolved.backend
+    # O ledger grava quem EXECUTOU, não quem foi pedido: o que foi pedido vive
+    # em `degraded`, e o tier acompanha o backend para o prior não misturar
+    # populações. `tier` da flag continua valendo quando não houve degradação.
+    backend_name, model = resolved.name, resolved.model
+    if resolved.degraded:
+        tier = resolved.tier
 
     run_id = uuid.uuid4().hex[:12]
     t0 = time.monotonic()
@@ -374,7 +383,9 @@ def run_once(
         intervention=False,
         created_at=store.now_iso(),
     )
-    return RunOutcome(row=row, decision=decision, verify_tail=verify_tail)
+    return RunOutcome(
+        row=row, decision=decision, verify_tail=verify_tail, degraded=resolved.degraded
+    )
 
 
 def _resolve_route(args: argparse.Namespace, unit: UnitSpec) -> Selection:
@@ -505,6 +516,10 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     row, decision = outcome.row, outcome.decision
     row_id = store.record_run(row)
+    if outcome.degraded:
+        # `runs` não tem coluna para isto e migrar schema por um campo novo é
+        # caro; `node_events` já carrega payload JSON livre por run.
+        store.record_node(row.run_id, OFFGRID_NODE, dict(outcome.degraded))
     if outcome.verify_tail:
         # `run` avulso não passa pelo grafo, então o node_event do verify é o
         # único lugar onde o porquê da falha sobrevive ao workspace.
