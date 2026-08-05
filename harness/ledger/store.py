@@ -250,6 +250,33 @@ def mutations(
     return [_mutation(r) for r in rows]
 
 
+def get_mutation(mutation_id: str, path: Path | None = None) -> MutationRow | None:
+    """A linha exata pelo PK, ou None. Lookup pontual: `mutations()` responde por janela/regra."""
+    with connect(path) as conn:
+        r = conn.execute("SELECT * FROM mutations WHERE mutation_id = ?", (mutation_id,)).fetchone()
+    return _mutation(r) if r is not None else None
+
+
+def record_rollback(row: MutationRow, undoes: str, path: Path | None = None) -> bool:
+    """Evento de rollback + `reverted=1` na linha original, na MESMA transação.
+
+    Duas transações abririam a janela do `record_run_once`: evento gravado e
+    original ainda 'viva' permitiria um segundo rollback do mesmo id.
+    Devolve False se o `mutation_id` do evento já existia (nada é alterado)."""
+    values = [_encode(getattr(row, c)) for c in _MUT_COLUMNS]
+    placeholders = ", ".join("?" * len(_MUT_COLUMNS))
+    with connect(path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.execute(
+            f"INSERT OR IGNORE INTO mutations ({', '.join(_MUT_COLUMNS)}) VALUES ({placeholders})",
+            values,
+        )
+        if cur.rowcount != 1:
+            return False
+        conn.execute("UPDATE mutations SET reverted = 1 WHERE mutation_id = ?", (undoes,))
+        return True
+
+
 def record_node(
     run_id: str, node: str, payload: dict, path: Path | None = None, attempt: int = 0
 ) -> bool:

@@ -1613,6 +1613,54 @@ def cmd_tune(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_rollback(args: argparse.Namespace) -> int:
+    """Desfaz uma promoção de tune: restaura v(N-1) e registra o evento no ledger.
+
+    A cadeia em data/ nunca é apagada — o ponteiro de vencedor move e o
+    artefato volta aos bytes da versão anterior (tmp + rename, nunca meio escrito).
+    """
+    from harness.improve.rollback import RollbackError, rollback
+
+    try:
+        rec = rollback(args.mutation_id, why=args.why, root=args.root)
+    except RollbackError as exc:
+        print(f"rollback recusado: {exc}", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        print(f"rollback falhou: {exc}", file=sys.stderr)
+        return 1
+    print(f"revertido: {rec.artifact} v{rec.from_version} -> v{rec.to_version}")
+    print(f"restaurado: {rec.restored_path}")
+    print(f"evento: {rec.event_id}")
+    return 0
+
+
+def cmd_audit(args: argparse.Namespace) -> int:
+    """Histórico de um artefato: cadeia de tune + eventos do ledger, com os ids que o rollback aceita."""
+    from harness.improve.rollback import audit
+
+    try:
+        rep = audit(args.artifact, limit=args.limit)
+    except OSError as exc:
+        print(f"audit falhou: {exc}", file=sys.stderr)
+        return 1
+    if not rep.chain and not rep.events:
+        print(f"audit: sem histórico para {args.artifact}")
+        return 0
+    if rep.chain:
+        print(f"cadeia: {rep.chain_dir}")
+        for e in rep.chain:
+            mark = "ok " if e.valid else "inv"
+            print(f"  v{e.version} [{mark}] overall={e.overall:.3f} {e.reason}")
+        print(f"vencedor: v{rep.winner} ({rep.winner_source})")
+    if rep.events:
+        print("ledger:")
+        for m in rep.events:
+            flag = " REVERTED" if m.reverted else ""
+            print(f"  {m.mutation_id}\t{m.verdict}\t{m.arm_a}->{m.arm_b}\t{m.applied_at}{flag}")
+    return 0
+
+
 def cmd_frontier(args: argparse.Namespace) -> int:
     """Lista a fronteira: os candidatos da quarentena em que o harness atual
     falha. Fronteira vazia é resposta, não erro — sai 0 sempre.
@@ -2463,6 +2511,29 @@ def build_parser() -> argparse.ArgumentParser:
     tune.add_argument("--rounds", type=int, default=2, help="rodadas de rewrite (default 2)")
     tune.add_argument("--model", default="openai:qwen/qwen3.5-9b", help="modelo do rewriter/runner")
     tune.set_defaults(func=cmd_tune)
+
+    rb = sub.add_parser(
+        "rollback", help="desfaz uma promoção de tune: restaura v(N-1) e grava o evento no ledger"
+    )
+    rb.add_argument(
+        "mutation_id", help="id da linha do ledger (harness audit <artefato> lista os ids)"
+    )
+    rb.add_argument(
+        "--why",
+        default="manual rollback",
+        help="motivo gravado no evento (quem/quando saem sozinhos)",
+    )
+    rb.add_argument("--root", default=None, help="raiz dos artefatos (default: $HARNESS_ROOT ou .)")
+    rb.set_defaults(func=cmd_rollback)
+
+    audit_cmd = sub.add_parser(
+        "audit", help="histórico de versões/mutações de um artefato; ids usáveis no rollback"
+    )
+    audit_cmd.add_argument("artifact", help="o artefato, ex.: skills/python-fixes.md")
+    audit_cmd.add_argument(
+        "--limit", type=int, default=50, help="teto de eventos do ledger (default 50)"
+    )
+    audit_cmd.set_defaults(func=cmd_audit)
 
     frontier = sub.add_parser(
         "frontier", help="lista os exames da quarentena em que o harness atual falha"
