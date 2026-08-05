@@ -149,6 +149,19 @@ def test_gate_reprovado_duas_vezes_devolve_none_e_manda_escalar(env, capsys):
     assert not env.queue.exists()
 
 
+def test_prompt_de_autoria_ensina_a_convencao_de_dist_e_tela_nao_vazia():
+    """A fila da bancada travou porque o planejador autorava `href="dist/css/..."`
+    dentro de `dist/index.html` — 404 no gate de tela, screenshot em branco. A
+    convenção mora no prompt, então ela é testada aqui."""
+    prompt = dec.planning_prompt("faz o site", "oficina", "README.md", 5)
+
+    assert "`dist/` é a RAIZ servida" in prompt
+    assert "css/style.css" in prompt
+    assert "NUNCA escreva o prefixo `dist/` em `href`, `src` ou `fetch()`" in prompt
+    assert "conteúdo visível renderizado" in prompt
+    assert "reprova página vazia" in prompt
+
+
 def test_planner_local_usa_deepagents_com_adapter_de_raciocinio():
     assert dec.planner_backend("remote") == (dec.DECOMPOSE_BACKEND, None)
     assert dec.planner_backend("local") == ("deepagents", "reasoning")

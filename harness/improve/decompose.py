@@ -122,7 +122,8 @@ def planning_prompt(task: str, project: str, context: str, n_max: int) -> str:
 
     Cada regra existe por uma falha observada: passo longo estoura o contexto do
     modelo local; verify caro não roda a cada tentativa; verify sem mensagem faz
-    o executor adivinhar; prompt vago faz modelo pequeno improvisar arquitetura.
+    o executor adivinhar; prompt vago faz modelo pequeno improvisar arquitetura;
+    asset com prefixo `dist/` dá 404 no gate de tela, que serve `dist/` como raiz.
     """
     return f"""Você DECOMPÕE uma tarefa grande em uma FILA de sub-tarefas atômicas \
 para agentes de código pequenos.
@@ -161,6 +162,13 @@ Cada uma é um objeto com "name" (curto, [a-z0-9_-], sem espaço), "cmd" (shell 
 barato, determinístico, sai != 0 quando falta) e "weight" (número > 0, maior \
 para a checagem mais difícil). Elas dizem QUANTO da tarefa passou; o \
 "verify_cmd" continua sendo o que decide pronto/não-pronto.
+9. Produto web: `dist/` é a RAIZ servida do site. Dentro dos arquivos de `dist/`, \
+todo caminho de asset é relativo a `dist/` — `css/style.css`, `js/app.js`, \
+`data/x.json`. NUNCA escreva o prefixo `dist/` em `href`, `src` ou `fetch()`: o \
+gate de tela serve `dist/` como raiz e o prefixo vira 404.
+10. Sub-tarefa que cria página ou tela EXIGE conteúdo visível renderizado (texto, \
+lista ou elemento com dado na tela), não só o arquivo existir — o gate de tela \
+reprova página vazia.
 
 Responda APENAS com um array JSON, sem markdown e sem texto em volta. Cada item:
 - "id_slug": slug curto em kebab-case (a-z, 0-9, hífen), único no array
