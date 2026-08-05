@@ -181,6 +181,19 @@ def test_write_unit_preserva_pedido_com_aspas_e_quebra(virgem):
     assert cli.load_unit(unit_dir).prompt == pedido
 
 
+def test_prompt_da_unidade_proibe_arquivo_de_anotacao():
+    """Numa tarefa grande o agente deixou `COMMIT_INSTRUCTIONS.txt` e
+    `DASHBOARD_CHANGES.md` na raiz e o integrate commitou os dois no branch
+    default. A convenção mora no prompt, então ela é testada aqui."""
+    prompt = do.unit_prompt("conserta o bug em target.py")
+
+    assert prompt.startswith("conserta o bug em target.py")
+    assert "Entregue SÓ os arquivos do produto" in prompt
+    assert "NÃO crie arquivo de anotação, resumo, instrução ou plano" in prompt
+    assert "COMMIT_*" in prompt
+    assert "vai na sua RESPOSTA, não em arquivo" in prompt
+
+
 def test_new_unit_id_casa_com_o_slug_do_add():
     from harness.add import SLUG_RE
 
@@ -206,6 +219,22 @@ def test_project_name_desempata_por_hash_do_path(tmp_path, virgem):
 
     assert do.project_name(outro) == "meu-projeto"
     assert do.project_name(repo).startswith("meu-projeto-")
+
+
+def test_ensure_project_reusa_o_registro_do_mesmo_repo_com_outro_nome(virgem, capsys):
+    """O bug de quem já tinha projeto: `/…/bancada-app` estava registrado como
+    `bancada`, e rodar `harness do` de dentro da pasta abria uma SEGUNDA entrada
+    para o mesmo repo — fila, histórico e custo partidos entre dois nomes."""
+    from harness.projects import init_project, load_projects
+
+    repo, _ = do.ensure_repo(virgem)
+    init_project(repo, "bancada")
+
+    nome = do.ensure_project(repo)
+
+    assert nome == "bancada"
+    assert list(load_projects()) == ["bancada"]
+    assert "usando projeto já registrado: bancada" in capsys.readouterr().out
 
 
 # --- cmd_do -----------------------------------------------------------------------
@@ -287,6 +316,8 @@ def test_keep_unit_deixa_a_unidade_no_lugar(virgem):
     assert rc == 0
     unidades = list((virgem / ".harness" / "units").iterdir())
     assert len(unidades) == 1 and (unidades[0] / "unit.toml").is_file()
+    # A convenção de entrega chega ao executor pelo prompt da unidade gravada.
+    assert "COMMIT_*" in (unidades[0] / "unit.toml").read_text(encoding="utf-8")
 
 
 def test_no_apply_deixa_o_resultado_na_branch(virgem, capsys):

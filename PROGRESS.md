@@ -20,18 +20,35 @@ convenção `dist/` que causou a falha do dia.
 
 1. As 5 propostas mineradas do tune seguem esperando selo (item antigo, sem
    pressa; frente meta segue congelada).
+2. `~/.harness/config/projects.toml` tem a duplicata antiga `bancada` +
+   `bancada-app` (mesmo repo). Novas duplicatas estão bloqueadas; apagar a
+   existente órfã o histórico dos 2 runs do `do` — unificar ou deixar?
 
 ~~Fallback no grafo~~ e ~~fix do replan~~: autorizados verbalmente e FEITOS
 (commits `e6b95a8` e `6133efe`, 2026-08-05).
 
-## Fila do harness (pequena, sem decisão nova)
+## Teste leigo fim-a-fim (2026-08-05, noite): PASSOU
 
-1. `ui-verify.png` vaza pro commit de entrega (`deliver()` só exclui
-   `.harness`) — excluir artefatos do gate.
-2. Piso de screenshot 20.0kb reprovou página real por 0.1kb — revisar margem.
-3. Limpar worktree órfã em `data/ws/` e branches `harness/*` antigas no
-   bancada-app.
-4. Refresh do STATUS.md (números de 2026-08-04 desatualizados).
+Testador cego (só --help/FAST_START) rodou `harness do` duas vezes no
+bancada-app: contador no rodapé E dashboard completo (gráfico SVG sem lib,
+cartões, busca, tema) — **2/2 aceitas e integradas, $0.50 total, zero flag**.
+Veredito: "leigo consegue". Também entrou: **marketplace de skills**
+(`harness market sync|search|install|approve` — skill de fora nasce inerte em
+pending/, ativa só com aprovação humana; lista de registries no genoma
+imutável). Smoke real: 17 skills do repo da Anthropic.
+
+## Fila do harness (fricções do teste leigo + pequenos)
+
+1. ~~projeto duplicado silencioso~~ e ~~lixo de rascunho no master~~: FEITOS
+   (do.py reusa registro por repo path; prompt do `do` proíbe arquivo de
+   anotação — regras de entrega limpa).
+2. `quickstart` imprime FALHA vermelho pra coisa que não bloqueia — virar aviso.
+3. `do` fica 200s+ mudo — precisa feedback de progresso.
+4. Régua fraca em site estático: `do` não expõe `--ui` (o `add` expõe).
+5. `plano não` não explica critério nem cita `decompose`.
+6. `ui-verify.png` vaza pro commit de entrega; piso 20kb na navalha.
+7. Limpar worktree órfã em `data/ws/` e branches `harness/*` antigas.
+8. Refresh do STATUS.md (números de 2026-08-04).
 
 ## Feito recentemente (não reabrir)
 

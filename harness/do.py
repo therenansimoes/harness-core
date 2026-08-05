@@ -229,10 +229,21 @@ def ensure_project(repo: Path) -> str:
     e não no default relativo (`projects/<nome>/queue`, que resolve contra o
     cwd): o cwd aqui é o repo do usuário, e `harness do` não cria pasta de
     infraestrutura dentro dele.
+
+    Repo JÁ registrado sob outro nome não vira entrada nova: quem tinha
+    `/…/bancada-app` como `bancada` e rodou `harness do` de dentro da pasta
+    ganhava um segundo projeto `bancada-app` apontando para o mesmo repo, com
+    fila, histórico e custo partidos entre os dois nomes sem um aviso sequer.
     """
     from harness.projects import init_project
 
     repo = Path(repo).resolve()
+    if (registrado := registered_name(repo)) is not None:
+        # Só reusar o nome, sem re-registrar: o `init_project` sobrescreve a
+        # entrada inteira, e os defaults do `do` apagariam `build_cmd`,
+        # `setup_cmd` e `env_file` que o usuário pôs lá na mão.
+        print(f"usando projeto já registrado: {registrado}")
+        return registrado
     nome = project_name(repo)
     init_project(
         repo,
@@ -241,6 +252,22 @@ def ensure_project(repo: Path) -> str:
         queue_dir=paths.data_dir().resolve() / "projects" / nome / "queue",
     )
     return nome
+
+
+def registered_name(repo: Path) -> str | None:
+    """Nome sob o qual este repo já está em `projects.toml`, ou None.
+
+    Compara path RESOLVIDO dos dois lados: o registro pode ter vindo relativo
+    (`repo = "projects/x"`), com `~` ou com symlink no meio, e o que identifica
+    um projeto é o repositório, não a string que alguém digitou.
+    """
+    from harness.projects import load_projects
+
+    repo = Path(repo).resolve()
+    for nome, proj in load_projects().items():
+        if Path(proj.repo).expanduser().resolve() == repo:
+            return nome
+    return None
 
 
 def project_name(repo: Path) -> str:
@@ -263,6 +290,27 @@ def project_name(repo: Path) -> str:
 
 
 # --------------------------------------------------------------------------- unidade
+
+# Regra de entrega colada em TODO pedido do `do`. Numa tarefa grande o agente
+# deixou `COMMIT_INSTRUCTIONS.txt` e `DASHBOARD_CHANGES.md` na raiz do repo, e o
+# integrate commitou os dois no branch default: no `do` não existe revisor entre
+# o que o agente escreve em arquivo e o repo do usuário. Explicação é resposta,
+# não artefato.
+ENTREGA_LIMPA = """Regras de entrega (valem acima de qualquer preferência sua):
+- Entregue SÓ os arquivos do produto: o que o pedido acima precisa para funcionar.
+- NÃO crie arquivo de anotação, resumo, instrução ou plano (README de mudanças, \
+RESUMO, TODO, NOTES, COMMIT_*, CHANGES_*) — tudo que você escreve em arquivo é \
+commitado no repositório do usuário.
+- A explicação do que você fez vai na sua RESPOSTA, não em arquivo."""
+
+
+def unit_prompt(task: str) -> str:
+    """Pedido do usuário + a convenção de entrega que ele não sabe que precisa pedir.
+
+    O pedido vem primeiro e literal: quem abre o `unit.toml` tem de reconhecer a
+    própria frase antes de qualquer texto nosso.
+    """
+    return f"{task.strip()}\n\n{ENTREGA_LIMPA}\n"
 
 
 def write_unit(

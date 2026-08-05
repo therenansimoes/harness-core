@@ -642,7 +642,7 @@ def cmd_do(args: argparse.Namespace) -> int:
     unit_dir = do_mod.write_unit(
         repo,
         do_mod.new_unit_id(args.task),
-        args.task,
+        do_mod.unit_prompt(args.task),
         verify_cmd,
         project,
         kind=args.kind,
