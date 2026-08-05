@@ -396,6 +396,25 @@ def _fleet(roles: list[dict], req: ExecRequest) -> tuple[list[dict], str]:
         return roles, ""
 
 
+def _shell_backend(workspace: Path):
+    """SafeShellBackend, ou a variante com sandbox de SO quando [executor]
+    sandbox != "off" no tools.toml. Fail-open no setup: sandbox indisponível
+    => shell de sempre."""
+    from harness.backends.safe_shell import SafeShellBackend
+
+    try:
+        from harness.backends import sandbox as _sandbox
+
+        sbx = _sandbox.make_sandbox(workspace, _sandbox.load_settings())
+        if sbx is not None:
+            from harness.backends.sandbox_shell import SandboxedShellBackend
+
+            return SandboxedShellBackend(root_dir=str(workspace), virtual_mode=True, sandbox=sbx)
+    except Exception:
+        pass  # fail-open: sandbox nunca derruba a construção do agente
+    return SafeShellBackend(root_dir=str(workspace), virtual_mode=True)
+
+
 def _build_agent(req: ExecRequest):
     from deepagents import create_deep_agent
     from langchain.agents.middleware import ModelCallLimitMiddleware, TodoListMiddleware
@@ -413,9 +432,10 @@ def _build_agent(req: ExecRequest):
     # O shell entra pela SafeShellBackend: `virtual_mode` NÃO cobre `execute`
     # (a doc do deepagents é explícita), então a cerca (denylist + workspace +
     # timeout) é o que impede o loop autônomo de mexer na máquina.
-    from harness.backends.safe_shell import SafeShellBackend
-
-    fs = SafeShellBackend(root_dir=str(req.workspace), virtual_mode=True)
+    # Com [executor] sandbox='workspace-write' no tools.toml, o `execute` ainda
+    # passa pela mesma cerca e ADICIONALMENTE roda sob Seatbelt (escrita só no
+    # workspace+temp).
+    fs = _shell_backend(req.workspace)
 
     middleware: list[Any] = []
     allowed = _fs_allowlist(req.tools)

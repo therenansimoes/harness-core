@@ -890,3 +890,46 @@ def test_e2e_tiny_fix_with_lmstudio(tmp_path):
     assert res.cost_usd == 0.0
     assert "target.py" in res.files_changed
     assert "a + b" in (tmp_path / "target.py").read_text()
+
+
+# --- sandbox de SO no shell do executor -------------------------------------
+
+
+def test_shell_backend_default_e_safe_shell_puro(tmp_path, monkeypatch):
+    pytest.importorskip("deepagents")
+    import harness.backends.sandbox as sb_mod
+
+    monkeypatch.setattr(sb_mod, "load_settings", lambda *a, **k: sb_mod.SandboxSettings())
+    b = da._shell_backend(tmp_path)
+    assert type(b).__name__ == "SafeShellBackend"
+
+
+def test_shell_backend_sandboxed_quando_ligado(tmp_path, monkeypatch):
+    pytest.importorskip("deepagents")
+    import harness.backends.sandbox as sb_mod
+
+    class _S:
+        name = "stub"
+        wrap = staticmethod(lambda c: c)
+
+    monkeypatch.setattr(
+        sb_mod, "load_settings", lambda *a, **k: sb_mod.SandboxSettings(mode="workspace-write")
+    )
+    monkeypatch.setattr(sb_mod, "make_sandbox", lambda *a, **k: _S())
+    b = da._shell_backend(tmp_path)
+    from harness.backends.sandbox_shell import SandboxedShellBackend
+
+    assert isinstance(b, SandboxedShellBackend)
+    assert b._sandbox is not None
+
+
+def test_shell_backend_fail_open_quando_sandbox_none(tmp_path, monkeypatch):
+    pytest.importorskip("deepagents")
+    import harness.backends.sandbox as sb_mod
+
+    monkeypatch.setattr(
+        sb_mod, "load_settings", lambda *a, **k: sb_mod.SandboxSettings(mode="workspace-write")
+    )
+    monkeypatch.setattr(sb_mod, "make_sandbox", lambda *a, **k: None)
+    b = da._shell_backend(tmp_path)
+    assert type(b).__name__ == "SafeShellBackend"

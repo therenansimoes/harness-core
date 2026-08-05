@@ -4,3 +4,17 @@
 # Caches pesados entram no workspace por symlink, nunca por cópia.
 # Só vale para o que existe na origem e NÃO está versionado.
 cache_links = ["node_modules", ".venv", ".cache"]
+
+[executor]
+# Sandbox de SO por baixo da tool `execute` (macOS: Seatbelt via sandbox-exec).
+# "off" (default) = só a cerca de denylist do safe_shell.
+# "workspace-write" = leitura livre, ESCRITA confinada ao workspace do run +
+# temp/cache do usuário; negação vira erro de tool que o modelo vê.
+# Fail-open só no setup: sandbox-exec ausente/profile falhou => roda sem sandbox.
+sandbox = "off"
+# Rede dentro do sandbox: "deny" (default) corta tudo; "localhost" deixa só
+# loopback (verify_cmd que curla servidor local); "allow" não restringe.
+sandbox_network = "deny"
+# Paths ABSOLUTOS extras onde escrita é permitida (ex.: cache de build fora do
+# workspace). Vazio por default.
+sandbox_extra_write = []
