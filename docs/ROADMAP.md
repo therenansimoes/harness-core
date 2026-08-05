@@ -111,10 +111,12 @@ Deliverable: a case that originated from a real recorded failure appears in a
 frozen suite, with the human seal recorded, and the artifact's score moves
 because of it.
 
-**D5 — runtime topology governor.** ✅ **Done 2026-08-05, partial by design**
-(`harness/governor/reorg.py` + hooks in `run_graph.py`; R1/R4 have material
-effect, R2/R3 are recorded-only until a safe effect path exists — see the
-mid-run insertion and fleet-collapse caveats in the reorg module).
+**D5 — runtime topology governor.** ✅ **Done 2026-08-05**
+(`harness/governor/reorg.py` + hooks in `run_graph.py`; all four rules have
+material effect as of the 2026-08-05 night wave — R2 mandates a reviewer
+subagent in the executor fleet, R3 collapses the fleet when spent exceeds the
+task's declared value; value comes from `unit.toml`/`[reorg.task_value_usd]`,
+never inferred).
 (Adopted 2026-08-05 from the "dynamic
 agent org" pattern: the org restructures itself mid-run; the extra structure
 exists only while the work needs it.) Rule-driven reorganization fed by the
@@ -126,6 +128,25 @@ task's value → collapse the fleet to one agent; trivial task → skip
 orchestration entirely. Deliverable: a recorded run where a rule fires,
 the topology change is written to the ledger with the triggering signal
 attached, and the change reverts on its own once the signal clears.
+
+### Night wave 2026-08-05 — post-roadmap hardening (all landed)
+
+Commits `91518c8..550cbed`+: R2/R3 material effect + declared task value;
+real LLM rewriter via LM Studio with mock fallback; ToolRuntime injection
+fix in `smart_fs`; injectable clock in `record_failure`; `harness
+rollback`/`audit`; discriminating ruler v2 (per-axis diagnosis feedback,
+train-view gate, persisted trials — first real retained version: 0.301 →
+0.447 on `skills/python-fixes`); OS-level Seatbelt sandbox (opt-in);
+governor guards (budgets, verifier-tied stopping, oscillation freeze);
+pluggable checkpointer; mined-case axes derived from failure class;
+opt-in real per-case runner with frontmatter restoration. Market-gap
+research report with prioritized backlog: `docs/RESEARCH-market-gaps.md`.
+
+Open items after the wave: local 9B emits thinking-only output for
+per-case runs (real runner falls back to extractive — needs a better
+local model or prompt shape); safety axis has no train case (pf-003 sits
+in holdout — needs case mining + human seal); 5 mined proposals await
+seal in `data/eval_pending/`.
 
 ## Known backlog (carried)
 
