@@ -235,6 +235,94 @@ def test_repique_reprovado_no_gate_manda_escalar(env, capsys, monkeypatch):
     assert "escale" in capsys.readouterr().err
 
 
+# --- volta de stuck/ para a fila ----------------------------------------------
+
+
+def test_retry_devolve_a_unidade_para_a_fila(env, capsys):
+    """Rota retry sem tirar de `stuck/` é conselho vazio: `pending()` não a lista."""
+    from harness import queue as q
+
+    _run("03_tema-escuro", "r1", [0.6, 0.7], env.db, blocker="goal_not_met_yet")
+
+    rc = rp.replan(
+        "oficina",
+        "03_tema-escuro",
+        queue_dir=env.queue,
+        projects_file=env.projects_file,
+        db=env.db,
+    )
+
+    assert rc == 0
+    assert (env.queue / "03_tema-escuro" / "unit.toml").is_file()
+    assert not (env.queue / "stuck" / "03_tema-escuro").exists()
+    assert [p.name for p in q.pending(env.queue)] == ["03_tema-escuro"]
+    assert "voltou de stuck/" in capsys.readouterr().out
+
+
+def test_colisao_de_nome_na_raiz_nao_move_nem_apaga(env, capsys):
+    """Quem já está na fila é quem vale — a travada fica onde está, intacta."""
+    ja_na_fila = env.queue / "03_tema-escuro"
+    ja_na_fila.mkdir(parents=True)
+    (ja_na_fila / "unit.toml").write_text(UNIT_TOML, encoding="utf-8")
+    (ja_na_fila / "marca.txt").write_text("a que vale\n", encoding="utf-8")
+    _run("03_tema-escuro", "r1", [0.6, 0.7], env.db, blocker="goal_not_met_yet")
+
+    rc = rp.replan(
+        "oficina",
+        "03_tema-escuro",
+        queue_dir=env.queue,
+        projects_file=env.projects_file,
+        db=env.db,
+    )
+
+    assert rc == 0
+    assert (ja_na_fila / "marca.txt").read_text(encoding="utf-8") == "a que vale\n"
+    assert (env.queue / "stuck" / "03_tema-escuro" / "unit.toml").is_file()
+    assert "voltou de stuck/" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("blocker", "scores"),
+    [
+        ("needs_user_input", [0.1, 0.1]),  # user: quem destrava é o humano
+        ("external_wait", [0.1, 0.1]),  # wait: a fila roda depois, sem a unidade
+        ("goal_not_met_yet", [0.1, 0.2]),  # split: o original fica onde foi julgado
+    ],
+)
+def test_so_o_retry_tira_de_stuck(env, capsys, blocker, scores):
+    _run("03_tema-escuro", "r1", scores, env.db, blocker=blocker)
+
+    rc = rp.replan(
+        "oficina",
+        "03_tema-escuro",
+        queue_dir=env.queue,
+        projects_file=env.projects_file,
+        db=env.db,
+    )
+
+    assert rc == 0
+    assert (env.queue / "stuck" / "03_tema-escuro" / "unit.toml").is_file()
+    assert "voltou de stuck/" not in capsys.readouterr().out
+
+
+def test_unidade_ja_na_raiz_e_no_op(env, capsys):
+    (env.queue / "stuck" / "03_tema-escuro").rename(env.queue / "03_tema-escuro")
+    _run("03_tema-escuro", "r1", [0.6, 0.7], env.db, blocker="goal_not_met_yet")
+
+    rc = rp.replan(
+        "oficina",
+        "03_tema-escuro",
+        queue_dir=env.queue,
+        projects_file=env.projects_file,
+        db=env.db,
+    )
+
+    assert rc == 0
+    assert (env.queue / "03_tema-escuro" / "unit.toml").is_file()
+    assert "voltou de stuck/" not in capsys.readouterr().out
+    assert rp.unstick(env.queue / "03_tema-escuro", env.queue) is None
+
+
 def test_unidade_inexistente_e_erro(env, capsys):
     rc = rp.replan(
         "oficina", "99_nada", queue_dir=env.queue, projects_file=env.projects_file, db=env.db

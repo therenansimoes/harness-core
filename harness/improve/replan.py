@@ -16,7 +16,8 @@ O roteamento:
   (`zpd.ZONE[0]`) em pelo menos 2 tentativas: o passo é grande demais para quem
   está executando. Repica SÓ ele — a fila inteira não está errada, um degrau é.
   Nota DENTRO da zona é o caso oposto: a régua informa, mais uma tentativa ainda
-  paga, e quebrar agora joga fora o gradiente.
+  paga, e quebrar agora joga fora o gradiente — e a unidade volta de `stuck/`
+  para a raiz da fila (`unstick`), senão o "rode de novo" seria mentira.
 
 O repique grava com sufixo ALFABÉTICO (`03a_slug`, `03b_slug`): ordena entre
 `03_` e `04_` (o `_` vem antes das letras em ASCII), então o driver executa os
@@ -178,6 +179,23 @@ def split_names(unit_id: str, slugs: list[str]) -> list[str]:
     return [f"{base}{SUFFIXES[i]}_{slug}" for i, slug in enumerate(slugs)]
 
 
+def unstick(path: Path, queue: Path) -> Path | None:
+    """Devolve a unidade de `stuck/` para a raiz da fila. `None` quando não moveu.
+
+    Repicar sem isto é conselho vazio: `queue.pending()` não lista `stuck/`, então
+    "rode de novo" rodaria a fila SEM a unidade que acabou de ser julgada como
+    "mais uma tentativa paga". Colisão de nome na raiz nunca sobrescreve — a
+    unidade que já está na fila é a que vale, e apagá-la perderia trabalho.
+    """
+    if path.parent.name != "stuck":
+        return None
+    destino = queue / path.name
+    if destino.exists():
+        return None
+    path.rename(destino)
+    return destino
+
+
 def replan(
     project: str,
     unit_id: str,
@@ -212,6 +230,8 @@ def replan(
         print("espera externa: rode a fila de novo mais tarde, sem repicar.", file=out)
         return 0
     if decision.route == ROUTE_RETRY:
+        if unstick(path, queue) is not None:
+            print(f"replan: {unit_id} voltou de stuck/ para a fila.", file=out)
         print(f"rode de novo: harness queue --project {project}", file=out)
         return 0
 
