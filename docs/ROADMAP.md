@@ -81,7 +81,9 @@ Production feeds the case generator; it never touches the scoreboard.
 
 ### Phased plan
 
-**D1 — eval-freeze primitive.** A per-artifact eval bundle with an explicit
+**D1 — eval-freeze primitive.** ✅ **Done 2026-08-04** (`harness/evals/`,
+`harness eval freeze|verify|report`; first frozen bundle:
+`evals/skills/python-fixes/`). A per-artifact eval bundle with an explicit
 freeze step and a sha256 manifest, plus an `EVALUATION.md`-style export carrying
 version history, per-case scores and reason strings. Deliverable: freeze an eval
 set for one existing skill, then show that a later write to the case file is
