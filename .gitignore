@@ -35,3 +35,4 @@ projects/website-faz-rogers/
 projects/*/notes.tsv
 .claude/worktrees/
 .playwright-mcp/
+trace.jsonl
