@@ -127,21 +127,29 @@ def record_failure(
     unit_id: str,
     trace: str,
     db_path: Path | None = None,
+    now: datetime | str | None = None,
 ) -> bool:
     """Indexa uma falha. True se gravou; False (silencioso) em qualquer falha.
 
     Sem `trace` não há caso a lembrar. `kind` vazio virá "" — a busca é sempre
     keyed em kind, então falha sem kind simplesmente nunca é recuperada.
+
+    `now` é o instante da gravação: `None` (o caminho de produção) consulta o
+    relógio do processo, mas quem já decidiu o instante — sono, replay, teste —
+    passa o dele. Sem isso a data do episódio é a única do módulo que não dá
+    para injetar, e "mais velho que 7 dias" vira uma conta contra o calendário
+    da máquina.
     """
     if not _enabled():
         return False
     if not trace or not trace.strip():
         return False
+    stamp = _iso(now) if now is not None else now_iso()
     try:
         with _connect(db_path) as conn:
             conn.execute(
                 f"INSERT INTO {TABLE} (kind, unit_id, trace, created_at) VALUES (?, ?, ?, ?)",
-                (kind or "", unit_id or "", trace.strip()[:MAX_TRACE_CHARS], now_iso()),
+                (kind or "", unit_id or "", trace.strip()[:MAX_TRACE_CHARS], stamp),
             )
         return True
     except Exception:

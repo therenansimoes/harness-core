@@ -51,9 +51,12 @@ def db(tmp_path, monkeypatch) -> Path:
     return data / "runs.sqlite"
 
 
-def _record(db: Path, traces, kind: str = "code", unit: str = "u1") -> None:
+def _record(db: Path, traces, kind: str = "code", unit: str = "u1", at: datetime = NOW) -> None:
+    """Grava no instante do teste, não no do calendário: a idade do episódio é
+    metade da decisão do sono, e com `now_iso()` real o órfão de 8 dias atrás
+    nasce com a data de hoje — o teste passaria só até a data alcançar `NOW`."""
     for i, trace in enumerate(traces):
-        assert episodic.record_failure(kind, f"{unit}-{i}", trace, db_path=db)
+        assert episodic.record_failure(kind, f"{unit}-{i}", trace, db_path=db, now=at)
 
 
 def test_recorrentes_viram_licao_e_skill(db, tmp_path):
