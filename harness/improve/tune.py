@@ -38,7 +38,14 @@ from harness.backends.registry import get_backend
 from harness.evals.bundle import EvalCase, load_cases, split_cases
 from harness.evals.freeze import verify_frozen
 from harness.evals.report import render_evaluation_md
-from harness.evals.score import Aggregate, TrialResult, aggregate, beats, score_trial
+from harness.evals.score import (
+    RULER_VERSION,
+    Aggregate,
+    TrialResult,
+    aggregate,
+    beats,
+    score_trial,
+)
 from harness.improve import mutate, research, workflow_action
 from harness.improve.tunable import Tunable, tunable_for
 from harness.ledger import store
@@ -48,6 +55,10 @@ ACTION = "tune"
 TUNE_SUBDIR = "tune"
 CHAIN_FILE = "chain.json"
 EVALUATION_FILE = "EVALUATION.md"
+TRIALS_SUFFIX = ".trials.jsonl"
+# Teto do texto julgado gravado por trial: o arquivo é evidência para leitura,
+# não cópia do artefato — quem quer o texto inteiro lê o `v{n}.txt` ao lado.
+TRIAL_OUTPUT_MAX = 4000
 
 # Mock por default pelo mesmo motivo do resto do pacote: o caminho feliz de
 # quem só quer ver o loop rodar não pode exigir chave de API.
@@ -112,6 +123,11 @@ class TuneVersion:
     `valid=True, retained=False` — a conflação antiga (descartada = inválida)
     acabou aqui. `valid=False` => `agg` é o placar vazio, não um zero medido: a
     versão nem chegou a ser pontuada.
+
+    `agg` é o bundle INTEIRO (a manchete do EVALUATION.md), `train` é o mesmo
+    placar restrito ao treino — e é o `train` que o gate compara. O reescritor
+    só enxerga treino; julgá-lo por uma média que inclui o holdout seria cobrar
+    dele o que ele não teve como ver, e é o que travava a cadeia.
     """
 
     version: int
@@ -121,7 +137,9 @@ class TuneVersion:
     valid: bool = True
     retained: bool = True
     holdout: Aggregate = _EMPTY
+    train: Aggregate = _EMPTY
     trials: tuple[TrialResult, ...] = field(default=(), repr=False)
+    outputs: tuple[str, ...] = field(default=(), repr=False)
 
 
 @dataclass(frozen=True)
@@ -199,7 +217,7 @@ def run_tune(
     # Controle: o que sai SEM artefato nenhum. Passa por fora do `validate` de
     # propósito — texto vazio nunca é uma skill válida, e barrá-lo aqui mataria
     # justamente a medição que diz se o artefato paga o próprio custo.
-    none_agg, _ = _score(adapter, cases, "", trials, weights)
+    none_agg, _, _ = _score(adapter, cases, "", trials, weights)
 
     # v1 é o incumbente (é o que já está no disco), não uma candidata: o gate
     # julga de v2 em diante. v1 inválida encerra antes do loop — não há nada
@@ -212,7 +230,7 @@ def run_tune(
             TuneVersion(1, text, _EMPTY, f"v1 descartada: {errs[0]}", valid=False, retained=False)
         ]
     else:
-        v1 = _measured(1, text, adapter, cases, trials, weights, hold_ids)
+        v1 = _measured(1, text, adapter, cases, trials, weights, hold_ids, train_ids)
         best = replace(v1, retained=True, reason=_reason(1, v1.agg, none_agg))
         chain = [best]
 
@@ -221,8 +239,17 @@ def run_tune(
     feedback: list[str] = []
     if best is not None:
         for n in range(2, rounds + 2):
+            # Só treino nos três argumentos: casos, reprovações e placar. Mostrar
+            # o holdout ao reescritor transformaria a prova de generalização em
+            # mais um alvo de otimização.
             prompt = _with_feedback(
-                adapter.rewrite_prompt(best.text, _weak(best.trials, train_ids)), feedback
+                adapter.rewrite_prompt(
+                    best.text,
+                    _weak(best.trials, train_ids),
+                    cases=train_cases,
+                    agg=best.train,
+                ),
+                feedback,
             )
             cand = _call_rewriter(prompt, model=model, max_usd=max_usd)
             errs = adapter.validate(cand)
@@ -231,8 +258,10 @@ def run_tune(
                 chain.append(TuneVersion(n, cand, _EMPTY, reason, valid=False, retained=False))
                 feedback.append(reason)
                 continue
-            v = _measured(n, cand, adapter, cases, trials, weights, hold_ids)
-            if beats(v.agg, best.agg) and _holdout_ok(v, best):
+            v = _measured(n, cand, adapter, cases, trials, weights, hold_ids, train_ids)
+            # Treino decide, holdout veta: é o par que o reescritor pode
+            # atacar e a parte que ele não pode ver, nessa ordem.
+            if beats(v.train, best.train) and _holdout_ok(v, best):
                 v = replace(v, retained=True, reason=_reason(n, v.agg, best.agg))
                 chain.append(v)
                 best = v
@@ -507,14 +536,22 @@ def _score(
     text: str,
     trials: int | None,
     weights: dict[str, float],
-) -> tuple[Aggregate, list[TrialResult]]:
-    """Roda `trials` tentativas por caso e agrega. `trials=None` = o do caso."""
+) -> tuple[Aggregate, list[TrialResult], list[str]]:
+    """Roda `trials` tentativas por caso e agrega. `trials=None` = o do caso.
+
+    Devolve as SAÍDAS junto (alinhadas por índice com os trials) porque o
+    `TrialResult` guarda o veredito e não o que foi julgado — e sem o texto
+    julgado o `v{n}.trials.jsonl` seria diagnóstico sem corpo de delito.
+    """
     results: list[TrialResult] = []
+    outputs: list[str] = []
     for case in cases:
         n = trials if trials is not None else case.trials
         for i in range(max(1, n)):
-            results.append(score_trial(case, adapter.produce(case, text), trial=i))
-    return aggregate(results, weights), results
+            out = adapter.produce(case, text)
+            results.append(score_trial(case, out, trial=i))
+            outputs.append(out)
+    return aggregate(results, weights), results, outputs
 
 
 def _weak(results: Sequence[TrialResult], train_ids: set[str]) -> list[TrialResult]:
@@ -530,14 +567,29 @@ def _measured(
     trials: int | None,
     weights: dict[str, float],
     hold_ids: set[str],
+    train_ids: set[str],
 ) -> TuneVersion:
-    """Pontua uma versão válida no bundle inteiro + a visão só-holdout dela."""
-    agg, results = _score(adapter, cases, text, trials, weights)
+    """Pontua uma versão válida no bundle inteiro + as visões treino e holdout.
+
+    Três agregados sobre a MESMA medição: ninguém roda o exame duas vezes para
+    ter as duas visões — elas são recortes da mesma lista de trials.
+    """
+    agg, results, outputs = _score(adapter, cases, text, trials, weights)
     hold_agg = (
         aggregate([r for r in results if r.case_id in hold_ids], weights) if hold_ids else _EMPTY
     )
+    train_agg = aggregate([r for r in results if r.case_id in train_ids], weights)
     return TuneVersion(
-        n, text, agg, reason="", valid=True, retained=False, holdout=hold_agg, trials=tuple(results)
+        n,
+        text,
+        agg,
+        reason="",
+        valid=True,
+        retained=False,
+        holdout=hold_agg,
+        train=train_agg,
+        trials=tuple(results),
+        outputs=tuple(outputs),
     )
 
 
@@ -548,9 +600,46 @@ def _holdout_ok(new: TuneVersion, old: TuneVersion) -> bool:
 
 
 def _discard_reason(n: int, v: TuneVersion, best: TuneVersion) -> str:
-    if not beats(v.agg, best.agg):
-        return f"v{n} descartada: overall {v.agg.overall:.3f} <= {best.agg.overall:.3f}"
-    return f"v{n} descartada: holdout {v.holdout.overall:.3f} < {best.holdout.overall:.3f}"
+    """Por que a candidata caiu, COM o delta por eixo e o que fazer a seguir.
+
+    "overall X <= Y" manda o reescritor tentar de novo às cegas; "PIOROU
+    clarity 0.510->0.000, GANHOU coverage 0.000->0.097" diz que a rodada
+    acertou o alvo e derrubou outra coisa no caminho — que é uma correção
+    dirigida em uma linha, e não uma nova rodada de dados.
+    """
+    head = (
+        f"v{n} descartada: train {v.train.overall:.3f} <= {best.train.overall:.3f}"
+        if not beats(v.train, best.train)
+        else f"v{n} descartada: holdout {v.holdout.overall:.3f} < {best.holdout.overall:.3f}"
+    )
+    piorou = _axis_deltas(v.train, best.train, worse=True)
+    ganhou = _axis_deltas(v.train, best.train, worse=False)
+    partes = [head]
+    if piorou:
+        partes.append("PIOROU " + ", ".join(piorou))
+    if ganhou:
+        partes.append("GANHOU " + ", ".join(ganhou))
+    if piorou and ganhou:
+        partes.append(f"preserve os ganhos e recupere {_axis_names(piorou)}")
+    elif piorou:
+        partes.append(f"recupere {_axis_names(piorou)}")
+    else:
+        partes.append("nenhum eixo regrediu; o ganho não bateu o incumbente")
+    return "; ".join(partes) + "."
+
+
+def _axis_deltas(new: Aggregate, old: Aggregate, *, worse: bool) -> list[str]:
+    """`axis a->b` dos eixos que mudaram no sentido pedido, em ordem alfabética."""
+    out = []
+    for axis in sorted(set(new.lower) | set(old.lower)):
+        a, b = old.lower.get(axis, 0.0), new.lower.get(axis, 0.0)
+        if (b < a - 1e-9) if worse else (b > a + 1e-9):
+            out.append(f"{axis} {a:.3f}->{b:.3f}")
+    return out
+
+
+def _axis_names(deltas: Sequence[str]) -> str:
+    return ", ".join(d.split(" ")[0] for d in deltas)
 
 
 def _with_feedback(prompt: str, feedback: Sequence[str]) -> str:
@@ -593,6 +682,7 @@ def _persist(artifact: str, chain: Sequence[TuneVersion], md: str) -> Path:
     d.mkdir(parents=True, exist_ok=True)
     for v in chain:
         (d / f"v{v.version}.txt").write_text(v.text, encoding="utf-8")
+        _persist_trials(d, v)
     rows = [
         {
             "version": v.version,
@@ -602,13 +692,59 @@ def _persist(artifact: str, chain: Sequence[TuneVersion], md: str) -> Path:
             "valid": v.valid,
             "retained": v.retained,
             "holdout_overall": v.holdout.overall if v.holdout.n else None,
+            "train_overall": v.train.overall if v.train.n else None,
+            # Por linha e não no topo: o arquivo é uma LISTA (o replay lê assim),
+            # e cada versão foi medida sob a régua que valia quando ela rodou.
+            "ruler_version": RULER_VERSION,
         }
         for v in chain
     ]
     payload = json.dumps(rows, indent=2, ensure_ascii=False) + "\n"
     (d / CHAIN_FILE).write_text(payload, encoding="utf-8")
-    (d / EVALUATION_FILE).write_text(md, encoding="utf-8")
+    (d / EVALUATION_FILE).write_text(_stamp_ruler(md), encoding="utf-8")
     return d
+
+
+def _persist_trials(d: Path, v: TuneVersion) -> None:
+    """Um jsonl por versão com o trial CRU: eixos, diagnóstico e a saída julgada.
+
+    É o que transforma "v3 descartada" em uma pergunta respondível — sem a
+    saída ao lado do veredito, descobrir por que o eixo caiu exige re-rodar o
+    exame, e re-rodar não reproduz o que aquela versão respondeu. A saída é
+    truncada porque o arquivo é para leitura humana, não é backup do artefato.
+    """
+    if not v.trials or not v.outputs:
+        return
+    lines = [
+        json.dumps(
+            {
+                "case_id": r.case_id,
+                "trial": r.trial,
+                "axes": r.axes,
+                "notes": r.notes,
+                "output": out[:TRIAL_OUTPUT_MAX],
+            },
+            ensure_ascii=False,
+        )
+        # `strict`: veredito emparelhado com a saída errada seria pior que
+        # arquivo nenhum — evidência que mente não é evidência.
+        for r, out in zip(v.trials, v.outputs, strict=True)
+    ]
+    (d / f"v{v.version}{TRIALS_SUFFIX}").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _stamp_ruler(md: str) -> str:
+    """Carimba a versão da régua no cabeçalho do relatório.
+
+    No relatório e não só no chain.json porque a manchete ("nota 0.301") é o que
+    alguém cola em outro lugar, e nota sem a régua que a produziu não é
+    comparável com a de amanhã.
+    """
+    lines = md.splitlines()
+    if not lines:
+        return md
+    head = [lines[0], "", f"Régua determinística: `ruler_version={RULER_VERSION}`."]
+    return "\n".join([*head, *lines[1:]]) + "\n"
 
 
 # --------------------------------------------------------------------------- replay

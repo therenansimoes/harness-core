@@ -21,7 +21,7 @@ from harness.backends.registry import get_backend
 from harness.evals import freeze
 from harness.evals.bundle import EvalCase, bundle_dir, load_cases
 from harness.evals.report import NOT_SCORED, render_evaluation_md
-from harness.evals.score import aggregate, score_trial
+from harness.evals.score import RULER_VERSION, aggregate, score_trial
 from harness.genome.genome import load as load_genome
 from harness.improve import ROOT_ENV, tune
 from harness.improve.tunable import tunable_for
@@ -132,12 +132,16 @@ def test_tune_cadeia_monotonica(env):
     assert out.winner == 2
     assert out.winning.text == V2
     # A v3 foi MEDIDA e perdeu no gate: continua VÁLIDA (passou no validate),
-    # só não foi retida — o motivo cita o placar dos dois lados.
+    # só não foi retida — o motivo cita o placar dos dois lados E o delta por
+    # eixo, que é o que a próxima tentativa consegue atacar.
     assert out.chain[2].valid is True
     assert out.chain[2].retained is False
     assert out.chain[2].agg.n == 1
     assert out.chain[2].reason == (
-        f"v3 descartada: overall {out.chain[2].agg.overall:.3f} <= {out.chain[1].agg.overall:.3f}"
+        f"v3 descartada: train {out.chain[2].train.overall:.3f} "
+        f"<= {out.chain[1].train.overall:.3f}; "
+        "PIOROU coverage 0.207->0.000, grounding 0.207->0.000; "
+        "recupere coverage, grounding."
     )
     assert out.baseline["tuned"].overall > out.baseline["none"].overall
     # A cadeia inteira em data/, com o descartado junto: o motivo de parar é
@@ -402,6 +406,100 @@ def test_holdout_gate_barra_regressao(env):
     # v3 melhora sem regredir o holdout: retida.
     assert out.winner == 3
     assert out.chain[2].retained is True
+
+
+# O gate julga TREINO. Três casos com baldes conhecidos: s-1 (balde 0) é o
+# holdout e reprova sempre ("gama" não aparece em versão nenhuma); s-2 e s-3 são
+# treino. O peso 3 do holdout dilui o ganho de `coverage` no bundle inteiro e a
+# troca de `grounding` custa cheio ali — resultado: o treino sobe, o holdout não
+# se mexe e o overall do bundle CAI. Sob o gate antigo (bundle) a candidata era
+# descartada; sob o gate de treino ela é retida.
+TRAIN_GATE_CASES = (
+    '{"id":"s-1","kind":"code_fix","prompt":"holdout imexível",'
+    '"expect":{"must_mention":["gama"]},"axes":["coverage"],"weight":3.0,"trials":1}\n'
+    '{"id":"s-2","kind":"code_fix","prompt":"treino coverage",'
+    '"expect":{"must_mention":["alfa"]},"axes":["coverage"],"weight":1.0,"trials":2}\n'
+    '{"id":"s-3","kind":"code_fix","prompt":"treino grounding",'
+    '"expect":{"must_mention":["beta"]},"axes":["grounding"],"weight":1.0,"trials":1}\n'
+)
+
+
+def test_gate_julga_treino_nao_o_bundle(env):
+    _tree(env.root, SKILL, _skill("beta"), TRAIN_GATE_CASES)
+    env.rewriter.payload = [_skill("alfa")]
+
+    out = tune.run_tune(SKILL, rounds=1)
+
+    v1, v2 = out.chain
+    assert v2.train.overall > v1.train.overall
+    assert v2.holdout.overall == v1.holdout.overall  # holdout intocado: não veta
+    # A manchete do bundle piora, e ainda assim a candidata entra: o reescritor
+    # só vê treino, então é o treino que decide se ele acertou.
+    assert v2.agg.overall < v1.agg.overall
+    assert v2.retained is True
+    assert out.winner == 2
+
+    rows = json.loads((tune.chain_dir(SKILL) / "chain.json").read_text(encoding="utf-8"))
+    assert [r["retained"] for r in rows] == [True, True]
+    assert rows[1]["train_overall"] == v2.train.overall
+
+
+def test_trials_jsonl_grava_diagnostico_e_saida(env):
+    _tree(env.root, SKILL, _skill("beta"), TRAIN_GATE_CASES)
+
+    tune.run_tune(SKILL, rounds=0)
+
+    linhas = [
+        json.loads(ln)
+        for ln in (tune.chain_dir(SKILL) / "v1.trials.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    # 1 (s-1) + 2 (s-2) + 1 (s-3) trials, na ordem do bundle.
+    assert [r["case_id"] for r in linhas] == ["s-1", "s-2", "s-2", "s-3"]
+    assert linhas[0]["axes"] == {"coverage": False}
+    assert linhas[0]["notes"] == {"coverage": 'faltou conter LITERALMENTE: "gama"'}
+    assert "passo beta" in linhas[0]["output"]
+    # Eixo que passou não gera nota — o arquivo é diagnóstico, não log.
+    assert linhas[3]["axes"] == {"grounding": True} and linhas[3]["notes"] == {}
+
+
+def test_evaluation_md_carimba_a_regua(env):
+    _skill_tree(env)
+
+    tune.run_tune(SKILL, rounds=0, trials=1)
+
+    md = (tune.chain_dir(SKILL) / "EVALUATION.md").read_text(encoding="utf-8")
+    rows = json.loads((tune.chain_dir(SKILL) / "chain.json").read_text(encoding="utf-8"))
+    assert f"`ruler_version={RULER_VERSION}`" in md.splitlines()[2]
+    assert rows[0]["ruler_version"] == RULER_VERSION
+
+
+def test_rewrite_prompt_cita_ancora_literal_do_caso_real(env):
+    """O prompt de reescrita carrega o DADO (as strings que faltaram), não o rótulo."""
+    artifact = "skills/python-fixes.md"
+    original = (REPO / artifact).read_text(encoding="utf-8")
+    _tree(
+        env.root,
+        artifact,
+        original,
+        (REPO / "evals/skills/python-fixes/cases.jsonl").read_text(encoding="utf-8"),
+    )
+    adapter = tunable_for(artifact)
+    pf2 = next(c for c in load_cases(artifact) if c.id == "pf-002")
+    weak = [score_trial(pf2, adapter.produce(pf2, original))]
+    assert weak[0].axes["coverage"] is False
+
+    prompt = adapter.rewrite_prompt(original, weak, cases=[pf2], agg=aggregate(weak))
+
+    assert 'faltou conter LITERALMENTE: "frozen=True", "dataclasses.replace"' in prompt
+    assert prompt.count("pf-002") == 2  # o caso no bloco (i) e a reprovação no (ii)
+    assert "coverage: faltou conter LITERALMENTE" in prompt
+    # Bloco (i): o que é pontuado é a RESPOSTA, não o texto escrito.
+    assert "O texto que você escreve NÃO é pontuado" in prompt
+    # Bloco (iii): placar por eixo e o aviso de não regredir.
+    assert "- coverage 0/1 (0.000)" in prompt
+    assert "EIXOS JÁ EM 100%" in prompt
 
 
 def test_scorer_discrimina_no_bundle_real(env):

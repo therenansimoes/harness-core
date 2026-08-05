@@ -21,7 +21,7 @@ from pathlib import Path, PurePosixPath
 from typing import Protocol
 
 from harness.evals.bundle import EvalCase
-from harness.evals.score import TrialResult
+from harness.evals.score import Aggregate, TrialResult
 from harness.graph import topology
 from harness.improve import research, root_dir, workflow_action
 
@@ -47,7 +47,14 @@ class Tunable(Protocol):
 
     def write(self, text: str, version: int) -> Path: ...
 
-    def rewrite_prompt(self, text: str, weak: Sequence[TrialResult]) -> str: ...
+    def rewrite_prompt(
+        self,
+        text: str,
+        weak: Sequence[TrialResult],
+        *,
+        cases: Sequence[EvalCase],
+        agg: Aggregate,
+    ) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -110,8 +117,21 @@ class SkillTunable:
         research._write_new(path, research.render_skill(proposal, _skill_body(text)))
         return path
 
-    def rewrite_prompt(self, text: str, weak: Sequence[TrialResult]) -> str:
-        return _rewrite_prompt("skill (frontmatter TOML entre '---' e corpo markdown)", text, weak)
+    def rewrite_prompt(
+        self,
+        text: str,
+        weak: Sequence[TrialResult],
+        *,
+        cases: Sequence[EvalCase],
+        agg: Aggregate,
+    ) -> str:
+        return _rewrite_prompt(
+            "skill (frontmatter TOML entre '---' e corpo markdown)",
+            text,
+            weak,
+            cases=cases,
+            agg=agg,
+        )
 
 
 @dataclass
@@ -153,10 +173,21 @@ class WorkflowTunable:
         workflow_action._write_new(path, text)
         return path
 
-    def rewrite_prompt(self, text: str, weak: Sequence[TrialResult]) -> str:
+    def rewrite_prompt(
+        self,
+        text: str,
+        weak: Sequence[TrialResult],
+        *,
+        cases: Sequence[EvalCase],
+        agg: Aggregate,
+    ) -> str:
         whitelist = ", ".join(sorted(topology.NODE_IMPLS))
         return _rewrite_prompt(
-            f"workflow em TOML (`nodes` e `edges`; nós válidos: {whitelist})", text, weak
+            f"workflow em TOML (`nodes` e `edges`; nós válidos: {whitelist})",
+            text,
+            weak,
+            cases=cases,
+            agg=agg,
         )
 
 
@@ -208,22 +239,109 @@ def _case_prompt(text: str, case: EvalCase) -> str:
     )
 
 
-def _rewrite_prompt(shape: str, text: str, weak: Sequence[TrialResult]) -> str:
-    """O prompt da reescrita. Cita o que REPROVOU, não "melhore isto".
+def _rewrite_prompt(
+    shape: str,
+    text: str,
+    weak: Sequence[TrialResult],
+    *,
+    cases: Sequence[EvalCase],
+    agg: Aggregate,
+) -> str:
+    """O prompt da reescrita, em três blocos: como se mede, o que reprovou, onde
+    não regredir.
 
-    O eixo reprovado é a única informação que o reescritor não consegue inferir
-    do texto, e é o que transforma a rodada seguinte em correção dirigida em vez
-    de rodada de dados.
+    `caso:eixo` sozinho não é feedback: nomeia o sintoma e esconde o dado. Os
+    três blocos existem porque o reescritor erra de três formas distintas —
+    escreve para o humano gostar do texto (e não para a RESPOSTA carregar a
+    âncora literal), corrige o eixo errado, ou paga um eixo já em 100% para
+    comprar decimal em outro. Um bloco para cada.
     """
-    falhas = sorted({f"{r.case_id}:{axis}" for r in weak for axis, ok in r.axes.items() if not ok})
-    evid = "\n".join(f"- {f}" for f in falhas) or "- (nenhuma falha isolada; melhore a margem)"
     return (
         f"Reescreva o artefato abaixo, que é um {shape}.\n\n"
         f"--- artefato atual ---\n{text.strip()}\n--- fim ---\n\n"
-        f"Reprovações medidas por eixo (caso:eixo):\n{evid}\n\n"
+        f"{_measured_block(cases)}\n\n"
+        f"{_failures_block(weak)}\n\n"
+        f"{_scoreboard_block(agg)}\n\n"
         "Corrija exatamente essas reprovações preservando o que já passa. "
         "Responda APENAS com o artefato completo reescrito, sem comentário em volta."
     )
+
+
+def _measured_block(cases: Sequence[EvalCase]) -> str:
+    """O bloco (i): a régua explicada, e as âncoras literais caso a caso."""
+    lines = [
+        "## Como você é medido",
+        "",
+        "O texto que você escreve NÃO é pontuado. Pontuada é a RESPOSTA que um modelo",
+        "produz seguindo esse texto, um pedido de cada vez. Para um eixo passar, a",
+        "orientação precisa fazer a RESPOSTA conter as strings LITERAIS abaixo — a",
+        "comparação é por substring, sem sinônimo, sem paráfrase e sem tradução:",
+        "",
+    ]
+    for c in cases:
+        lines.append(f"- {c.id} ({c.kind}) — pedido: {c.prompt}")
+        lines += [f"  - {req}" for req in _case_requirements(c)]
+    return "\n".join(lines)
+
+
+def _case_requirements(case: EvalCase) -> list[str]:
+    expect = case.expect or {}
+    reqs: list[str] = []
+    must = [str(m) for m in expect.get("must_mention") or ()]
+    if must:
+        reqs.append("a resposta precisa conter: " + ", ".join(f'"{m}"' for m in must))
+    nao = [str(m) for m in expect.get("must_not_mention") or ()]
+    if nao:
+        reqs.append("a resposta NÃO pode conter: " + ", ".join(f'"{m}"' for m in nao))
+    if expect.get("must_refuse"):
+        reqs.append('a resposta precisa RECUSAR em palavras ("não posso", "recuso", "não vou")')
+    if case.verify_cmd:
+        reqs.append(f"comando rodado sobre a resposta, precisa sair 0: `{case.verify_cmd}`")
+    if not reqs:
+        reqs.append("sem âncora literal; vale a forma (título ou lista, sem repetição)")
+    return reqs
+
+
+def _failures_block(weak: Sequence[TrialResult]) -> str:
+    """O bloco (ii): agrupado por caso, com a nota do `diagnose` por eixo.
+
+    Dedup por (caso, eixo, nota): N trials do mesmo caso reprovam pelo mesmo
+    motivo, e repetir a linha N vezes ensinaria o reescritor que aquele caso
+    pesa N vezes mais — o peso já está no placar.
+    """
+    por_caso: dict[str, list[str]] = {}
+    for r in weak:
+        for axis, ok in sorted(r.axes.items()):
+            if ok:
+                continue
+            linha = f"  - {axis}: {r.notes.get(axis) or '(sem diagnóstico)'}"
+            bucket = por_caso.setdefault(r.case_id, [])
+            if linha not in bucket:
+                bucket.append(linha)
+    if not por_caso:
+        return "## Reprovações concretas\n\n- (nenhuma falha isolada; melhore a margem)"
+    lines = ["## Reprovações concretas", ""]
+    for cid, notas in sorted(por_caso.items()):
+        lines.append(f"- {cid}")
+        lines += notas
+    return "\n".join(lines)
+
+
+def _scoreboard_block(agg: Aggregate) -> str:
+    """O bloco (iii): onde já se ganhou. Eixo em 100% é patrimônio, não folga."""
+    lines = ["## Placar por eixo (succ/n, piso de Wilson)", ""]
+    lines += [
+        f"- {axis} {succ}/{n} ({agg.lower.get(axis, 0.0):.3f})"
+        for axis, (succ, n) in sorted(agg.per_axis.items())
+    ]
+    cheios = [axis for axis, (succ, n) in sorted(agg.per_axis.items()) if n and succ == n]
+    aviso = (
+        f"EIXOS JÁ EM 100%: {', '.join(cheios)} — não regrida neles; perda aqui "
+        "custa mais que ganho em outro eixo."
+        if cheios
+        else "EIXOS JÁ EM 100%: nenhum — todo eixo ainda tem folga para subir."
+    )
+    return "\n".join([*lines, "", aviso])
 
 
 def _skill_body(text: str) -> str:
