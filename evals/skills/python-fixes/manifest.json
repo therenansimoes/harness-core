@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "artifact": "skills/python-fixes.md",
+  "artifact_sha256": "e06097418bcffcaf4b1fbf39d019cc05b3973c95aeedb1d558d9532e320bc576",
+  "bundle_sha256": "c1a95fe11a5130f7597e2ef13c96317268249575cfb875054184f1225a6234cf",
+  "files": {
+    "cases.jsonl": "791d27deaf7d399331c6f6a015a09064e4b0782124df162dc382056282c99a62"
+  },
+  "case_count": 3,
+  "frozen_at": "2026-08-05T02:01:47.069143Z",
+  "note": "",
+  "history": []
+}

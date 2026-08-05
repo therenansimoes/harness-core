@@ -1522,6 +1522,35 @@ def cmd_seal(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_eval(args: argparse.Namespace) -> int:
+    """Exame congelado de um artefato: congela, confere e relata.
+
+    `verify` é o gate — violação imprime cada linha e sai != 0, porque medir
+    contra um exame adulterado é pior que não medir.
+    """
+    from harness.evals import bundle_dir, freeze, verify_frozen
+    from harness.evals.report import write_evaluation_md
+
+    try:
+        if args.action == "freeze":
+            m = freeze(args.artifact, note=args.note)
+            print(f"congelado: {bundle_dir(args.artifact)} v{m.version} {m.bundle_sha256[:12]}")
+            return 0
+        if args.action == "verify":
+            violations = verify_frozen(args.artifact)
+            for v in violations:
+                print(v, file=sys.stderr)
+            if violations:
+                return 1
+            print(f"ok: {bundle_dir(args.artifact)}")
+            return 0
+        print(write_evaluation_md(args.artifact))
+        return 0
+    except (OSError, ValueError) as exc:
+        print(f"eval {args.action} falhou: {exc}", file=sys.stderr)
+        return 1
+
+
 def cmd_frontier(args: argparse.Namespace) -> int:
     """Lista a fronteira: os candidatos da quarentena em que o harness atual
     falha. Fronteira vazia é resposta, não erro — sai 0 sempre.
@@ -1722,9 +1751,9 @@ def cmd_report(args: argparse.Namespace) -> int:
 EPILOG = """\
 BÁSICO      quickstart · do · status · report
 AVANÇADO    run · queue · add · decompose · replan · ab · improve · evolve ·
-            frontier · seal · replay · whatif · lineage · skills · actions ·
-            procs · cache-gc · webhook · bench · ui-verify · vision-judge ·
-            init · export · import · doctor · backends
+            frontier · seal · eval · replay · whatif · lineage · skills ·
+            actions · procs · cache-gc · webhook · bench · ui-verify ·
+            vision-judge · init · export · import · doctor · backends
 
 Detalhe de qualquer um: harness <comando> --help
 """
@@ -2343,6 +2372,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--yes", action="store_true", help="confirmação humana; sem isto o comando recusa"
     )
     seal.set_defaults(func=cmd_seal)
+
+    ev = sub.add_parser("eval", help="exame congelado de um artefato: freeze, verify e report")
+    ev.add_argument(
+        "action",
+        choices=("freeze", "verify", "report"),
+        help="freeze congela o bundle, verify prova que ele não mudou, report escreve EVALUATION.md",
+    )
+    ev.add_argument("artifact", help="o artefato avaliado, ex.: skills/python-fixes.md")
+    ev.add_argument("--note", default="", help="nota da versão congelada (só no freeze)")
+    ev.set_defaults(func=cmd_eval)
 
     frontier = sub.add_parser(
         "frontier", help="lista os exames da quarentena em que o harness atual falha"

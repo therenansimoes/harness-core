@@ -25,10 +25,12 @@ from pathlib import Path
 HOME_ENV = "HARNESS_HOME"
 CONFIG_DIR_ENV = "HARNESS_CONFIG_DIR"
 DATA_DIR_ENV = "HARNESS_DATA_DIR"
+EVALS_DIR_ENV = "HARNESS_EVALS_DIR"
 
 CONFIG_SUBDIR = "config"
 DATA_SUBDIR = "data"
 SKILLS_SUBDIR = "skills"
+EVALS_SUBDIR = "evals"
 
 # `~/.harness`: mesma convenção de CLI que guarda estado no home, e é o único
 # lugar gravável garantido quando o pacote está num site-packages read-only.
@@ -117,6 +119,27 @@ def skills_dir() -> Path:
         return sibling
     cwd_skills = Path(SKILLS_SUBDIR)
     return cwd_skills if cwd_skills.is_dir() else packaged_defaults() / SKILLS_SUBDIR
+
+
+def evals_dir() -> Path:
+    """`evals/` irmão do `config_dir()` em uso; senão o do cwd; senão o do pacote.
+
+    Mesma precedência de `skills_dir()` — o bundle de eval espelha o path do
+    artefato avaliado, então tem que resolver na MESMA árvore em que a skill
+    resolveu, senão o exame congelado de uma árvore julgaria a skill de outra.
+
+    A env própria vem antes de tudo (e `skills_dir()` não tem equivalente) por
+    um motivo estreito: o bundle é dado de teste, e a suíte precisa apontá-lo
+    para um tmpdir sem ter que montar uma árvore de config inteira em volta.
+    """
+    env = os.environ.get(EVALS_DIR_ENV)
+    if env:
+        return Path(env)
+    sibling = config_dir().parent / EVALS_SUBDIR
+    if sibling.is_dir():
+        return sibling
+    cwd_evals = Path(EVALS_SUBDIR)
+    return cwd_evals if cwd_evals.is_dir() else packaged_defaults() / EVALS_SUBDIR
 
 
 def config_file(name: str) -> Path:

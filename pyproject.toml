@@ -76,6 +76,9 @@ packages = ["harness"]
 "config/web.toml" = "harness/_defaults/config/web.toml"
 "config/workflows" = "harness/_defaults/config/workflows"
 "skills" = "harness/_defaults/skills"
+# Os exames congelados viajam com as skills: bundle que não chega na wheel é
+# skill instalada sem prova, e `harness eval verify` diria not-frozen.
+"evals" = "harness/_defaults/evals"
 "templates" = "harness/_defaults/templates"
 
 [tool.ruff]
