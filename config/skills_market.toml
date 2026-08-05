@@ -1,0 +1,33 @@
+# skills_market.toml — de onde vêm as skills de TERCEIRO.
+#
+# Quem lê é `harness/skills/market.py` (`harness market sync|search|install`).
+# Nada aqui habilita skill nenhuma: `sync` só traz o registry para
+# `data/market/<name>` e `install` deposita em `skills/pending/`, que o loader
+# NÃO varre. Ligar de fato é `harness market approve <slug> --kinds ... --yes`,
+# ato humano igual a `harness seal`.
+#
+# ARQUIVO AUSENTE = nenhum registry, e o comando diz isso. Entrada torta é
+# DESCARTADA, não corrigida (fail-closed): sem `name`, com `type` desconhecido
+# ou — no caso de git — com url fora de `https://`, o registry some da lista e
+# `sync` recusa. Corpo de skill vira prompt do executor; buscar isso por http
+# simples é deixar o MITM escrever no nosso system prompt.
+#
+# Campos:
+#   name    chave do registry; é o prefixo do id (`<name>/<slug>`) e o dir em
+#           `data/market/`
+#   type    "git" (clone raso de `ref`) | "path" (dir local, copiado)
+#   url     git: origem, obrigatoriamente `https://`
+#   ref     git: branch/tag do clone (default "main")
+#   path    path: diretório de origem
+
+[[registry]]
+name = "anthropics"
+type = "git"
+url = "https://github.com/anthropics/skills"
+ref = "main"
+
+# Registry local — útil para curar um dir de skills à mão antes de aprovar:
+# [[registry]]
+# name = "local"
+# type = "path"
+# path = "/caminho/para/dir-de-skills"

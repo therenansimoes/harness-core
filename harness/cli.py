@@ -1158,6 +1158,76 @@ def cmd_skills(args: argparse.Namespace) -> int:
     return 0
 
 
+def _market_kinds(raw: str) -> list[str]:
+    """`--kinds a,b` -> ["a","b"]; `*` -> [] (vale para todo kind, como no loader)."""
+    if raw.strip() == "*":
+        return []
+    return [k.strip() for k in raw.split(",") if k.strip()]
+
+
+def cmd_market(args: argparse.Namespace) -> int:
+    """Marketplace de skills: sync/search/install/approve/list.
+
+    Instalar NÃO habilita: a skill cai em `skills/pending/`, que o loader não
+    varre. Ligar é `approve`, e ele exige `--kinds` e `--yes` — mesmo degrau
+    humano de `harness seal`, pelo mesmo motivo (o texto vira prompt).
+    """
+    from harness.skills import market
+
+    if args.market_cmd == "sync":
+        try:
+            r = market.sync(args.name)
+        except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as exc:
+            print(f"market sync: {exc}", file=sys.stderr)
+            return 1
+        print(f"market sync {r['registry']}: {r['skills']} skill(s) em {market.market_dir()}")
+        return 0
+
+    if args.market_cmd == "search":
+        achados = market.search(args.term)
+        for e in achados:
+            print(f"{e['id']:<32} {e['description'][:80]}")
+        print(f"market search term={args.term or '*'} achados={len(achados)}")
+        return 0
+
+    if args.market_cmd == "install":
+        r = market.install(args.id)
+        if r["status"] != "installed":
+            print(f"market install: '{args.id}' recusada — {r['reason']}", file=sys.stderr)
+            return 1
+        print(f"market install {r['id']} -> {r['path']} (pending, o loader ainda não lê)")
+        if r["ignored_files"]:
+            ignorados = ", ".join(r["ignored_files"][:5])
+            print(f"arquivos irmãos NÃO copiados ({len(r['ignored_files'])}): {ignorados}")
+        print(f"aprove com: harness market approve {r['slug']} --kinds <a,b|*> --yes")
+        return 0
+
+    if args.market_cmd == "approve":
+        if not args.yes:
+            print(
+                "market approve: recusado — aprovar skill de terceiro é ato humano e "
+                "exige --yes. Leia o corpo em skills/pending/ antes; nada foi movido.",
+                file=sys.stderr,
+            )
+            return 1
+        kinds = _market_kinds(args.kinds)
+        r = market.approve(args.slug, kinds)
+        if r["status"] != "approved":
+            print(f"market approve: '{args.slug}' recusada — {r['reason']}", file=sys.stderr)
+            return 1
+        print(f"market approve {r['slug']} kinds={','.join(kinds) or '*'} -> {r['path']}")
+        return 0
+
+    linhas = market.installed()
+    for e in linhas:
+        kinds = ",".join(e["kinds"]) or "*"
+        print(
+            f"{e['status']:<9} {e['slug']:<24} {kinds:<12} {e['origin_sha256'][:12]} {e['origin']}"
+        )
+    print(f"market skills={len(linhas)}")
+    return 0
+
+
 def cmd_cache_gc(args: argparse.Namespace) -> int:
     """Poda o cache compartilhado de dependência até caber no teto.
 
@@ -2207,6 +2277,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="anexa o lift por skill (atribuição do ledger; sem amostra num braço = traço)",
     )
     skills.set_defaults(func=cmd_skills)
+
+    market = sub.add_parser(
+        "market", help="skills de terceiro: sincroniza registry, instala em pending, aprova"
+    )
+    market_sub = market.add_subparsers(dest="market_cmd", required=True)
+    m_sync = market_sub.add_parser(
+        "sync", help="clona/atualiza um registry de config/skills_market.toml em data/market"
+    )
+    m_sync.add_argument("name", help="nome do registry")
+    m_search = market_sub.add_parser(
+        "search", help="procura por nome/descrição nos registries já sincronizados"
+    )
+    m_search.add_argument("term", nargs="?", default="", help="termo; vazio lista tudo")
+    m_install = market_sub.add_parser(
+        "install", help="instala em skills/pending (quarentena; o loader NÃO lê pending)"
+    )
+    m_install.add_argument("id", help="id <registry>/<slug>, como `market search` imprime")
+    m_approve = market_sub.add_parser(
+        "approve", help="move de pending para skills/ — ato humano, exige --kinds e --yes"
+    )
+    m_approve.add_argument("slug", help="slug da skill em skills/pending")
+    m_approve.add_argument(
+        "--kinds",
+        required=True,
+        help="kinds separados por vírgula ('*' = sem restrição de kind); aprovar exige escolher",
+    )
+    m_approve.add_argument(
+        "--yes", action="store_true", help="confirmação humana; sem isto o comando recusa"
+    )
+    market_sub.add_parser(
+        "list", help="skills vindas do market: pending + aprovadas, com origem e sha"
+    )
+    market.set_defaults(func=cmd_market)
 
     actions = sub.add_parser("actions", help="lista as ações do registry + KEEP/DISCARD do ledger")
     actions.set_defaults(func=cmd_actions)
