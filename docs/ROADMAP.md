@@ -89,25 +89,33 @@ version history, per-case scores and reason strings. Deliverable: freeze an eval
 set for one existing skill, then show that a later write to the case file is
 rejected against the manifest.
 
-**D2 — tune-loop action.** A new action registered alongside the genome's 14,
+**D2 — tune-loop action.** ✅ **Done 2026-08-05** (`harness/improve/tune.py`,
+action `tune`, `harness tune`). A new action registered alongside the genome's 14,
 operating on skills. Dream candidates go in; the winning version comes out with
 its evidence attached (triple baseline, per-axis scores, reason string).
 Deliverable: `uv run harness actions` lists it, and one dream candidate has a
 recorded v1..vN chain where every retained version outscores its predecessor.
 
-**D3 — generalize the tunable artifact.** Lift the loop off skills and onto
+**D3 — generalize the tunable artifact.** ✅ **Done 2026-08-05** (`Tunable`
+protocol in `harness/improve/tunable.py`; first workflow bundle:
+`evals/config/workflows/hotfix/`). Lift the loop off skills and onto
 config TOMLs, workflow definitions, prompt templates and routing tables.
 Deliverable: the same action tunes a `config/workflows/*.toml` with no
 skill-specific code path, and the fail-closed validation against `NODE_IMPLS`
 still rejects a bad version before it is scored.
 
-**D4 — online case mining.** Ledger and episodic memory propose new eval cases;
+**D4 — online case mining.** ✅ **Done 2026-08-05** (`harness/evals/mining.py`,
+`harness eval mine` / `eval seal-case --yes`). Ledger and episodic memory propose new eval cases;
 the human seals them; sealed cases join the frozen suite for the next cycle.
 Deliverable: a case that originated from a real recorded failure appears in a
 frozen suite, with the human seal recorded, and the artifact's score moves
 because of it.
 
-**D5 — runtime topology governor.** (Adopted 2026-08-05 from the "dynamic
+**D5 — runtime topology governor.** ✅ **Done 2026-08-05, partial by design**
+(`harness/governor/reorg.py` + hooks in `run_graph.py`; R1/R4 have material
+effect, R2/R3 are recorded-only until a safe effect path exists — see the
+mid-run insertion and fleet-collapse caveats in the reorg module).
+(Adopted 2026-08-05 from the "dynamic
 agent org" pattern: the org restructures itself mid-run; the extra structure
 exists only while the work needs it.) Rule-driven reorganization fed by the
 ledger, never by the eval scoreboard — frozen evals stay the only judge of
