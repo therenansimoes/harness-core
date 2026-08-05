@@ -465,8 +465,11 @@ def test_runner_real_e_carimbado_na_cadeia(env, monkeypatch):
         return "resposta do modelo com alfa e beta"
 
     monkeypatch.setattr(tune, "_run_case_real", real)
+    monkeypatch.setattr(tune, "_probe_real", lambda *a, **k: "")
 
     out = tune.run_tune(SKILL, rounds=0, trials=1, runner=tune.RUNNER_REAL)
+
+    assert (out.runner, out.probe) == (tune.RUNNER_REAL, "ok")
 
     # O extrativo (o stub do fixture) não foi chamado NENHUMA vez: runner é
     # escolhido uma vez e vale para baseline e cadeia inteira.
@@ -478,6 +481,104 @@ def test_runner_real_e_carimbado_na_cadeia(env, monkeypatch):
     assert [r["runner"] for r in rows] == [tune.RUNNER_REAL]
     md = (tune.chain_dir(SKILL) / "EVALUATION.md").read_text(encoding="utf-8")
     assert f"Runner: `{tune.RUNNER_REAL}`" in md.splitlines()[2]
+
+
+def test_probe_reprova_e_o_run_inteiro_vira_extrativo(env, monkeypatch):
+    """Probe pré-cadeia: uma falha decide o run TODO, não caso a caso.
+
+    Antes disto cada caso pagava o `RUN_TIMEOUT_S` inteiro antes de cair no
+    extrativo sozinho — cadeia heterogênea e ~28 x 60s de tempo morto.
+    """
+    _skill_tree(env)
+    reais = []
+    monkeypatch.setattr(tune, "_run_case_real", lambda *a, **k: reais.append(1) or "x")
+    monkeypatch.setattr(tune, "_probe_real", lambda *a, **k: "TuneError: timeout")
+
+    out = tune.run_tune(SKILL, rounds=0, trials=1, runner=tune.RUNNER_REAL)
+
+    # ZERO chamada real depois do probe: o fallback é do run, não do caso.
+    assert reais == []
+    assert env.runner.calls == ["s-1", "s-1"]
+    assert (out.runner, out.probe) == (tune.RUNNER_PROBE_FALLBACK, "TuneError: timeout")
+    rows = json.loads((tune.chain_dir(SKILL) / "chain.json").read_text(encoding="utf-8"))
+    assert [r["runner"] for r in rows] == [tune.RUNNER_PROBE_FALLBACK]
+    md = (tune.chain_dir(SKILL) / "EVALUATION.md").read_text(encoding="utf-8")
+    assert f"Runner: `{tune.RUNNER_PROBE_FALLBACK}`" in md.splitlines()[2]
+
+
+def test_probe_roda_uma_vez_no_primeiro_caso_de_treino(env, monkeypatch):
+    """Um probe, no caso de treino — nunca no holdout, nunca um por caso."""
+    _skill_tree(env)
+    vistos = []
+
+    def probe(text, case, *, model=None, max_usd=0.0):
+        vistos.append((case.id, text))
+        return ""
+
+    monkeypatch.setattr(tune, "_probe_real", probe)
+    monkeypatch.setattr(tune, "_run_case_real", lambda text, case, **k: "alfa e beta")
+
+    tune.run_tune(SKILL, rounds=0, trials=1, runner=tune.RUNNER_REAL)
+
+    assert [c for c, _ in vistos] == ["s-1"]
+    # O artefato vai junto: probe sem orientação não exercita o mesmo caminho.
+    assert vistos[0][1] == V1
+
+
+def test_probe_nao_roda_no_runner_extrativo(env, monkeypatch):
+    """Extrativo não depende de servidor: sondar seria gastar rede à toa."""
+    _skill_tree(env)
+    monkeypatch.setattr(tune, "_probe_real", lambda *a, **k: pytest.fail("probe no extrativo"))
+
+    out = tune.run_tune(SKILL, rounds=0, trials=1)
+
+    assert (out.runner, out.probe) == (tune.RUNNER_EXTRACTIVE, "")
+
+
+def test_probe_sem_lm_studio_reprova_sem_chamar_backend(monkeypatch):
+    """A sonda de zero token já responde: nem chega a abrir um run."""
+    _no_lmstudio(monkeypatch)
+    case = EvalCase(id="s-1", kind="code_fix", prompt="p")
+
+    assert "indisponível" in tune._probe_real(V1, case, model=None, max_usd=1.0)
+
+
+def test_probe_reprova_com_resposta_vazia(monkeypatch):
+    """Thinking que não vira texto é reprovação, não aprovação silenciosa."""
+    _route(monkeypatch, _FakeChat(resposta="   "))
+    case = EvalCase(id="s-1", kind="code_fix", prompt="p")
+
+    # `_call` já levanta em texto vazio; a guarda extra é para backend que
+    # devolva só espaço em branco.
+    assert tune._probe_real(V1, case, model=None, max_usd=1.0) != ""
+
+
+def test_cli_diz_o_que_o_probe_decidiu(env, monkeypatch, capsys):
+    """`harness tune --runner real` que caiu no extrativo tem que DIZER isso —
+    senão a única pista fica dentro do chain.json."""
+    from harness import cli
+
+    _skill_tree(env)
+    monkeypatch.setattr(tune, "_probe_real", lambda *a, **k: "TuneError: timeout")
+    args = SimpleNamespace(
+        artifact=SKILL, rounds=0, model=tune.DEFAULT_MODEL, runner=tune.RUNNER_REAL
+    )
+
+    assert cli.cmd_tune(args) == 0
+
+    saida = capsys.readouterr().out
+    assert "probe: TuneError: timeout" in saida
+    assert f"(runner={tune.RUNNER_PROBE_FALLBACK})" in saida
+
+
+def test_probe_aprova_quando_o_modelo_responde(monkeypatch):
+    fake = _FakeChat()
+    _route(monkeypatch, fake)
+    case = EvalCase(id="s-1", kind="code_fix", prompt="p")
+
+    assert tune._probe_real(V1, case, model=None, max_usd=1.0) == ""
+    # UMA chamada: o probe é uma pergunta, não uma medição.
+    assert len(fake.reqs) == 1
 
 
 def test_runner_desconhecido_para_antes_de_medir(env):

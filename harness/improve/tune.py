@@ -28,7 +28,10 @@ saída é o próprio artefato — determinístico, zero token, o default) e `rea
 saída é a resposta do modelo local seguindo o artefato). O juiz é o mesmo nos
 dois: régua determinística, sem LLM. O modo escolhido vale para a cadeia
 INTEIRA e fica carimbado no `chain.json` e no `EVALUATION.md` — nota tirada com
-runner diferente da versão anterior não é comparável com ela.
+runner diferente da versão anterior não é comparável com ela. Quem pede `real`
+paga UM probe antes de qualquer medição: modelo que não responde ali derruba o
+run inteiro para extrativo (carimbo `extractive(fallback:probe)`) em vez de
+deixar metade dos casos caindo no fallback um a um.
 """
 
 from __future__ import annotations
@@ -120,6 +123,11 @@ RUNNER_EXTRACTIVE = "extractive"
 RUNNER_REAL = "real"
 RUNNERS = (RUNNER_EXTRACTIVE, RUNNER_REAL)
 DEFAULT_RUNNER = RUNNER_EXTRACTIVE
+# Carimbo de quem pediu `real` e não conseguiu: NÃO é um runner que se pede na
+# linha de comando (por isso fora de `RUNNERS`), é o que ficou gravado. Existe
+# porque `extractive` puro no chain.json esconderia que a intenção era medir
+# comportamento — e cadeia medida assim não é comparável com a de ontem.
+RUNNER_PROBE_FALLBACK = f"{RUNNER_EXTRACTIVE}(fallback:probe)"
 # Teto POR CASO. 60s (o primeiro palpite) reprovou na bancada: o 9B local é
 # modelo de RACIOCÍNIO — a medição de um caso de `python-fixes` gastou ~600
 # tokens só pensando antes da primeira letra da resposta, ~50s de relógio, e
@@ -193,6 +201,13 @@ class TuneOutcome:
     chain: list[TuneVersion]
     winner: int
     evaluation_md: str
+    # Quem REALMENTE mediu esta cadeia — o mesmo carimbo do chain.json. Pode
+    # divergir do runner pedido: `real` que reprova no probe vira
+    # `RUNNER_PROBE_FALLBACK`. Default para não quebrar outcome montado à mão.
+    runner: str = DEFAULT_RUNNER
+    # Uma linha sobre o probe pré-cadeia: "" quando nem houve probe (runner
+    # extrativo), "ok" quando o modelo respondeu, ou o motivo da reprovação.
+    probe: str = ""
 
     @property
     def winning(self) -> TuneVersion:
@@ -248,6 +263,8 @@ def run_tune(
 
     `runner` é escolhido UMA vez e vale para as três medições de baseline e para
     a cadeia inteira: runner que muda no meio compara versão com régua diferente.
+    É por isso que o probe do `real` roda ANTES do controle — decidir depois já
+    seria comparar medição de régua diferente dentro do mesmo run.
     """
     if runner not in RUNNERS:
         raise ValueError(f"runner desconhecido: {runner!r} (esperado {' ou '.join(RUNNERS)})")
@@ -262,6 +279,23 @@ def run_tune(
     hold_ids = {c.id for c in hold_cases}
     weights = {c.id: c.weight for c in cases}
 
+    # O texto sobe para antes da primeira medição por causa do probe: o probe é
+    # um caso de verdade e caso de verdade precisa do artefato. Ele continua
+    # sendo o v1 do parágrafo lá embaixo.
+    text = candidate if candidate is not None else adapter.read()
+    stamp, probe = runner, ""
+    if runner == RUNNER_REAL:
+        # ANTES de qualquer medição, inclusive a do controle: a decisão do probe
+        # vale para o run INTEIRO, e o `none_agg` medido no runner errado já
+        # deixaria a cadeia heterogênea.
+        alvo = train_cases[0] if train_cases else (cases[0] if cases else None)
+        motivo = "" if alvo is None else _probe_real(text, alvo, model=model, max_usd=max_usd)
+        if motivo:
+            stamp, probe = RUNNER_PROBE_FALLBACK, motivo
+            adapter = tunable_for(artifact, model=model, max_usd=max_usd, runner=RUNNER_EXTRACTIVE)
+        else:
+            probe = "ok"
+
     # Controle: o que sai SEM artefato nenhum. Passa por fora do `validate` de
     # propósito — texto vazio nunca é uma skill válida, e barrá-lo aqui mataria
     # justamente a medição que diz se o artefato paga o próprio custo.
@@ -270,7 +304,6 @@ def run_tune(
     # v1 é o incumbente (é o que já está no disco), não uma candidata: o gate
     # julga de v2 em diante. v1 inválida encerra antes do loop — não há nada
     # medido para reescrever.
-    text = candidate if candidate is not None else adapter.read()
     errs = adapter.validate(text)
     best: TuneVersion | None = None
     if errs:
@@ -331,9 +364,15 @@ def run_tune(
         "tuned": best.agg if best is not None else _EMPTY,
     }
     md = render_evaluation_md(artifact, scores=win.agg, baseline=baseline)
-    _persist(artifact, chain, md, runner)
+    _persist(artifact, chain, md, stamp)
     return TuneOutcome(
-        artifact=artifact, baseline=baseline, chain=chain, winner=winner, evaluation_md=md
+        artifact=artifact,
+        baseline=baseline,
+        chain=chain,
+        winner=winner,
+        evaluation_md=md,
+        runner=stamp,
+        probe=probe,
     )
 
 
@@ -460,21 +499,56 @@ def _run_case_real(text: str, case: EvalCase, *, model: str | None, max_usd: flo
     if backend == TUNE_BACKEND:
         return _run_case(text, case, model=model, max_usd=max_usd)
     try:
-        return _call(
-            f"{case_prompt(text, case)}\n\n{RUN_ORDER}",
-            model=m,
-            max_usd=max_usd,
-            purpose="run",
-            backend=backend,
-            # Leitura só: o caso é responder, não mexer em arquivo — e turno
-            # gasto em `write_file` é turno que não vira resposta.
-            tools=("read_file",),
-            max_turns=RUN_MAX_TURNS,
-            timeout_s=RUN_TIMEOUT_S,
-            chat_ok=True,
-        )
+        return _call_case(text, case, model=m, max_usd=max_usd, backend=backend)
     except Exception:
         return _run_case(text, case, model=model, max_usd=max_usd)
+
+
+def _call_case(
+    text: str, case: EvalCase, *, model: str | None, max_usd: float, backend: str
+) -> str:
+    """A chamada crua de um caso no modelo — levanta em vez de cair no extrativo.
+
+    Separada do `_run_case_real` porque o probe pré-cadeia precisa do MESMO
+    caminho SEM a rede de segurança: probe que cai no fallback sozinho não
+    responde a pergunta que o probe existe para fazer.
+    """
+    return _call(
+        f"{case_prompt(text, case)}\n\n{RUN_ORDER}",
+        model=model,
+        max_usd=max_usd,
+        purpose="run",
+        backend=backend,
+        # Leitura só: o caso é responder, não mexer em arquivo — e turno
+        # gasto em `write_file` é turno que não vira resposta.
+        tools=("read_file",),
+        max_turns=RUN_MAX_TURNS,
+        timeout_s=RUN_TIMEOUT_S,
+        chat_ok=True,
+    )
+
+
+def _probe_real(text: str, case: EvalCase, *, model: str | None, max_usd: float) -> str:
+    """UM caso de verdade ANTES da cadeia. "" = passou; senão, o motivo da falha.
+
+    Sem isto, cada caso que falha paga o `RUN_TIMEOUT_S` inteiro e cai no
+    extrativo sozinho: a cadeia sai HETEROGÊNEA (parte medida por comportamento,
+    parte por substring no artefato) e a conta de tempo morto é o número de casos
+    x o teto. Um probe responde a mesma pergunta uma vez só, e a resposta vale
+    para o run inteiro — homogêneo e honesto, que é o que a nota precisa ser.
+
+    O fallback POR CASO continua existindo no `_run_case_real`: probe que passa
+    não promete que os 28 casos seguintes passam, e falha transitória no meio da
+    cadeia não pode derrubar o tune noturno.
+    """
+    backend, m = _rewrite_target(model)
+    if backend == TUNE_BACKEND:
+        return "modelo local indisponível (preflight)"
+    try:
+        out = _call_case(text, case, model=m, max_usd=max_usd, backend=backend)
+    except Exception as exc:
+        return f"{type(exc).__name__}: {exc}"
+    return "" if out.strip() else "resposta vazia"
 
 
 def _call_runner(prompt: str, *, model: str | None, max_usd: float) -> str:

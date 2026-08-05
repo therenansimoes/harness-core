@@ -164,6 +164,142 @@ def test_timeout_helper_gives_up(tmp_path):
     assert da._with_timeout(lambda: 42, 5) == 42
 
 
+def test_timeout_helper_aborts_before_raising():
+    """`on_timeout` é o abort da conexão: roda no timeout, e SÓ nele."""
+    import time
+
+    chamadas = []
+    with pytest.raises(TimeoutError):
+        da._with_timeout(lambda: time.sleep(5), 0.05, on_timeout=lambda: chamadas.append("abort"))
+    assert chamadas == ["abort"]
+    assert da._with_timeout(lambda: 42, 5, on_timeout=lambda: chamadas.append("no")) == 42
+    assert chamadas == ["abort"]
+
+
+def test_abort_http_closes_client_and_survives_failure():
+    """Fail-open: provider sem `root_client` e close que levanta não param a fila."""
+
+    class Client:
+        def __init__(self, boom=False):
+            self.fechado = False
+            self.boom = boom
+
+        def close(self):
+            if self.boom:
+                raise RuntimeError("já fechado")
+            self.fechado = True
+
+    class Model:
+        def __init__(self, client):
+            self.root_client = client
+
+    bom, ruim = Client(), Client(boom=True)
+    da._abort_http([Model(ruim), object(), Model(bom)])
+    assert (bom.fechado, ruim.fechado) == (True, False)
+
+
+def test_model_for_registers_client_for_abort(monkeypatch):
+    """Sem o registro o abort não tem o que fechar: o chat model nasce dentro do
+    `_build_agent` e a assinatura dele é seam de monkeypatch em meia dúzia de
+    testes — por isso a coleta é por contextvar."""
+    pytest.importorskip("langchain_openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "lm-studio")
+    coletados = []
+    token = da._HTTP_CLIENTS.set(coletados)
+    try:
+        modelo = da._model_for("openai:qwen3.5-9b-mlx")
+    finally:
+        da._HTTP_CLIENTS.reset(token)
+    assert coletados == [modelo]
+    # É este handle que o `_abort_http` fecha para derrubar o `recv` pendurado.
+    assert getattr(modelo, "root_client", None) is not None
+
+
+def test_timeout_helper_runs_in_daemon_thread():
+    """Daemon é o que deixa o processo SAIR com um invoke abandonado em voo."""
+    caixa = {}
+    da._with_timeout(
+        lambda: caixa.setdefault("daemon", __import__("threading").current_thread().daemon), 5
+    )
+    assert caixa["daemon"] is True
+
+
+def _hang_server(fechada):
+    """Servidor que responde /v1/models e ENGASGA no /v1/chat/completions.
+
+    O formato de um LM Studio travado: a conexão é aceita e nunca respondida.
+    `fechada` é setado quando o CLIENTE fecha a conexão — é isso que o abort do
+    timeout tem que provocar.
+    """
+    import socket
+    import threading
+
+    def handle(conn):
+        data = b""
+        try:
+            while b"\r\n\r\n" not in data:
+                c = conn.recv(65536)
+                if not c:
+                    return
+                data += c
+            if "/v1/models" in data.split(b"\r\n", 1)[0].decode():
+                body = json.dumps({"data": [{"id": "hang-model"}]}).encode()
+                head = f"HTTP/1.1 200 OK\r\nContent-Length: {len(body)}\r\n\r\n".encode()
+                conn.sendall(head + body)
+                conn.close()
+                return
+            while conn.recv(65536):  # drena o corpo e espera o cliente desistir
+                pass
+            fechada.set()
+        except OSError:
+            fechada.set()
+
+    def serve(sock):
+        while True:
+            try:
+                conn, _ = sock.accept()
+            except OSError:
+                return
+            threading.Thread(target=handle, args=(conn,), daemon=True).start()
+
+    srv = socket.socket()
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(8)
+    threading.Thread(target=serve, args=(srv,), daemon=True).start()
+    return srv
+
+
+def test_timeout_kills_the_hung_connection(tmp_path, monkeypatch):
+    """Aceite do abort: o timeout derruba a conexão, não só desiste dela.
+
+    Sem isto a thread abandonada fica no `recv` até o timeout do PRÓPRIO cliente
+    openai (600s x 3 tentativas): meia hora de conexão viva no servidor por caso
+    abandonado, e um runner por caso entope o LM Studio em poucos minutos.
+    """
+    import threading
+    import time
+
+    pytest.importorskip("deepagents")
+    fechada = threading.Event()
+    srv = _hang_server(fechada)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{srv.getsockname()[1]}/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "x")
+    req = ExecRequest(
+        prompt="oi",
+        workspace=tmp_path,
+        model="openai:hang-model",
+        timeout_s=1.5,
+        trace_path=tmp_path / "trace.jsonl",
+    )
+    res = da.DeepagentsBackend(model="openai:hang-model").execute(req)
+    assert res.exit_reason == "timeout"
+    t0 = time.monotonic()
+    assert fechada.wait(10), "conexão continuou pendurada no servidor depois do timeout"
+    assert time.monotonic() - t0 < 10
+    srv.close()
+
+
 # --- allowlist de tools (precisa da lib, não da rede) ----------------------
 
 

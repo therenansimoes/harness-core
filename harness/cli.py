@@ -1607,9 +1607,15 @@ def cmd_tune(args: argparse.Namespace) -> int:
     except (OSError, ValueError) as exc:
         print(f"tune falhou: {exc}", file=sys.stderr)
         return 1
+    if outcome.probe:
+        # O probe decidiu o runner do run INTEIRO; sem esta linha, "por que a
+        # cadeia inteira saiu extrativa se pedi real?" só se responde abrindo o
+        # chain.json.
+        print(f"probe: {outcome.probe}")
     for v in outcome.chain:
         print(f"v{v.version} overall={v.agg.overall:.3f} {v.reason}")
-    print(f"vencedor: v{outcome.winner} (runner={args.runner})")
+    # `outcome.runner` e não `args.runner`: quem carimbou a cadeia foi o run.
+    print(f"vencedor: v{outcome.winner} (runner={outcome.runner})")
     return 0
 
 

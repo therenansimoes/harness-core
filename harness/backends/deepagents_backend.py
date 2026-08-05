@@ -16,6 +16,7 @@ import tomllib
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Sequence
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -67,6 +68,13 @@ CONTEXT_KEEP_TOOL_RESULTS = 2
 TRUNCATED_FINISH_REASONS = frozenset({"length", "max_tokens", "max_output_tokens"})
 
 _INSTALL_HINT = "deepagents não instalado — pip install harness-core[deepagents]"
+
+# Chat models instanciados para o request em curso, para o `_abort_http` alcançar
+# o cliente HTTP no timeout. ContextVar e não global: dois runs podem estar em
+# threads diferentes do mesmo processo, e fechar a conexão do vizinho seria pior
+# que o vazamento que isto conserta. `None` = ninguém está coletando (chamada de
+# `_model_for` fora de um `execute`), e aí nada é registrado.
+_HTTP_CLIENTS: ContextVar[list[Any] | None] = ContextVar("harness_http_clients", default=None)
 
 # Contrato com o prompt-builder: se este arquivo existir, seu conteúdo é
 # prependado às instructions do agente; ausente => comportamento atual.
@@ -140,7 +148,16 @@ class DeepagentsBackend:
         _clear_blocker(req.workspace)
 
         before = _snapshot(req.workspace, exclude=req.trace_path)
-        agent, usage_cb = _build_agent(req)
+        # Handles de cliente HTTP deste request, para o abort do timeout (ver
+        # `_abort_http`). Coletados por contextvar porque quem instancia o chat
+        # model é o `_build_agent` lá embaixo e a assinatura dele é seam de
+        # monkeypatch em meia dúzia de testes.
+        clients: list[Any] = []
+        token = _HTTP_CLIENTS.set(clients)
+        try:
+            agent, usage_cb = _build_agent(req)
+        finally:
+            _HTTP_CLIENTS.reset(token)
         tracer = _trace_collector()
         config: dict[str, Any] = {
             # `recursion_limit` conta passos do grafo (modelo + tools + middleware),
@@ -151,9 +168,14 @@ class DeepagentsBackend:
 
         payload = {"messages": _payload_messages(req)}
         try:
-            state = _with_timeout(lambda: agent.invoke(payload, config), req.timeout_s)
+            state = _with_timeout(
+                lambda: agent.invoke(payload, config),
+                req.timeout_s,
+                on_timeout=lambda: _abort_http(clients),
+            )
         except TimeoutError:
-            # Cópia: a thread do invoke não morre no timeout e segue mutando a lista.
+            # Cópia: a thread do invoke pode levar ~1s para desenrolar depois do
+            # abort e até lá segue mutando a lista.
             partial = list(tracer.messages)
             _write_trace(req.trace_path, partial, error=f"timeout após {req.timeout_s}s")
             return _result(
@@ -740,9 +762,17 @@ def _model_for(model: str | None, adapter: Any = None):
         try:
             from langchain.chat_models import init_chat_model
 
-            return init_chat_model(model, temperature=MODEL_TEMPERATURE, **kwargs)
+            return _track(init_chat_model(model, temperature=MODEL_TEMPERATURE, **kwargs))
         except Exception:
             continue
+    return model
+
+
+def _track(model: Any) -> Any:
+    """Anota o chat model na coleta do request em curso. Devolve o próprio."""
+    sink = _HTTP_CLIENTS.get()
+    if sink is not None:
+        sink.append(model)
     return model
 
 
@@ -778,7 +808,7 @@ def _adapter_model(model: str | None, adapter: Any):
     try:
         from langchain.chat_models import init_chat_model
 
-        return init_chat_model(f"{OPENAI_PREFIX}{adapter.served_model}", **kwargs)
+        return _track(init_chat_model(f"{OPENAI_PREFIX}{adapter.served_model}", **kwargs))
     except Exception:
         return _model_for(model)
 
@@ -1065,12 +1095,18 @@ def _trace_collector() -> Any:
     return _Collector()
 
 
-def _with_timeout(fn: Callable[[], Any], timeout_s: float) -> Any:
+def _with_timeout(
+    fn: Callable[[], Any], timeout_s: float, on_timeout: Callable[[], None] | None = None
+) -> Any:
     """Roda `fn` numa thread daemon e desiste depois de `timeout_s`.
 
     Thread daemon em vez de `ThreadPoolExecutor`: o executor registra um
     `atexit` que espera a thread, o que faria o processo travar no fim justamente
     no caso de timeout (o invoke não é interrompível).
+
+    `on_timeout` roda ANTES de levantar: é a chance de derrubar por fora o que a
+    thread abandonada está fazendo (ver `_abort_http`). Best-effort e fail-open —
+    o timeout já foi decidido, abort que falha não muda o veredito.
     """
     box: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
 
@@ -1084,10 +1120,43 @@ def _with_timeout(fn: Callable[[], Any], timeout_s: float) -> Any:
     try:
         ok, value = box.get(timeout=timeout_s)
     except queue.Empty:
+        if on_timeout is not None:
+            try:
+                on_timeout()
+            except Exception:
+                pass
         raise TimeoutError(f"invoke passou de {timeout_s}s") from None
     if not ok:
         raise value
     return value
+
+
+def _abort_http(models: Sequence[Any]) -> None:
+    """Fecha o cliente HTTP dos chat models do request — o abort do invoke.
+
+    A thread do invoke não é interrompível, mas o que ela está fazendo quando
+    estoura o prazo é um `recv` no socket do servidor local. Fechar o
+    `root_client` (o `openai.OpenAI` que o langchain-openai monta) fecha o pool
+    do httpx, o `recv` morre em `APIConnectionError` e a thread desenrola em ~1s
+    — medido contra um servidor que aceita a conexão e nunca responde.
+
+    Sem isto a conexão fica pendurada até o timeout do PRÓPRIO cliente openai,
+    que é 600s com 2 retries: meia hora de conexão viva no LM Studio por caso
+    abandonado, e um runner por caso entope o servidor em poucos minutos.
+
+    Só o cliente síncrono: `root_async_client.close()` é corrotina e o invoke
+    daqui é síncrono. Fail-open como o resto do arquivo — provider sem
+    `root_client` (anthropic, gemini) simplesmente não tem abort e cai no
+    comportamento de antes.
+    """
+    for model in models:
+        close = getattr(getattr(model, "root_client", None), "close", None)
+        if close is None:
+            continue
+        try:
+            close()
+        except Exception:
+            pass
 
 
 # --------------------------------------------------------------------------- resultado
