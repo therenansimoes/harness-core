@@ -132,6 +132,8 @@ def import_bundle(bundle_path: Path | str, root: Path | str | None = None) -> di
 
 def _exportable_skills(root: Path) -> list[Path]:
     """`skills/*.md` da raiz, ordenado. Subdir nenhum entra — attic inclusive."""
+    # Glob da raiz, então `skills/pending/` (quarentena do market) também fica:
+    # skill de terceiro não aprovada aqui não viaja aprovada para outro repo.
     if not root.is_dir():
         return []
     return sorted(p for p in root.glob("*.md") if p.is_file())
