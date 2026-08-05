@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "artifact": "config/workflows/hotfix.toml",
+  "artifact_sha256": "866cf54df4872f6726e0f7712983831dc86bacead3e3a879b1c725df7fcff207",
+  "bundle_sha256": "4f39cc709b5f114e0d02bce5113c3dca51ada852daf49e7ccb713f0ed1c78ff6",
+  "files": {
+    "cases.jsonl": "8417be9d9cb81dca26e30979bf5d1caab28f51c420bc34da1882d63b69518280"
+  },
+  "case_count": 3,
+  "frozen_at": "2026-08-05T07:27:15.957345Z",
+  "note": "",
+  "history": []
+}

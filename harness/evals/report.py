@@ -5,29 +5,50 @@ Derivado por definição — tudo aqui já está no `manifest.json` e no
 JSON: qual versão do exame está valendo, quando congelou, e quais casos ela
 tem.
 
-Em D1 a coluna `score` é `—`: congelar o exame e MEDIR são passos separados de
-propósito, e um score inventado agora seria pior que nenhum. A coluna existe
-desde já para o diff de D2 ser só o preenchimento.
+Sem `scores` a coluna é `—`: congelar o exame e MEDIR são passos separados de
+propósito, e um score inventado seria pior que nenhum. Com `scores`, o mesmo
+relatório ganha a seção de eixos e a linha de baseline — o arquivo é UM só para
+que "a v2 mediu isto" continue apontando para um caminho só.
+
+O placar é POR EIXO, não por caso: o `Aggregate` é a soma ponderada de todos os
+trials de todos os casos, e inventar uma linha por caso a partir dele seria
+rateio, não medição. Por isso a coluna de caso continua `—` mesmo com nota.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from harness.evals.bundle import evaluation_path, load_cases, manifest_path
 from harness.evals.freeze import NOT_FROZEN, Manifest, load_manifest
+from harness.evals.score import Aggregate
 
 NO_DATA = "—"
 NOT_SCORED = "not scored (D1)"
+SCORED = "agregado em ## scores"
 SHA_WIDTH = 12
 
+# Ordem fixa das colunas de baseline: sem artefato, o que estava no disco, o que
+# saiu do loop. Ler as três lado a lado é a única forma de separar "a skill
+# ajuda" de "o modelo já resolvia".
+BASELINE_ARMS = ("none", "draft", "tuned")
 
-def render_evaluation_md(artifact: str, root: Path | None = None) -> str:
+
+def render_evaluation_md(
+    artifact: str,
+    root: Path | None = None,
+    scores: Aggregate | None = None,
+    baseline: Mapping[str, Aggregate] | None = None,
+) -> str:
     """O markdown do bundle. Sem manifest não há relatório: `ValueError`.
 
     Relatar exame não congelado seria relatar uma foto que ninguém tirou — e o
     ponto do arquivo é ser citável ("a v2 mediu isto"). Fecha.
+
+    `scores=None` mantém o relatório de exame congelado e não medido; é o que o
+    `harness eval report` emite, e é honesto — ele não roda o tuner.
     """
     if not manifest_path(artifact, root).is_file():
         raise ValueError(f"{NOT_FROZEN}: {artifact}")
@@ -47,6 +68,7 @@ def render_evaluation_md(artifact: str, root: Path | None = None) -> str:
         "| --- | --- | --- | --- | --- |",
     ]
     lines += [_version_row(v) for v in _versions(m)]
+    lines += _scores_section(scores, baseline)
     lines += [
         "",
         "## casos",
@@ -54,11 +76,41 @@ def render_evaluation_md(artifact: str, root: Path | None = None) -> str:
         "| id | kind | weight | trials | score | reason |",
         "| --- | --- | --- | --- | --- | --- |",
     ]
+    reason = NOT_SCORED if scores is None else SCORED
     lines += [
-        f"| {c.id} | {c.kind} | {c.weight:g} | {c.trials} | {NO_DATA} | {NOT_SCORED} |"
+        f"| {c.id} | {c.kind} | {c.weight:g} | {c.trials} | {NO_DATA} | {reason} |"
         for c in load_cases(artifact, root)
     ]
     return "\n".join(lines) + "\n"
+
+
+def _scores_section(
+    scores: Aggregate | None, baseline: Mapping[str, Aggregate] | None
+) -> list[str]:
+    """A seção de nota. Vazia quando ninguém mediu — seção com traço em toda
+    célula seria ruído com cara de dado."""
+    if scores is None:
+        return []
+    lines = [
+        "",
+        "## scores",
+        "",
+        f"Nota da versão: **{scores.overall:.3f}** (média dos limites inferiores de "
+        f"Wilson) · {scores.n} trials.",
+        "",
+        "| eixo | succ | n | lower |",
+        "| --- | --- | --- | --- |",
+    ]
+    lines += [
+        f"| {axis} | {succ} | {n} | {scores.lower.get(axis, 0.0):.3f} |"
+        for axis, (succ, n) in sorted(scores.per_axis.items())
+    ]
+    if baseline:
+        cells = " · ".join(
+            f"{arm} {baseline[arm].overall:.3f}" for arm in BASELINE_ARMS if arm in baseline
+        )
+        lines += ["", f"baseline: {cells}"]
+    return lines
 
 
 def write_evaluation_md(artifact: str, root: Path | None = None) -> Path:

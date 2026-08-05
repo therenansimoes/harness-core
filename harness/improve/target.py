@@ -316,6 +316,7 @@ _OPTIONAL_ACTION_MODULES = (
     "harness.improve.topology_evolve",
     "harness.improve.decompose",
     "harness.improve.procedural",
+    "harness.improve.tune",
 )
 
 

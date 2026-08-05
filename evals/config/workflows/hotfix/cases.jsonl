@@ -1,0 +1,3 @@
+{"id":"hf-001","kind":"workflow","prompt":"a espinha do hotfix: plan, execute, verify, gate e record","expect":{"must_mention":["plan","execute","verify","gate","record"]},"axes":["structure","coverage"],"weight":1.0,"trials":4}
+{"id":"hf-002","kind":"workflow","prompt":"as quatro saidas condicionais do gate no hotfix","expect":{"must_mention":["accept","retry","escalate","revert"]},"axes":["structure","coverage"],"weight":1.5,"trials":4}
+{"id":"hf-003","kind":"workflow","prompt":"o caminho enxuto: route e provision antes do execute, sem measure","expect":{"must_mention":["route","provision","execute"]},"axes":["structure","coverage"],"weight":1.0,"trials":4}
