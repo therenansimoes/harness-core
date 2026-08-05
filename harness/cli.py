@@ -103,7 +103,21 @@ def load_unit(path: Path) -> UnitSpec:
         adapter=str(data["adapter"]) if data.get("adapter") else None,
         deps=_load_str_list(unit_file, "deps", data.get("deps")),
         files=_load_str_list(unit_file, "files", data.get("files")),
+        value_usd=_load_value_usd(data.get("value_usd")),
     )
+
+
+def _load_value_usd(raw: object) -> float:
+    """`value_usd` do unit.toml -> float. Ausente, torto ou negativo = 0.0.
+
+    Único campo da unit que degrada em vez de levantar: valor é sinal
+    ECONÔMICO, não contrato de execução. Unidade não roda por causa de um preço
+    mal escrito seria o reorg derrubando run — 0.0 já significa "desconhecido",
+    e desconhecido não condena ninguém.
+    """
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return 0.0
+    return max(0.0, float(raw))
 
 
 def _load_str_list(unit_file: Path, field_name: str, raw: object) -> tuple[str, ...]:

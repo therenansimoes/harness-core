@@ -513,9 +513,9 @@ def _route(state: RunState, config=None) -> dict:
     deadline = _gov_deadline(state["run_id"], _db(config), gov)
 
     # Reorg: o governor aperta a topologia dada, este pergunta se a topologia
-    # está certa. Só dois efeitos aqui — delta de tier e freio de escalada; as
-    # outras duas regras são decisões gravadas no gate. Try largo de propósito:
-    # reorg é opinião sobre o desenho do run, nunca motivo para derrubá-lo.
+    # está certa. Quatro efeitos: delta de tier, freio de escalada e a frota do
+    # executor (papel exigido / colapso). Try largo de propósito: reorg é opinião
+    # sobre o desenho do run, nunca motivo para derrubá-lo.
     try:
         selection = _reorg_route(state, selection, attempt, config, gov)
     except Exception:
@@ -523,6 +523,14 @@ def _route(state: RunState, config=None) -> dict:
 
     adapter = _adapter(state, selection, attempt)
     selection = replace(selection, adapter=adapter)
+
+    # Frota no trace só quando o reorg mexeu nela: run normal mantém o evento
+    # `route` byte a byte igual ao de antes.
+    frota: dict[str, Any] = {}
+    if selection.roles_allow is not None:
+        frota["roles_allow"] = list(selection.roles_allow)
+    if selection.roles_required:
+        frota["roles_required"] = list(selection.roles_required)
 
     return {
         "selection": selection,
@@ -539,6 +547,7 @@ def _route(state: RunState, config=None) -> dict:
                 attempt=attempt,
                 # `reasons` no trace: sem ela a escolha vira número sem porquê.
                 reasons=list(selection.reasons),
+                **frota,
             )
         ],
     }
@@ -578,7 +587,9 @@ def _reorg_spent(run_id: str, db: Path, attempt: int) -> float:
     return spent
 
 
-def _reorg_signals(state: RunState, selection: Selection | None, attempt: int, config):
+def _reorg_signals(
+    state: RunState, selection: Selection | None, attempt: int, config, cfg: reorg.ReorgConfig
+):
     """O sinal das regras de reorg, montado igual no route e no gate.
 
     `backend=None` de propósito: a repetição que interessa é a da unidade e do
@@ -586,20 +597,23 @@ def _reorg_signals(state: RunState, selection: Selection | None, attempt: int, c
     de tier troca o backend, e a evidência que justificou o bump sumiria da
     janela na passagem seguinte, revertendo a decisão que acabou de ser tomada.
 
-    `task_value_usd=0.0` porque NÃO EXISTE fonte de valor de tarefa no harness
-    ainda; com valor desconhecido a regra de custo não dispara (ver `decide`).
+    O valor da tarefa sai de `reorg.task_value` — o que a unidade declarou, ou a
+    tabela por kind do `[reorg]`. `getattr` porque checkpoint gravado antes do
+    campo existir devolve uma `UnitSpec` velha, e retomar run antigo não pode
+    estourar aqui; sem valor a regra de custo dorme (ver `decide`).
     """
     unit = state["unit"]
     db = _db(config)
+    kind = selection.kind if selection is not None else unit.kind
     return reorg.signals_from_ledger(
         store,
         project=unit.project,
-        kind=(selection.kind if selection is not None else unit.kind),
+        kind=kind,
         backend=None,
         prompt_chars=len(unit.prompt or ""),
         attempt=attempt,
         spent_usd=_reorg_spent(state["run_id"], db, attempt),
-        task_value_usd=0.0,
+        task_value_usd=reorg.task_value(cfg, kind, getattr(unit, "value_usd", 0.0)),
         path=db,
     )
 
@@ -612,47 +626,78 @@ def _reorg_route(state: RunState, selection: Selection, attempt: int, config, go
     de quem lê o trace qual das duas mandou. `escalate_blocked` desfaz a
     escalada por tentativa (a única coisa que sobe tier sem evidência nova).
     `tier_by_rank` clampa nas pontas, então o delta nunca sai do models.toml.
+
+    A FROTA sai das MESMAS decisões e é calculada mesmo sem delta de tier —
+    `insert_reviewer` não mexe em tier nenhum. Precedência explícita: colapso
+    vence revisor, porque sem dinheiro não se compra revisor. Papel exigido é
+    nome; quem instancia (ou ignora, se o papel não existe) é o executor.
     """
-    decisions = reorg.decide(_reorg_signals(state, selection, attempt, config), reorg.load_reorg())
+    cfg = reorg.load_reorg()
+    decisions = reorg.decide(_reorg_signals(state, selection, attempt, config, cfg), cfg)
     aplicadas = [d for d in decisions if d.effect == reorg.APPLIED]
     delta = sum(d.tier_delta for d in aplicadas)
     blocked = any(d.escalate_blocked for d in aplicadas)
-    if not delta and not blocked:
-        return selection
+    required = tuple(sorted({r for d in aplicadas for r in d.roles_required}))
+    collapse = any(d.roles_cap == 1 for d in aplicadas)
 
-    cfg = router.load_config()
-    rank = router.tier_by_name(cfg, selection.tier).cost_rank
+    models = router.load_config()
+    rank = router.tier_by_name(models, selection.tier).cost_rank
     if blocked:
         rank -= max(0, int(attempt))
-    tier = router.tier_by_rank(cfg, rank + delta)
-    if tier.name == selection.tier:
+    tier = router.tier_by_rank(models, rank + delta)
+
+    allow = selection.roles_allow
+    if collapse:
+        # `()` é frota VAZIA, não "sem restrição" (isso é `None`): o executor
+        # perde os subagents e resolve sozinho.
+        allow, required = (), ()
+    muda_tier = tier.name != selection.tier
+    muda_frota = allow != selection.roles_allow or required != selection.roles_required
+    if not muda_tier and not muda_frota:
         return selection
-    reason = f"reorg:{'+'.join(d.rule_id for d in aplicadas)}:{selection.tier}->{tier.name}"
+
+    reasons = list(selection.reasons)
+    if muda_tier:
+        reasons.append(
+            f"reorg:{'+'.join(d.rule_id for d in aplicadas)}:{selection.tier}->{tier.name}"
+        )
+    if muda_frota:
+        reasons.append(
+            f"reorg:{reorg.R_COLLAPSE}:roles=0"
+            if collapse
+            else f"reorg:{reorg.R_REVIEWER}:roles+{'+'.join(required)}"
+        )
+    novo = replace(selection, roles_allow=allow, roles_required=required, reasons=tuple(reasons))
+    if not muda_tier:
+        return novo
     return replace(
-        selection,
+        novo,
         backend=tier.backend,
         model=tier.model,
         tier=tier.name,
         # O taper do governor vale para o teto do tier NOVO: o número velho era
         # do tier que não vai executar.
         max_turns=taper_turns(tier.max_turns, attempt, gov),
-        reasons=(*selection.reasons, reason),
     )
 
 
 def _reorg_record(state: RunState, attempt: int, config) -> None:
     """Grava no ledger as decisões de topologia desta passagem, e as reversões.
 
-    Uma LINHA POR DECISÃO, inclusive as `recorded` (reviewer/fleet), que o
-    runtime não aplica: decisão anotada é o que deixa o efeito nascer depois com
-    série histórica em vez de estreia às cegas. O `attempt` da linha é número de
-    série — `node_events` é único em `(run_id, node, attempt)` e cabe mais de
-    uma decisão por tentativa, então a tentativa de verdade viaja no payload.
+    Uma LINHA POR DECISÃO, inclusive as `recorded`, que o runtime não aplica:
+    decisão anotada é o que deixa o efeito nascer depois com série histórica em
+    vez de estreia às cegas. O `attempt` da linha é número de série —
+    `node_events` é único em `(run_id, node, attempt)` e cabe mais de uma decisão
+    por tentativa, então a tentativa de verdade viaja no payload.
+
+    O `cfg` é o mesmo objeto do sinal e da decisão: config lida duas vezes é
+    config que pode mudar no meio, e a linha gravada mentiria sobre a régua.
     """
     db = _db(config)
     run_id = state["run_id"]
+    cfg = reorg.load_reorg()
     decisions = reorg.decide(
-        _reorg_signals(state, state.get("selection"), attempt, config), reorg.load_reorg()
+        _reorg_signals(state, state.get("selection"), attempt, config, cfg), cfg
     )
     prev = reorg.active_from_ledger(store, run_id, db)
     novas, revertidas = reorg.diff_active(prev, decisions)
@@ -823,6 +868,10 @@ def _execute(state: RunState, config=None) -> dict:
             run_id=run_id,
             kind=sel.kind,
             adapter=sel.adapter,
+            # Frota decidida no route (reorg). `None`/`()` é o default de sempre:
+            # backend que não olha esses campos executa exatamente como antes.
+            roles_allow=sel.roles_allow,
+            roles_required=sel.roles_required,
         )
     )
     payload = _exec_payload(result)

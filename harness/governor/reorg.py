@@ -11,12 +11,12 @@ no ledger:
     collapse_fleet      gasto passou do valor da tarefa -> a frota encolhe
     skip_orchestration  tarefa trivial -> orquestrar custa mais que fazer
 
-Só DUAS delas têm efeito no runtime (`effect="applied"`): o delta de tier do
-`escalate_route` e o freio do `skip_orchestration`. As outras duas são decisões
-GRAVADAS (`effect="recorded"`) — inserir um nó num grafo vivo e variar o tamanho
-da frota exigiriam mudanças que ninguém verificou ainda, e decisão anotada com
-honestidade vale mais que efeito inventado. O ledger é o mesmo dos dois jeitos,
-então quando o efeito existir a série histórica já estará lá.
+As QUATRO têm efeito no runtime (`effect="applied"`), por dois caminhos
+diferentes. `escalate_route` e `skip_orchestration` mexem no roteamento: delta
+de tier e freio de escalada. `insert_reviewer` e `collapse_fleet` mexem na FROTA
+do executor — os papéis que o backend instancia (`roles_required`, `roles_cap`),
+não o grafo compilado. Ninguém insere nó em grafo vivo aqui: a topologia que
+varia é a de quem trabalha dentro do nó, e essa o executor monta a cada run.
 
 Núcleo PURO: `decide` e `diff_active` não leem disco nem relógio — o sinal entra
 pronto em `ReorgSignals`. A camada impura mora no fim do arquivo, isolada, e é a
@@ -73,6 +73,15 @@ class ReorgConfig:
     cost_value_ratio: float = 1.0
     trivial_max_chars: int = 280
     trivial_kinds: tuple[str, ...] = ("config", "content")
+    # Papel que `insert_reviewer` exige da frota. Nome, não instância: quem sabe
+    # instanciar o papel é o executor, que lê `config/agents.toml`.
+    reviewer_role: str = "reviewer"
+    # Valor de uma tarefa cujo kind não está na tabela. 0.0 = desconhecido, e
+    # desconhecido não condena — `collapse_fleet` dorme sem denominador.
+    default_value_usd: float = 0.0
+    # (kind, valor em USD). Par ordenado e não dict porque a dataclass é frozen
+    # e precisa continuar hashável — config de valor entra em chave de cache.
+    task_value_usd: tuple[tuple[str, float], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -101,6 +110,11 @@ class ReorgDecision:
     tier_delta: int = 0
     escalate_blocked: bool = False
     effect: str = RECORDED
+    # Papéis que a frota do executor PRECISA ter neste run (`insert_reviewer`).
+    roles_required: tuple[str, ...] = ()
+    # Teto de papéis simultâneos na frota (`collapse_fleet`). None = sem teto,
+    # que é a frota inteira do agents.toml.
+    roles_cap: int | None = None
 
 
 def _bool(raw: Any, default: bool) -> bool:
@@ -144,6 +158,35 @@ def _kinds(raw: Any, default: tuple[str, ...]) -> tuple[str, ...]:
     return out or default
 
 
+def _role(raw: Any, default: str) -> str:
+    """Nome de papel. String vazia cai no default: papel sem nome não é papel."""
+    return raw if isinstance(raw, str) and raw else default
+
+
+def _usd(raw: Any, default: float) -> float:
+    """Dinheiro de config. Torto cai no default, negativo vira 0.0 — valor
+    negativo não é "de graça", é dado errado, e desconhecido já é o fail-open."""
+    return max(0.0, _num(raw, default))
+
+
+def _value_table(raw: Any) -> tuple[tuple[str, float], ...]:
+    """`[reorg.task_value_usd]` -> par ordenado (kind, usd). Item torto some.
+
+    Par e não dict porque `ReorgConfig` é frozen e precisa continuar hashável.
+    A ordem é a do toml, que é estável — config que embaralha sozinha faria
+    duas leituras do mesmo arquivo comparar diferente."""
+    if not isinstance(raw, Mapping):
+        return ()
+    out: list[tuple[str, float]] = []
+    for k, v in raw.items():
+        if not isinstance(k, str) or not k or isinstance(v, bool):
+            continue
+        if not isinstance(v, (int, float)):
+            continue
+        out.append((k, max(0.0, float(v))))
+    return tuple(out)
+
+
 def load_reorg(path: Path | None = None) -> ReorgConfig:
     """`[reorg]` de `config/governor.toml` -> ReorgConfig. Falha aberta campo a
     campo: arquivo ausente, ilegível, sem a seção ou com tipo torto = defaults."""
@@ -164,7 +207,27 @@ def load_reorg(path: Path | None = None) -> ReorgConfig:
         cost_value_ratio=_pos_float(sec.get("cost_value_ratio"), base.cost_value_ratio),
         trivial_max_chars=_pos_int(sec.get("trivial_max_chars"), base.trivial_max_chars),
         trivial_kinds=_kinds(sec.get("trivial_kinds"), base.trivial_kinds),
+        reviewer_role=_role(sec.get("reviewer_role"), base.reviewer_role),
+        default_value_usd=_usd(sec.get("default_value_usd"), base.default_value_usd),
+        task_value_usd=_value_table(sec.get("task_value_usd")),
     )
+
+
+def task_value(cfg: ReorgConfig, kind: str | None, declared: float | None) -> float:
+    """Quanto vale esta tarefa, em USD. Puro, nunca levanta.
+
+    Precedência: o valor DECLARADO na unidade vence (quem escreveu a unit sabe
+    mais que a tabela), depois a tabela por kind, depois o default da config.
+    Zero é resposta legítima: significa "desconhecido", e é aí que
+    `collapse_fleet` dorme em vez de condenar todo centavo gasto."""
+    v = _num(declared)
+    if v > 0:
+        return v
+    if isinstance(kind, str) and kind:
+        for k, val in cfg.task_value_usd:
+            if k == kind:
+                return max(0.0, _num(val))
+    return max(0.0, _num(cfg.default_value_usd))
 
 
 def _num(raw: Any, default: float = 0.0) -> float:
@@ -208,8 +271,9 @@ def decide(sig: ReorgSignals, cfg: ReorgConfig) -> list[ReorgDecision]:
     Precedência: `skip_orchestration` VENCE `escalate_route` — tarefa trivial
     que falhou repetido não fica cara, fica simples; pagar tier de cima pelo
     mesmo prompt de 3 linhas é o anti-padrão que a regra existe para cortar.
-    As duas regras log-only são independentes e sempre acumulam: elas não
-    disputam o mesmo efeito com ninguém.
+    As duas regras de frota são independentes e sempre acumulam: elas mexem
+    nos papéis do executor, não no roteamento, e não disputam efeito com
+    ninguém.
     """
     if not cfg.enabled:
         return []
@@ -256,6 +320,8 @@ def decide(sig: ReorgSignals, cfg: ReorgConfig) -> list[ReorgDecision]:
                 action="insert_reviewer",
                 reason=f"{an}/{total} dos runs caem em {area!r}: área pede revisor",
                 signal={"area": area, "count": an, "total": total},
+                roles_required=(cfg.reviewer_role,),
+                effect=APPLIED,
             )
         )
 
@@ -271,6 +337,8 @@ def decide(sig: ReorgSignals, cfg: ReorgConfig) -> list[ReorgDecision]:
                 action="collapse_fleet",
                 reason=f"gasto ${spent:.4f} passou do valor ${value:.4f} da tarefa",
                 signal={"spent_usd": spent, "task_value_usd": value, "roles_cap": 1},
+                roles_cap=1,
+                effect=APPLIED,
             )
         )
     return out

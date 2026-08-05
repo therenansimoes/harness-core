@@ -64,6 +64,9 @@ class UnitSpec:
     # Arquivos que a unidade toca, declarados na spec. Vazio (o default) = não
     # declarado. Default obrigatório, mesmo motivo de `deps`.
     files: tuple[str, ...] = ()
+    # Quanto vale entregar esta unidade, em USD. 0.0 (o default) = desconhecido,
+    # e sem denominador a regra `collapse_fleet` do reorg dorme.
+    value_usd: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -104,6 +107,11 @@ class ExecRequest:
     # modelo base puro. Default obrigatório: os call sites posicionais que já
     # existem não sabem deste campo.
     adapter: str | None = None
+    # Frota que o executor pode montar, decidida pelo reorg. None (o default) =
+    # a frota inteira do `agents.toml`; `()` = frota colapsada, só o executor.
+    roles_allow: tuple[str, ...] | None = None
+    # Papéis que a frota PRECISA ter neste run (área concentrada pede revisor).
+    roles_required: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -136,6 +144,11 @@ class Selection:
     # Peso especializado por cima do modelo (frota LoRA local). None = base pura
     # — o caso normal. Congelado entre tentativas: ver `run_graph._route`.
     adapter: str | None = None
+    # Frota que o executor pode montar, decidida pelo reorg. None (o default) =
+    # a frota inteira do `agents.toml`; `()` = frota colapsada, só o executor.
+    roles_allow: tuple[str, ...] | None = None
+    # Papéis que a frota PRECISA ter neste run (área concentrada pede revisor).
+    roles_required: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

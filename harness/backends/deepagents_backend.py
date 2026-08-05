@@ -355,6 +355,46 @@ TODO_PROMPT = (
     "Tarefa de um passo só não precisa de lista — faça e reporte."
 )
 
+# Ordem da frota colapsada (`collapse_fleet`): o gasto já passou do valor da
+# tarefa, delegar é mais uma rodada de tokens que ninguém vai pagar.
+NO_FLEET_ORDER = (
+    "Neste run você NÃO delega: não chame a tool `task`. "
+    "O orçamento desta tarefa já estourou — resolva você mesmo, no menor "
+    "número de passos possível."
+)
+
+
+def _fleet(roles: list[dict], req: ExecRequest) -> tuple[list[dict], str]:
+    """(frota deste run, ordem para o system prompt) depois do reorg.
+
+    A frota do `agents.toml` é o default; o reorg só a RECORTA. `roles_allow`
+    ausente (`None`, o normal) não filtra nada e o run é o de sempre; `()` é a
+    frota colapsada — nenhum subagent chega ao `create_deep_agent` e o prompt
+    ganha a ordem de não delegar. `roles_required` é pedido por NOME: papel que
+    não existe no toml não vira ordem nenhuma, porque o modelo chamaria um
+    `subagent_type` inexistente e queimaria o turno no erro da tool.
+
+    Fail-open igual ao resto do arquivo: qualquer coisa torta aqui devolve a
+    frota que entrou e nenhuma ordem — reorg não derruba execução."""
+    try:
+        allow = getattr(req, "roles_allow", None)
+        if allow is not None:
+            nomes = {n for n in allow if isinstance(n, str)}
+            roles = [r for r in roles if r.get("name") in nomes]
+            if not roles:
+                return [], NO_FLEET_ORDER
+        vivos = {r.get("name") for r in roles}
+        pedidos = [n for n in (getattr(req, "roles_required", ()) or ()) if n in vivos]
+        if not pedidos:
+            return roles, ""
+        ordens = "\n".join(
+            f"- antes de terminar, chame task(subagent_type={n!r}) e corrija o que ele apontar."
+            for n in pedidos
+        )
+        return roles, f"Este run tem papel OBRIGATÓRIO na frota:\n{ordens}"
+    except Exception:
+        return roles, ""
+
 
 def _build_agent(req: ExecRequest):
     from deepagents import create_deep_agent
@@ -531,10 +571,16 @@ def _build_agent(req: ExecRequest):
     # máquina.
     adapter = _adapter_for(req.adapter)
     chat_model = _model_for(req.model, adapter)
-    roles = load_roles(backend=fs, allowed=allowed, model=chat_model)
+    # `_fleet` é o recorte que o reorg decidiu no route: frota inteira (o
+    # normal), frota filtrada ou frota nenhuma. Com `roles == []` o manual já sai
+    # "" e `subagents` nem chega ao create_deep_agent — o colapso é real, não uma
+    # frase no prompt.
+    roles, fleet_order = _fleet(load_roles(backend=fs, allowed=allowed, model=chat_model), req)
     manual = roles_manual(roles)
     if manual:
         system_prompt = f"{system_prompt}\n\n{manual}"
+    if fleet_order:
+        system_prompt = f"{system_prompt}\n\n{fleet_order}"
 
     # Por último de propósito: é a regra que vence as outras quando conflita, e
     # o fim do system prompt é o pedaço que o modelo pequeno mais respeita.

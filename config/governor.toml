@@ -18,8 +18,8 @@ bench_after = 3            # propostas recentes sem KEEP -> ação vai pro banco
 bench_cycles = 2           # ciclos no banco antes de a ação voltar
 
 # Topologia do run, não modelo: quando o mesmo erro volta, o desenho é que está
-# errado. Só duas regras mexem no runtime (tier e freio de escalada); reviewer e
-# fleet são decisões GRAVADAS no ledger — ver harness/governor/reorg.py.
+# errado. Duas regras mexem no roteamento (tier e freio de escalada); reviewer e
+# fleet mexem na FROTA de papéis do executor — ver harness/governor/reorg.py.
 [reorg]
 enabled = true          # false = nenhuma regra decide nada (nem grava)
 repeat_failures = 2     # mesma classe de falha N vezes -> sobe um tier
@@ -28,3 +28,14 @@ area_min_n = 4          # amostra mínima antes de a área acusar (ratio no vazi
 cost_value_ratio = 1.0  # gasto > valor * ratio -> frota encolhe
 trivial_max_chars = 280 # prompt até este tamanho é candidato a trivial
 trivial_kinds = ["config", "content"]  # ...e só nestes kinds: trivial não é curto, é raso
+reviewer_role = "reviewer"  # papel exigido da frota quando uma área concentra falha
+default_value_usd = 0.0     # valor de kind fora da tabela abaixo; 0 = desconhecido
+
+# Quanto vale entregar uma tarefa de cada kind, em USD. DORMENTE de propósito:
+# sem tabela e sem `value_usd` na unit, todo valor é 0 e `collapse_fleet` nunca
+# dispara. Descomentar é declarar preço — e preço errado encolhe frota à toa.
+# [reorg.task_value_usd]
+# config = 2.0
+# content = 5.0
+# code = 25.0
+# refactor = 40.0
