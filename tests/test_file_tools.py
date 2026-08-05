@@ -82,6 +82,36 @@ def test_middleware_se_passa_pelo_original(tmp_path):
     assert set(tools["read_file"].args_schema.model_fields) == {"file_path", "offset", "limit"}
 
 
+def test_runtime_e_injetado_nas_tools_do_middleware(tmp_path):
+    # o resto do arquivo chama `.func(runtime=...)` na mão; quem chama de verdade
+    # é o ToolNode, que passa o runtime pelo dict de input do `.invoke()` e só
+    # acerta se a lib reconhecer a anotação `ToolRuntime` do parâmetro. A lib lê
+    # essa anotação CRUA (`inspect.signature`, sem `get_type_hints`): com
+    # avaliação adiada ela vira a string "ToolRuntime", o runtime é descartado no
+    # caminho e a tool morre com TypeError antes de tocar no arquivo.
+    (tmp_path / "a.py").write_text("x = 1\ny = 2\n", encoding="utf-8")
+    _mw, tools = _fs_tools(tmp_path)
+    rt = _runtime()
+
+    for nome in ("read_file", "write_file", "edit_file"):
+        # o runtime é injetado, então não pode aparecer no schema que vai pro modelo
+        assert "runtime" not in tools[nome].tool_call_schema.model_fields
+
+    lido = tools["read_file"].invoke({"file_path": "/a.py", "runtime": rt})
+    assert "x = 1" in lido.content
+
+    editado = tools["edit_file"].invoke(
+        {"file_path": "/a.py", "old_string": "x = 1", "new_string": "x = 9", "runtime": rt}
+    )
+    assert editado.status == "success"
+
+    escrito = tools["write_file"].invoke(
+        {"file_path": "/a.py", "content": "x = 9\ny = 2\nz = 3\n", "runtime": rt}
+    )
+    assert escrito.status == "success"
+    assert (tmp_path / "a.py").read_text(encoding="utf-8") == "x = 9\ny = 2\nz = 3\n"
+
+
 def test_read_sem_paginacao_em_arquivo_grande_corta_e_avisa(tmp_path):
     _big(tmp_path)
     _mw, tools = _fs_tools(tmp_path)

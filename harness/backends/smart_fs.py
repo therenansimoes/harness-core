@@ -28,9 +28,16 @@ Pegadinha que já custou um stack duplicado: `AgentMiddleware.name` é o nome da
 CLASSE e o merge de middleware é por nome. Sem a property `name` fixada em
 `"FilesystemMiddleware"`, esta subclasse entra no grafo COMO OUTRO middleware,
 ao lado do original — sem erro, com as duas versões de cada tool.
-"""
 
-from __future__ import annotations
+Segunda pegadinha, esta custou run inteiro: este módulo NÃO pode ter
+`from __future__ import annotations`. O `StructuredTool._injected_args_keys` lê
+`inspect.signature(func).parameters[...].annotation` CRU (sem `get_type_hints`),
+então com a avaliação adiada o `runtime: ToolRuntime` das tools daqui vira a
+string `"ToolRuntime"`, o `_is_injected_arg_type` devolve False, o `ToolNode`
+não injeta o runtime e toda chamada de arquivo morre em `TypeError: ... missing
+1 required positional argument: 'runtime'`. Ver
+`tests/test_file_tools.py::test_runtime_e_injetado_nas_tools_do_middleware`.
+"""
 
 import hashlib
 import posixpath
