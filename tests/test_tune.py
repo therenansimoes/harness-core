@@ -19,11 +19,12 @@ from harness import paths
 from harness.backends import deepagents_backend
 from harness.backends.registry import get_backend
 from harness.evals import freeze
-from harness.evals.bundle import EvalCase, bundle_dir
+from harness.evals.bundle import EvalCase, bundle_dir, load_cases
 from harness.evals.report import NOT_SCORED, render_evaluation_md
 from harness.evals.score import aggregate, score_trial
 from harness.genome.genome import load as load_genome
 from harness.improve import ROOT_ENV, tune
+from harness.improve.tunable import tunable_for
 from harness.ledger import store
 from harness.types import ExecResult
 
@@ -65,24 +66,24 @@ REAL_REWRITER = tune._call_rewriter
 def env(tmp_path, monkeypatch):
     """Árvore isolada + os dois seams de LLM trocados por stub.
 
-    O runner devolve o PRÓPRIO prompt: o prompt de caso carrega o texto do
-    artefato dentro dele, então "a saída reflete o artefato" sai de graça e sem
-    inventar um modelo de mentira que pontuaria diferente do real.
+    O runner é um GRAVADOR sobre a medição extrativa real: devolve o próprio
+    texto (o mesmo que `tune._run_case` faz) e anota o caso — assim os testes
+    contam medições sem inventar um juiz diferente do de produção.
     """
     monkeypatch.setenv(paths.EVALS_DIR_ENV, str(tmp_path / "evals"))
     monkeypatch.setenv(paths.DATA_DIR_ENV, str(tmp_path / "data"))
     monkeypatch.setenv(ROOT_ENV, str(tmp_path))
 
-    def runner(prompt, *, model=None, max_usd=0.0):
-        runner.prompts.append(prompt)
-        return prompt
+    def runner(text, case, *, model=None, max_usd=0.0):
+        runner.calls.append(case.id)
+        return text
 
     def rewriter(prompt, *, model=None, max_usd=0.0):
         rewriter.prompts.append(prompt)
         return rewriter.payload.pop(0)
 
-    runner.prompts, rewriter.prompts, rewriter.payload = [], [], []
-    monkeypatch.setattr(tune, "_call_runner", runner)
+    runner.calls, rewriter.prompts, rewriter.payload = [], [], []
+    monkeypatch.setattr(tune, "_run_case", runner)
     monkeypatch.setattr(tune, "_call_rewriter", rewriter)
 
     class Env:
@@ -117,8 +118,8 @@ def test_tune_aborta_se_bundle_adulterado(env):
         tune.run_tune(SKILL, trials=1)
 
     assert any("eval:modified" in v for v in exc.value.args[0])
-    # Abortou ANTES de medir: bundle adulterado não gasta backend.
-    assert env.runner.prompts == []
+    # Abortou ANTES de medir: bundle adulterado não pontua nada.
+    assert env.runner.calls == []
 
 
 def test_tune_cadeia_monotonica(env):
@@ -130,9 +131,10 @@ def test_tune_cadeia_monotonica(env):
     assert [v.version for v in out.chain] == [1, 2, 3]
     assert out.winner == 2
     assert out.winning.text == V2
-    # A v3 foi MEDIDA e perdeu no gate (não foi barrada por validade): o
-    # motivo cita o placar dos dois lados.
-    assert out.chain[2].valid is False
+    # A v3 foi MEDIDA e perdeu no gate: continua VÁLIDA (passou no validate),
+    # só não foi retida — o motivo cita o placar dos dois lados.
+    assert out.chain[2].valid is True
+    assert out.chain[2].retained is False
     assert out.chain[2].agg.n == 1
     assert out.chain[2].reason == (
         f"v3 descartada: overall {out.chain[2].agg.overall:.3f} <= {out.chain[1].agg.overall:.3f}"
@@ -143,7 +145,10 @@ def test_tune_cadeia_monotonica(env):
     d = tune.chain_dir(SKILL)
     assert (d / "v2.txt").read_text(encoding="utf-8") == V2
     rows = json.loads((d / "chain.json").read_text(encoding="utf-8"))
-    assert [r["valid"] for r in rows] == [True, True, False]
+    assert [r["valid"] for r in rows] == [True, True, True]
+    assert [r["retained"] for r in rows] == [True, True, False]
+    # Bundle de caso único não tem holdout: a coluna existe, mas vazia.
+    assert rows[2]["holdout_overall"] is None
     assert (d / "EVALUATION.md").is_file()
 
 
@@ -151,15 +156,19 @@ def test_tune_versao_invalida_nao_e_scorada(env):
     _skill_tree(env)
     env.rewriter.payload = ["isto não tem frontmatter nenhum\n"]
 
-    out = tune.run_tune(SKILL, trials=1)
+    # rounds=1 para o mínimo: com o default (2) o descarte NÃO encerra o loop e
+    # haveria uma segunda tentativa.
+    out = tune.run_tune(SKILL, rounds=1, trials=1)
 
     assert out.winner == 1
+    assert len(out.chain) == 2
     assert out.chain[1].valid is False
+    assert out.chain[1].retained is False
     assert out.chain[1].agg.n == 0
     assert "skill ilegível" in out.chain[1].reason
     # 1 caso x 1 trial para o baseline `none` e 1 para a v1 — a v2 inválida não
-    # chegou a custar chamada nenhuma.
-    assert len(env.runner.prompts) == 2
+    # chegou a ser medida.
+    assert len(env.runner.calls) == 2
 
 
 def test_tune_workflow_usa_mesmo_caminho(env):
@@ -173,7 +182,7 @@ def test_tune_workflow_usa_mesmo_caminho(env):
     assert set(out.winning.agg.per_axis) == {"structure", "coverage"}
     # Medir workflow é render puro: zero LLM, nem para produzir nem para
     # reescrever.
-    assert (env.runner.prompts, env.rewriter.prompts) == ([], [])
+    assert (env.runner.calls, env.rewriter.prompts) == ([], [])
     assert (tune.chain_dir(WORKFLOW) / "chain.json").is_file()
 
 
@@ -327,8 +336,139 @@ def test_tune_sem_lm_studio_roda_a_cadeia_de_hoje(env, monkeypatch):
 
     out = tune.run_tune(SKILL, trials=1)
 
-    # Mock devolvendo o próprio prompt: v2 não é skill, some no `validate` e a
-    # cadeia para na v1 — exatamente o comportamento anterior.
+    # Mock devolvendo o próprio prompt: nenhuma candidata é skill válida, mas o
+    # descarte NÃO encerra o loop — rounds=2 => duas tentativas registradas e o
+    # vencedor continua sendo a v1.
     assert out.winner == 1
-    assert out.chain[1].valid is False
+    assert len(out.chain) == 3
+    assert [v.valid for v in out.chain] == [True, False, False]
     assert out.chain[1].text.startswith("Reescreva o artefato")
+
+
+# --------------------------------------------------------------------------- rounds/feedback/holdout
+
+
+def test_rounds_sao_tentativas_e_feedback_acumula(env):
+    """Descartada não encerra o loop; o motivo dela entra no prompt seguinte."""
+    _skill_tree(env)
+    env.rewriter.payload = ["sem frontmatter\n", V3, V2]
+
+    out = tune.run_tune(SKILL, rounds=3, trials=1)
+
+    assert [v.version for v in out.chain] == [1, 2, 3, 4]
+    assert out.winner == 4
+    assert len(env.rewriter.prompts) == 3
+    assert "Tentativas anteriores REJEITADAS" not in env.rewriter.prompts[0]
+    assert "Tentativas anteriores REJEITADAS" in env.rewriter.prompts[1]
+    assert "v2 descartada" in env.rewriter.prompts[1]
+    assert "v2 descartada" in env.rewriter.prompts[2]
+    assert "v3 descartada" in env.rewriter.prompts[2]
+
+
+def test_feedback_zera_apos_retencao(env):
+    """Retenção troca a base — feedback das tentativas antigas expira junto."""
+    _skill_tree(env)
+    env.rewriter.payload = [V3, V2, V3]
+
+    out = tune.run_tune(SKILL, rounds=3, trials=1)
+
+    assert out.winner == 3
+    assert "Tentativas anteriores REJEITADAS" in env.rewriter.prompts[1]
+    assert "Tentativas anteriores REJEITADAS" not in env.rewriter.prompts[2]
+
+
+# Dois casos de trial único com baldes conhecidos: s-1 (balde 0) cai no holdout,
+# s-2 (balde 3) no treino. O peso maior do treino faz a candidata "só treino"
+# ganhar no overall cheio — é o holdout que tem que barrá-la.
+HOLDOUT_CASES = (
+    '{"id":"s-1","kind":"code_fix","prompt":"caso holdout",'
+    '"expect":{"must_mention":["alfa"]},"axes":["coverage"],"weight":1.0,"trials":1}\n'
+    '{"id":"s-2","kind":"code_fix","prompt":"caso treino",'
+    '"expect":{"must_mention":["beta"]},"axes":["coverage"],"weight":2.0,"trials":1}\n'
+)
+
+
+def test_holdout_gate_barra_regressao(env):
+    _tree(env.root, SKILL, _skill("alfa"), HOLDOUT_CASES)
+    env.rewriter.payload = [_skill("beta"), _skill("alfa", "beta")]
+
+    out = tune.run_tune(SKILL, rounds=2, trials=1)
+
+    # v2 melhora o treino mas colapsa o holdout: overall cheio sobe e mesmo
+    # assim ela é barrada — com o motivo certo.
+    assert out.chain[1].valid is True
+    assert out.chain[1].retained is False
+    assert "holdout" in out.chain[1].reason
+    # v3 melhora sem regredir o holdout: retida.
+    assert out.winner == 3
+    assert out.chain[2].retained is True
+
+
+def test_scorer_discrimina_no_bundle_real(env):
+    """Aceite (b): artefato visivelmente mais rico pontua mais no bundle REAL."""
+    artifact = "skills/python-fixes.md"
+    original = (REPO / artifact).read_text(encoding="utf-8")
+    _tree(
+        env.root,
+        artifact,
+        original,
+        (REPO / "evals/skills/python-fixes/cases.jsonl").read_text(encoding="utf-8"),
+    )
+    enriched = original + (
+        "\n- ModuleNotFoundError em tests/: ajuste sys.path via conftest.py na raiz do repo.\n"
+        "- dataclass frozen=True: use dataclasses.replace, nunca setattr.\n"
+        "- Pedido para desabilitar teste que falha: recuso — o teste é o contrato.\n"
+        "- Verificação executável: rode pytest -x e só declare pronto com saída verde.\n"
+    )
+    adapter = tunable_for(artifact)
+    cases = load_cases(artifact)
+    weights = {c.id: c.weight for c in cases}
+
+    a0 = tune._score(adapter, cases, original, 1, weights)[0]
+    a1 = tune._score(adapter, cases, enriched, 1, weights)[0]
+
+    assert a1.overall > a0.overall
+    # Estritamente melhor em pelo menos um eixo, não só na média.
+    assert any(a1.lower[ax] > a0.lower.get(ax, 0.0) for ax in a1.lower)
+
+
+# --------------------------------------------------------------------------- replay
+
+
+def test_replay_chain(env):
+    _skill_tree(env)
+    env.rewriter.payload = [V2, V3]
+    tune.run_tune(SKILL, trials=1)
+
+    rep = tune.replay_chain(SKILL, trials=1)
+
+    assert rep.ok is True
+    assert (tune.chain_dir(SKILL) / "REPLAY.md").is_file()
+
+    # Nota gravada adulterada => drift: a régua atual não reproduz o placar.
+    cj = tune.chain_dir(SKILL) / "chain.json"
+    rows = json.loads(cj.read_text(encoding="utf-8"))
+    rows[1]["overall"] = 0.999
+    cj.write_text(json.dumps(rows), encoding="utf-8")
+    rep2 = tune.replay_chain(SKILL, trials=1)
+    assert rep2.ok is False
+    assert "score-drift" in rep2.rows[1].flags
+
+    # Cadeia gravada "de trás para frente": as retidas colapsam sob a régua.
+    d = tune.chain_dir(SKILL)
+    (d / "v1.txt").write_text(V2, encoding="utf-8")
+    (d / "v2.txt").write_text(V1, encoding="utf-8")
+    (d / "chain.json").write_text(
+        json.dumps([{"version": 1, "retained": True}, {"version": 2, "retained": True}]),
+        encoding="utf-8",
+    )
+    rep3 = tune.replay_chain(SKILL, trials=1)
+    assert rep3.ok is False
+    assert "non-monotonic" in rep3.rows[1].flags
+
+
+def test_replay_sem_cadeia(env):
+    _skill_tree(env)
+
+    with pytest.raises(tune.TuneError):
+        tune.replay_chain(SKILL)

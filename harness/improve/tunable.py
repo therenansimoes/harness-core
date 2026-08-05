@@ -87,10 +87,10 @@ class SkillTunable:
     def produce(self, case: EvalCase, text: str) -> str:
         # Import tardio: `tune` importa este módulo. E é o seam de teste — o
         # stub troca o atributo no MÓDULO, então a busca tem que ser em
-        # call-time, nunca um `from ... import _call_runner` no topo.
+        # call-time, nunca um `from ... import _run_case` no topo.
         from harness.improve import tune
 
-        return tune._call_runner(_case_prompt(text, case), model=self.model, max_usd=self.max_usd)
+        return tune._run_case(text, case, model=self.model, max_usd=self.max_usd)
 
     def write(self, text: str, version: int) -> Path:
         """Grava a skill no formato canônico. `version` fica na cadeia, não no

@@ -14,7 +14,9 @@ adulteração do exame.
 
 from __future__ import annotations
 
+import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -47,6 +49,41 @@ class EvalCase:
     weight: float = 1.0
     trials: int = DEFAULT_TRIALS
     verify_cmd: str | None = None
+
+
+# 1 em cada HOLDOUT_MOD casos vai para o holdout — por hash do id, nunca por
+# sorteio: o mesmo bundle produz o mesmo split em qualquer máquina, sempre.
+HOLDOUT_MOD = 4
+
+
+def case_bucket(case_id: str) -> int:
+    """Balde determinístico do caso: sha256 do id, módulo `HOLDOUT_MOD`."""
+    return int(hashlib.sha256(case_id.encode("utf-8")).hexdigest(), 16) % HOLDOUT_MOD
+
+
+def split_cases(cases: Sequence[EvalCase]) -> tuple[list[EvalCase], list[EvalCase]]:
+    """(train, holdout) determinístico por hash do id — zero aleatoriedade nova.
+
+    O split é uma VISÃO computada sobre os ids: nada muda no formato do bundle
+    nem no manifest. Bundle de 1 caso não tem holdout (gate só de treino); com
+    2+ casos os dois lados saem garantidamente não-vazios via fix-up.
+    """
+    if len(cases) < 2:
+        return (list(cases), [])
+    holdout = [c for c in cases if case_bucket(c.id) == 0]
+    train = [c for c in cases if case_bucket(c.id) != 0]
+    # Fix-up determinístico: um lado vazio move o caso de hash extremo — a
+    # escolha é função só dos ids, então continua estável entre execuções.
+    key = lambda c: (hashlib.sha256(c.id.encode()).hexdigest(), c.id)  # noqa: E731
+    if not holdout:
+        moved = max(train, key=key)
+        train = [c for c in train if c.id != moved.id]
+        holdout = [moved]
+    elif not train:
+        moved = min(holdout, key=key)
+        holdout = [c for c in holdout if c.id != moved.id]
+        train = [moved]
+    return (train, holdout)
 
 
 def bundle_dir(artifact: str, root: Path | None = None) -> Path:

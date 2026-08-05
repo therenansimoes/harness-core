@@ -11,9 +11,10 @@ Três coisas separam isto de "peça ao modelo para melhorar a skill":
 1. BASELINE TRIPLO. `none` (sem artefato nenhum), `draft` (o que está no disco)
    e `tuned` (o que saiu do loop). Sem o `none` ninguém sabe se a skill ajuda ou
    se o modelo já resolvia sozinho — e essa é a pergunta cara.
-2. GATE MONOTÔNICO. Uma versão só entra na cadeia se BATER a anterior; a
-   primeira que não bater encerra a cadeia e o vencedor é a última que bateu.
-   Sem isso, "3 rodadas" vira "a última rodada", que é aleatória.
+2. GATE MONOTÔNICO. Uma candidata só é RETIDA se bater a melhor no overall E
+   não regredir no holdout; candidata descartada NÃO encerra a cadeia —
+   `rounds` é o número de TENTATIVAS de reescrita, e o vencedor é sempre a
+   última retida. O motivo do descarte vira feedback da próxima tentativa.
 3. VALIDADE ANTES DE NOTA. Versão que não passa no `validate` do adapter é
    descartada SEM ser pontuada. Pontuar artefato inválido gastaria backend para
    medir algo que nunca poderia ser gravado.
@@ -29,12 +30,12 @@ import json
 import shutil
 import tempfile
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 
 from harness import paths
 from harness.backends.registry import get_backend
-from harness.evals.bundle import EvalCase, load_cases
+from harness.evals.bundle import EvalCase, load_cases, split_cases
 from harness.evals.freeze import verify_frozen
 from harness.evals.report import render_evaluation_md
 from harness.evals.score import Aggregate, TrialResult, aggregate, beats, score_trial
@@ -54,8 +55,8 @@ TUNE_BACKEND = "mock"
 TUNE_TIMEOUT_S = 600.0
 DEFAULT_MODEL = "openai:qwen/qwen3.5-9b"
 DEFAULT_MAX_USD = 0.25
-# 2 reescritas = até v3. Mais que isso raramente muda o vencedor e sempre muda
-# a fatura; quem quiser cadeia longa passa `rounds`.
+# 2 tentativas de reescrita = até v3. Mais que isso raramente muda o vencedor e
+# sempre muda a fatura; quem quiser cadeia longa passa `rounds`.
 DEFAULT_ROUNDS = 2
 
 # O rewriter é a única parte do loop que ganha modelo de verdade: propor texto
@@ -104,14 +105,22 @@ class TuneError(Exception):
 
 @dataclass(frozen=True)
 class TuneVersion:
-    """Um elo da cadeia. `valid=False` => `agg` é o placar vazio, não um zero
-    medido: a versão nem chegou a ser pontuada."""
+    """Um elo da cadeia.
+
+    `valid` significa SÓ "passou no `validate` do adapter"; `retained` significa
+    "entrou na cadeia monotônica". Candidata pontuada mas descartada no gate é
+    `valid=True, retained=False` — a conflação antiga (descartada = inválida)
+    acabou aqui. `valid=False` => `agg` é o placar vazio, não um zero medido: a
+    versão nem chegou a ser pontuada.
+    """
 
     version: int
     text: str
     agg: Aggregate
     reason: str
     valid: bool = True
+    retained: bool = True
+    holdout: Aggregate = _EMPTY
     trials: tuple[TrialResult, ...] = field(default=(), repr=False)
 
 
@@ -182,6 +191,9 @@ def run_tune(
 
     adapter = tunable_for(artifact, model=model, max_usd=max_usd)
     cases = load_cases(artifact)
+    train_cases, hold_cases = split_cases(cases)
+    train_ids = {c.id for c in train_cases}
+    hold_ids = {c.id for c in hold_cases}
     weights = {c.id: c.weight for c in cases}
 
     # Controle: o que sai SEM artefato nenhum. Passa por fora do `validate` de
@@ -189,44 +201,54 @@ def run_tune(
     # justamente a medição que diz se o artefato paga o próprio custo.
     none_agg, _ = _score(adapter, cases, "", trials, weights)
 
-    chain: list[TuneVersion] = []
+    # v1 é o incumbente (é o que já está no disco), não uma candidata: o gate
+    # julga de v2 em diante. v1 inválida encerra antes do loop — não há nada
+    # medido para reescrever.
     text = candidate if candidate is not None else adapter.read()
-    prev = none_agg
-    winner = 1
+    errs = adapter.validate(text)
+    best: TuneVersion | None = None
+    if errs:
+        chain = [
+            TuneVersion(1, text, _EMPTY, f"v1 descartada: {errs[0]}", valid=False, retained=False)
+        ]
+    else:
+        v1 = _measured(1, text, adapter, cases, trials, weights, hold_ids)
+        best = replace(v1, retained=True, reason=_reason(1, v1.agg, none_agg))
+        chain = [best]
 
-    for n in range(1, rounds + 2):
-        errs = adapter.validate(text)
-        if errs:
-            chain.append(TuneVersion(n, text, _EMPTY, f"v{n} descartada: {errs[0]}", valid=False))
-            break
-        agg, results = _score(adapter, cases, text, trials, weights)
-        # v1 é o incumbente (é o que já está no disco), não uma candidata: o
-        # gate julga de v2 em diante. Recusar v1 por não bater o `none` deixaria
-        # o loop sem ponto de partida e sem nada a reescrever.
-        if n > 1 and not beats(agg, prev):
-            chain.append(
-                TuneVersion(
-                    n,
-                    text,
-                    agg,
-                    f"v{n} descartada: overall {agg.overall:.3f} <= {prev.overall:.3f}",
-                    valid=False,
-                    trials=tuple(results),
-                )
+    # `rounds` = número de TENTATIVAS de reescrita: candidata descartada não
+    # encerra a cadeia — o motivo do descarte vira feedback da próxima.
+    feedback: list[str] = []
+    if best is not None:
+        for n in range(2, rounds + 2):
+            prompt = _with_feedback(
+                adapter.rewrite_prompt(best.text, _weak(best.trials, train_ids)), feedback
             )
-            break
-        chain.append(
-            TuneVersion(n, text, agg, _reason(n, agg, prev), valid=True, trials=tuple(results))
-        )
-        winner, prev = n, agg
-        if n == rounds + 1:
-            break
-        text = _call_rewriter(
-            adapter.rewrite_prompt(text, _weak(results)), model=model, max_usd=max_usd
-        )
+            cand = _call_rewriter(prompt, model=model, max_usd=max_usd)
+            errs = adapter.validate(cand)
+            if errs:
+                reason = f"v{n} descartada: {errs[0]}"
+                chain.append(TuneVersion(n, cand, _EMPTY, reason, valid=False, retained=False))
+                feedback.append(reason)
+                continue
+            v = _measured(n, cand, adapter, cases, trials, weights, hold_ids)
+            if beats(v.agg, best.agg) and _holdout_ok(v, best):
+                v = replace(v, retained=True, reason=_reason(n, v.agg, best.agg))
+                chain.append(v)
+                best = v
+                feedback = []  # base nova -> feedback antigo expira
+            else:
+                reason = _discard_reason(n, v, best)
+                chain.append(replace(v, retained=False, reason=reason))
+                feedback.append(reason)
 
+    winner = best.version if best is not None else 1
     win = chain[winner - 1]
-    baseline = {"none": none_agg, "draft": chain[0].agg, "tuned": win.agg}
+    baseline = {
+        "none": none_agg,
+        "draft": chain[0].agg,
+        "tuned": best.agg if best is not None else _EMPTY,
+    }
     md = render_evaluation_md(artifact, scores=win.agg, baseline=baseline)
     _persist(artifact, chain, md)
     return TuneOutcome(
@@ -320,8 +342,23 @@ def chain_dir(artifact: str) -> Path:
     return paths.data_dir() / TUNE_SUBDIR / PurePosixPath(Path(artifact).as_posix()).with_suffix("")
 
 
+def _run_case(text: str, case: EvalCase, *, model: str | None, max_usd: float) -> str:
+    """Medição extrativa determinística — a saída julgada É o artefato.
+
+    Runner real (LM Studio por caso) deliberadamente ADIADO: variância de runner
+    dentro do juiz mata a comparabilidade entre versões. Os params `model` e
+    `max_usd` ficam pela assinatura do futuro runner real e pelo seam de teste.
+    """
+    return text
+
+
 def _call_runner(prompt: str, *, model: str | None, max_usd: float) -> str:
-    """UMA chamada ao backend para produzir a saída de um caso. Seam de teste."""
+    """DEPRECIADO: seam antigo do runner, morto desde a medição extrativa.
+
+    Mantido só porque `tests/test_rollback.py` ainda troca este atributo via
+    monkeypatch (arquivo fora do escopo desta frente); remover junto com aquele
+    fixture.
+    """
     return _call(prompt, model=model, max_usd=max_usd, purpose="run")
 
 
@@ -480,9 +517,48 @@ def _score(
     return aggregate(results, weights), results
 
 
-def _weak(results: Sequence[TrialResult]) -> list[TrialResult]:
-    """Só os trials com pelo menos um eixo reprovado — é o que o reescritor lê."""
-    return [r for r in results if not all(r.axes.values())]
+def _weak(results: Sequence[TrialResult], train_ids: set[str]) -> list[TrialResult]:
+    """Só trials de TREINO com eixo reprovado — o reescritor nunca vê o holdout."""
+    return [r for r in results if r.case_id in train_ids and not all(r.axes.values())]
+
+
+def _measured(
+    n: int,
+    text: str,
+    adapter: Tunable,
+    cases: Sequence[EvalCase],
+    trials: int | None,
+    weights: dict[str, float],
+    hold_ids: set[str],
+) -> TuneVersion:
+    """Pontua uma versão válida no bundle inteiro + a visão só-holdout dela."""
+    agg, results = _score(adapter, cases, text, trials, weights)
+    hold_agg = (
+        aggregate([r for r in results if r.case_id in hold_ids], weights) if hold_ids else _EMPTY
+    )
+    return TuneVersion(
+        n, text, agg, reason="", valid=True, retained=False, holdout=hold_agg, trials=tuple(results)
+    )
+
+
+def _holdout_ok(new: TuneVersion, old: TuneVersion) -> bool:
+    """Gate de holdout é NÃO-REGRESSÃO (>=), não vitória estrita: com holdout de
+    2 casos, exigir vitória lá travaria toda candidata que só melhora o treino."""
+    return new.holdout.n == 0 or new.holdout.overall >= old.holdout.overall - 1e-9
+
+
+def _discard_reason(n: int, v: TuneVersion, best: TuneVersion) -> str:
+    if not beats(v.agg, best.agg):
+        return f"v{n} descartada: overall {v.agg.overall:.3f} <= {best.agg.overall:.3f}"
+    return f"v{n} descartada: holdout {v.holdout.overall:.3f} < {best.holdout.overall:.3f}"
+
+
+def _with_feedback(prompt: str, feedback: Sequence[str]) -> str:
+    """Anexa os motivos de descarte anteriores — correção dirigida, não repetição."""
+    if not feedback:
+        return prompt
+    lines = "\n".join(f"- {f}" for f in feedback)
+    return f"{prompt}\n\nTentativas anteriores REJEITADAS (não repita o mesmo erro):\n{lines}"
 
 
 def _reason(n: int, agg: Aggregate, prev: Aggregate) -> str:
@@ -524,6 +600,8 @@ def _persist(artifact: str, chain: Sequence[TuneVersion], md: str) -> Path:
             "per_axis": {a: list(t) for a, t in v.agg.per_axis.items()},
             "reason": v.reason,
             "valid": v.valid,
+            "retained": v.retained,
+            "holdout_overall": v.holdout.overall if v.holdout.n else None,
         }
         for v in chain
     ]
@@ -531,6 +609,115 @@ def _persist(artifact: str, chain: Sequence[TuneVersion], md: str) -> Path:
     (d / CHAIN_FILE).write_text(payload, encoding="utf-8")
     (d / EVALUATION_FILE).write_text(md, encoding="utf-8")
     return d
+
+
+# --------------------------------------------------------------------------- replay
+
+REPLAY_FILE = "REPLAY.md"
+# Acima disto, a nota gravada e a re-medida divergem de verdade — a régua mudou
+# desde a gravação (diagnóstico esperado logo após uma mudança de scorer).
+DRIFT_EPS = 1e-6
+
+
+@dataclass(frozen=True)
+class ReplayRow:
+    """Uma versão da cadeia re-medida sob a régua ATUAL."""
+
+    version: int
+    stored_overall: float | None
+    rescored_overall: float
+    retained: bool
+    flags: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ReplayOutcome:
+    """O veredito do replay: a cadeia gravada sobrevive à régua de hoje?"""
+
+    artifact: str
+    rows: tuple[ReplayRow, ...]
+    ok: bool
+    path: str
+
+
+def replay_chain(artifact: str, *, trials: int | None = None) -> ReplayOutcome:
+    """Re-pontua a cadeia gravada sob a régua atual e escreve `REPLAY.md`.
+
+    Flags por versão: `invalid-now` (não passa mais no validate), `score-drift`
+    (nota gravada != re-medida — a régua mudou desde a gravação) e
+    `non-monotonic` (a sequência de retidas COLAPSA sob a régua atual). Bundle
+    adulterado aborta antes de medir: re-pontuar contra exame violado não prova
+    nada.
+    """
+    violations = verify_frozen(artifact)
+    if violations:
+        raise TuneAborted(violations)
+
+    d = chain_dir(artifact)
+    chain_file = d / CHAIN_FILE
+    if not chain_file.is_file():
+        raise TuneError(f"sem cadeia gravada em {d}")
+    stored_rows = sorted(
+        json.loads(chain_file.read_text(encoding="utf-8")), key=lambda r: r["version"]
+    )
+
+    adapter = tunable_for(artifact)
+    cases = load_cases(artifact)
+    weights = {c.id: c.weight for c in cases}
+
+    rows: list[ReplayRow] = []
+    prev_rescored: float | None = None  # só sobre as RETIDAS: é a cadeia que importa
+    for row in stored_rows:
+        ver = int(row["version"])
+        vfile = d / f"v{ver}.txt"
+        if not vfile.is_file():
+            raise TuneError(f"cadeia sem texto gravado: {vfile}")
+        text = vfile.read_text(encoding="utf-8")
+        # Legado: antes de `retained` existir, `valid` fazia o papel dele.
+        retained = bool(row.get("retained", row.get("valid", False)))
+        flags: list[str] = []
+        if adapter.validate(text):
+            rescored = 0.0
+            flags.append("invalid-now")
+        else:
+            rescored = _score(adapter, cases, text, trials, weights)[0].overall
+        stored = row.get("overall")
+        if stored is not None and abs(stored - rescored) > DRIFT_EPS:
+            flags.append("score-drift")
+        if retained:
+            if prev_rescored is not None and prev_rescored >= rescored:
+                flags.append("non-monotonic")
+            prev_rescored = rescored
+        rows.append(ReplayRow(ver, stored, rescored, retained, tuple(flags)))
+
+    ok = all(not r.flags for r in rows)
+    path = d / REPLAY_FILE
+    path.write_text(_replay_md(artifact, rows, ok), encoding="utf-8")
+    return ReplayOutcome(artifact=artifact, rows=tuple(rows), ok=ok, path=str(path))
+
+
+def _replay_md(artifact: str, rows: Sequence[ReplayRow], ok: bool) -> str:
+    flagged = sum(1 for r in rows if r.flags)
+    lines = [
+        f"# replay — {artifact}",
+        "",
+        "| v | retained | stored | rescored | flags |",
+        "|---|---|---|---|---|",
+    ]
+    for r in rows:
+        stored = f"{r.stored_overall:.3f}" if r.stored_overall is not None else "—"
+        lines.append(
+            f"| {r.version} | {r.retained} | {stored} | {r.rescored_overall:.3f} "
+            f"| {', '.join(r.flags) or '—'} |"
+        )
+    lines += [
+        "",
+        "OK: cadeia monotônica sob a régua atual"
+        if ok
+        else f"COLAPSO: {flagged} versão(ões) sinalizada(s)",
+        "",
+    ]
+    return "\n".join(lines)
 
 
 def action():
