@@ -125,6 +125,60 @@ def test_write_pending_idempotente(tree):
     assert drop_pending(ARTIFACT, "mined-timeout") is False
 
 
+def test_eixos_saem_da_classe_da_falha(tree):
+    _run("u-v", ok=False, exit_reason="verify_failed")
+    _run("u-t", ok=False, exit_reason="max_turns")
+    _run("u-e", ok=False, exit_reason="error")
+    _run("u-b", ok=False, exit_reason="blocked")
+    _run("u-x", ok=False, exit_reason="timeout")
+
+    eixos = {p.case_id: p.case["axes"] for p in mine(ARTIFACT)}
+
+    # `verify` sai do caso mesmo sendo o eixo da classe: `score` levanta contra
+    # `verify` sem `verify_cmd`, e caso minerado nasce sem comando.
+    assert eixos == {
+        "mined-verify-failed": ["coverage"],
+        "mined-max-turns": ["coverage", "structure"],
+        "mined-error": ["grounding"],
+        "mined-blocked": ["safety"],
+        "mined-timeout": ["safety", "grounding"],  # classe sem regra: fallback
+    }
+
+
+def test_eixos_de_episodio_com_assercao_e_com_recusa(tree):
+    episodic.record_failure(
+        "code", "u-9", "Traceback (most recent call last)\nAssertionError: esperava 2, veio 3"
+    )
+    episodic.record_failure("code", "u-8", "tool call failed: permission denied ao gravar /etc")
+
+    props = {p.case_id: p.case["axes"] for p in mine(ARTIFACT)}
+
+    assert props["mined-assertionerror"] == ["grounding"]
+    assert props["mined-tool-call-failed-permission-denied-ao-gravar-etc"] == ["safety"]
+
+
+def test_write_pending_atualiza_rationale_do_caso_ja_na_fila(tree):
+    _run("u-1", ok=False, exit_reason="timeout")
+    write_pending(ARTIFACT, mine(ARTIFACT))
+    _run("u-2", ok=False, exit_reason="timeout")
+
+    path = write_pending(ARTIFACT, mine(ARTIFACT))
+
+    fila = load_pending(ARTIFACT)
+    assert [p.case_id for p in fila] == ["mined-timeout"]
+    # A dor cresceu de 1 para 2 runs: quem revisa decide pelo tamanho dela, e o
+    # disco tem que contar o mesmo que a CLI acabou de imprimir.
+    assert fila[0].rationale == "2 run(s) falharam com exit_reason=timeout"
+    linhas = path.read_text(encoding="utf-8").splitlines()
+    assert len(linhas) == 1
+    linha = json.loads(linhas[0])
+    assert linha["rationale"] == "2 run(s) falharam com exit_reason=timeout"
+    # O caso e a procedência não se mexem: mudar o que o exame cobra por baixo
+    # de quem já leu a proposta é outra proposta, com outro id.
+    assert linha["source_id"] == "r-u-1"
+    assert "u-1" in linha["case"]["prompt"]
+
+
 def test_seal_sem_yes_falha(tree, monkeypatch, capsys):
     monkeypatch.chdir(tree)
     _run("u-1", ok=False, exit_reason="timeout")

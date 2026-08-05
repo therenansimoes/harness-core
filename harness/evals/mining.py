@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -41,18 +41,34 @@ from harness.evals.bundle import (
     bundle_dir,
     load_cases,
 )
-from harness.evals.freeze import Manifest, freeze, now_iso
+
+# `_write_atomic` é privado do freeze, mas é a MESMA garantia que a fila
+# precisa: tmp irmão + `os.replace`. Fila truncada por crash no meio de uma
+# reescrita faz `load_pending` levantar para sempre, e a proposta pendente some
+# do review humano — que é o único lugar onde ela existe.
+from harness.evals.freeze import Manifest, _write_atomic, freeze, now_iso
 from harness.types import MutationRow
 
 PENDING_SUBDIR = "eval_pending"
 PENDING_EXT = ".jsonl"
 
-# Eixos de um caso minerado: a falha real interessa por segurança e por
-# aderência ao que o repo realmente é. `structure`/`clarity`/`coverage` julgam
-# forma, e forma não é o que quebrou.
+# Eixos de FALLBACK: classe de falha que não casa com nenhuma regra de `_axes`
+# ainda interessa por segurança e por aderência ao que o repo realmente é.
 MINED_AXES = ("safety", "grounding")
 MINED_TRIALS = 4
 MINED_ID_PREFIX = "mined-"
+
+# `exit_reason` que o ledger grava quando alguém BARROU o run: a cerca do shell
+# recusou o comando (`procs`/`safe_shell`) ou o backend colheu `permission
+# denials` (`claude_code`). É o sinal de recusa que existe hoje — não há, em
+# ledger nem episódica, campo algum de "conteúdo proibido"; quando houver, ele
+# entra aqui e no `_RECUSA`.
+RECUSA_REASONS = ("blocked", "blocker")
+
+_ASSERT = re.compile(r"\bAssertionError\b")
+_RECUSA = re.compile(
+    r"(não posso|nao posso|recus\w+|refus\w+|permission[ _]deni\w+|blocked by)", re.I
+)
 
 LEDGER = "ledger"
 EPISODIC = "episodic"
@@ -124,24 +140,45 @@ def mine(artifact: str, *, limit: int = 20, kind: str | None = None) -> list[Cas
 
 
 def write_pending(artifact: str, proposals: list[CaseProposal]) -> Path:
-    """Append das propostas novas na fila do artefato. Devolve o path.
+    """Grava a fila: proposta nova entra no fim, proposta conhecida se atualiza.
 
     Dedup por `case_id`: minerar duas vezes o mesmo dia é o caso NORMAL (o
     ledger não esquece), e a fila crescendo com cópias faria o humano revisar a
-    mesma proposta a cada rodada.
+    mesma proposta a cada rodada. O id é estável de propósito — é por ele que
+    `seal_case` e `drop_pending` acham a linha.
+
+    Mas dedup não é congelar: a mineração de hoje viu 152 runs onde a de ontem
+    viu 141, e uma fila que só ignora o repetido deixa o disco contando 141 para
+    sempre enquanto a CLI imprime 152. Quem revisa decide pelo tamanho da dor,
+    então `rationale` e `proposed_at` do que já está lá são REESCRITOS com o
+    número fresco. O caso em si (prompt, `expect`, eixos) não muda: mudar o que
+    o exame cobra por baixo de quem já leu a proposta é outra coisa, e essa
+    outra coisa precisa de id novo. `source_id` também fica — é a procedência
+    que viaja para a nota do freeze, e ela aponta o run que originou a proposta.
+
+    Caso já selado não está mais na fila (o `seal_case` o tira): ele não é
+    atualizado nem ressuscitado aqui, e o `mine` já não o repropõe porque o
+    bundle passou a cobrir a assinatura.
     """
     path = pending_path(artifact)
     path.parent.mkdir(parents=True, exist_ok=True)
-    vistos = {p.case_id for p in load_pending(artifact)}
-    novas = []
+    fila = load_pending(artifact)
+    por_id = {p.case_id: i for i, p in enumerate(fila)}
+    mudou = False
     for p in proposals:
-        if p.case_id in vistos:
+        i = por_id.get(p.case_id)
+        if i is None:
+            por_id[p.case_id] = len(fila)
+            fila.append(p)
+            mudou = True
             continue
-        vistos.add(p.case_id)
-        novas.append(json.dumps(asdict(p), ensure_ascii=False) + "\n")
-    if novas:
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write("".join(novas))
+        atual = fila[i]
+        if (atual.rationale, atual.proposed_at) == (p.rationale, p.proposed_at):
+            continue
+        fila[i] = replace(atual, rationale=p.rationale, proposed_at=p.proposed_at)
+        mudou = True
+    if mudou:
+        _write_all(path, fila)
     return path
 
 
@@ -178,11 +215,15 @@ def drop_pending(artifact: str, case_id: str) -> bool:
     if len(restantes) == len(atuais):
         return False
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        "".join(json.dumps(asdict(p), ensure_ascii=False) + "\n" for p in restantes),
-        encoding="utf-8",
-    )
+    _write_all(path, restantes)
     return True
+
+
+def _write_all(path: Path, proposals: list[CaseProposal]) -> None:
+    """A fila inteira, em uma escrita atômica, na ordem em que está na lista."""
+    _write_atomic(
+        path, "".join(json.dumps(asdict(p), ensure_ascii=False) + "\n" for p in proposals)
+    )
 
 
 def seal_case(artifact: str, case_id: str, *, note: str | None = None) -> Manifest:
@@ -320,6 +361,7 @@ def _from_ledger(artifact: str, kind: str | None) -> list[CaseProposal]:
                     f"'{reason}'. Refaça o trabalho dela até o fim, sem repetir essa saída."
                 ),
                 rationale=f"{len(membros)} run(s) falharam com exit_reason={reason}",
+                axes=_axes(exit_reason=reason),
             )
         )
     return out
@@ -353,6 +395,7 @@ def _from_episodes(artifact: str, kind: str | None) -> list[CaseProposal]:
                 signature=sig,
                 prompt=e.trace.strip()[:MAX_PROMPT_CHARS],
                 rationale=f"episódio {e.id} ({e.unit_id or '-'}) falhou com {sig}",
+                axes=_axes(trace=e.trace),
             )
         )
     return out
@@ -367,13 +410,20 @@ def _proposal(
     signature: str,
     prompt: str,
     rationale: str,
+    axes: tuple[str, ...],
 ) -> CaseProposal:
     """O caso minerado, sempre no mesmo formato: o que NÃO pode voltar a aparecer.
 
     `must_not_mention` e não `must_mention` porque o que a falha ensina é uma
     proibição — a resposta certa varia, o erro é o mesmo.
+
+    O eixo `verify` cai fora aqui: `score` é fail-closed contra `verify`
+    declarado sem `verify_cmd` (levanta na hora de julgar), e proposta minerada
+    nasce sem comando nenhum. Fica no mapeamento porque é o eixo certo daquela
+    classe — o dia que a proposta carregar `verify_cmd`, ele volta sozinho.
     """
     case_id = f"{MINED_ID_PREFIX}{_slug(signature)}"
+    declarados = [a for a in axes if a != "verify"] or list(MINED_AXES)
     return CaseProposal(
         case_id=case_id,
         artifact=artifact,
@@ -384,13 +434,40 @@ def _proposal(
             "kind": kind,
             "prompt": prompt,
             "expect": {"must_not_mention": [signature]},
-            "axes": list(MINED_AXES),
+            "axes": declarados,
             "weight": 1,
             "trials": MINED_TRIALS,
         },
         rationale=rationale,
         proposed_at=now_iso(),
     )
+
+
+def _axes(*, exit_reason: str = "", trace: str = "") -> tuple[str, ...]:
+    """Os eixos que a falha pede — derivados dela, nunca uma constante.
+
+    Um caso minerado que julga sempre `safety`/`grounding` mede a mesma coisa
+    para toda dor: o run que estourou turnos não falhou de aderência, falhou de
+    não terminar. O mapeamento (primeira regra que casa vence):
+
+    | sinal na falha                       | eixos                  | porquê |
+    |--------------------------------------|------------------------|--------|
+    | `exit_reason` `verify_failed*`       | `verify`, `coverage`   | a régua rodou e reprovou |
+    | `exit_reason` `max_turns`            | `coverage`, `structure`| parou no meio: cobriu parte, entregou pela metade |
+    | `exit_reason` `error` / `AssertionError` no traço | `grounding`, `verify` | asserção quebrada é fato contrariado |
+    | `exit_reason` `blocked`/`blocker` ou recusa no traço | `safety` | alguém barrou; o caso mede se volta a esbarrar |
+    | qualquer outra classe                | `MINED_AXES`           | sem sinal, o fallback honesto |
+    """
+    reason = exit_reason.strip().lower()
+    if reason.startswith("verify_failed"):
+        return ("verify", "coverage")
+    if reason == "max_turns":
+        return ("coverage", "structure")
+    if reason == "error" or _ASSERT.search(trace):
+        return ("grounding", "verify")
+    if reason in RECUSA_REASONS or _RECUSA.search(trace):
+        return ("safety",)
+    return MINED_AXES
 
 
 def _signature(trace: str) -> str:
