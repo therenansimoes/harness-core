@@ -42,7 +42,7 @@ from harness.ruler.verify import VERIFY_CHECK_NAME, log_tail, run_log_dir, run_v
 from harness.ruler.wilson import MIN_N, Arm, decide_ab, wilson_interval
 from harness.types import Check, ExecRequest, ExecResult, RunRow, Selection, UnitSpec
 from harness.uiverify import ASSET_KINDS, DEFAULT_MIN_KB, SHOT_NAME
-from harness.workspace import cache_gc
+from harness.workspace import cache_gc, writeproof
 from harness.workspace.provision import dispose, provision
 from harness.workspace.sealing import is_verifier, verifier_visible
 
@@ -653,6 +653,11 @@ def _motivo_nao_aceito(decision) -> str:
     reason = decision.reason if decision else ""
     if not decision:
         return "o grafo parou sem decisão"
+    if decision.action == "accept":
+        # Só chega aqui (chamado com `not aceito`) quando o gate aceitou mas o
+        # accept não entregou commit nenhum — L2 do writeproof: régua verde
+        # sem entrega não é aceite.
+        return "a régua passou mas nenhum arquivo foi entregue"
     if ceiling.BREACH_REASON in reason:
         return "teto de gasto estourado (--max-usd) — parou antes de gastar mais"
     if ceiling.BLIND_REASON in reason:
@@ -796,7 +801,16 @@ def cmd_do(args: argparse.Namespace) -> int:
                 return 2
 
         decision = final.get("decision")
-        aceito = decision is not None and decision.action == "accept"
+        # `entregue`: a régua pode passar sem que o accept tenha commitado nada
+        # (tarefa já satisfeita, agente não mudou arquivo) — "ACEITO · 0
+        # arquivo(s)" seria leitura falsa de `harness do`. `project` é sempre
+        # verdadeiro neste comando (`ensure_project` acima), mas a condição
+        # espelha o gate do grafo (`_record`) por clareza — SÓ importa quando
+        # há entrega de projeto de verdade.
+        entregue = bool(_last_event(final, "accept").get("commit"))
+        aceito = (
+            decision is not None and decision.action == "accept" and (not project or entregue)
+        )
         res = final.get("exec")
         print(_linha_do("rota", _rota_txt(args.route, final.get("selection") or sel)))
         for linha in _plano_linhas(
@@ -1533,6 +1547,29 @@ def cmd_ui_verify(args: argparse.Namespace) -> int:
         + (f" avisos={len(res.warnings)}" if res.warnings else "")
     )
     return 1 if res.failures else 0
+
+
+def cmd_proof_of_write(args: argparse.Namespace) -> int:
+    """`harness proof-of-write`: prova positiva de que o agente escreveu algo.
+
+    Compara contra o baseline gravado no provision (`writeproof.save_baseline`),
+    não contra `git status` cru — a worktree isolada já nasce suja do próprio
+    harness (`setup.log`, `env_file`, symbols/repomap/procs das tools), e um
+    `git status | grep -q .` sempre casa nesse lixo mesmo quando o agente não
+    tocou em nada. É o `FALLBACK_CMD` de `harness do` quando o repo não tem
+    suíte nenhuma — a única régua verificável nesse caso é "o agente escreveu".
+    """
+    new = writeproof.new_paths(Path(args.ws))
+    if new is None:
+        print("proof-of-write: sem baseline do provision — REPROVADO", file=sys.stderr)
+        return 2
+    if not new:
+        print("proof-of-write: nenhum arquivo novo desde o provision (o agente não escreveu nada)")
+        return 1
+    for p in new[:10]:
+        print(p)
+    print(f"proof-of-write: {len(new)} arquivo(s) novo(s)")
+    return 0
 
 
 def cmd_vision_judge(args: argparse.Namespace) -> int:
@@ -2720,6 +2757,15 @@ def build_parser() -> argparse.ArgumentParser:
         'claude CLI em haiku e exige JSON {"ok","motivo"}',
     )
     ui.set_defaults(func=cmd_ui_verify, parser=ui)
+
+    pow_cmd = sub.add_parser(
+        "proof-of-write",
+        help="régua fraca: prova que o agente escreveu algo, contra o baseline do provision",
+    )
+    pow_cmd.add_argument(
+        "--ws", default=".", help="workspace a checar (default: diretório atual)"
+    )
+    pow_cmd.set_defaults(func=cmd_proof_of_write, parser=pow_cmd)
 
     vj = sub.add_parser(
         "vision-judge",

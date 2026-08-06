@@ -27,6 +27,7 @@ from pathlib import Path
 
 from harness.routing import config_dir
 from harness.uiverify import SHOT_NAME
+from harness.workspace import writeproof
 
 PROJECTS_FILE = "projects.toml"
 # Mesma tabela que o `harness add` lê (`[projects.<nome>]`): registro único, um
@@ -333,9 +334,12 @@ def deliver(
     Antes do commit, um razor tira do staging o lixo de ferramenta (o screenshot
     do ui-verify) e PNG em branco abaixo de `min_kb`; `dropped` volta pro chamador
     porque um descarte silencioso é pior bug que o vazamento."""
-    # `.harness` sempre fora: é o scratch do run (log da régua, backups do
-    # edit_range, cache do web_fetch) e nada disso pertence à branch de entrega.
-    excludes = [f":(exclude){name}" for name in (*exclude, ".harness")]
+    # `writeproof.NOT_A_WRITE` sempre fora: scratch do run (log da régua,
+    # backups do edit_range, cache do web_fetch, caches de dependência
+    # symlinkados) — a mesma tupla que a prova-de-escrita usa para excluir do
+    # `git status`, para as duas réguas concordarem sobre "o que é lixo do
+    # harness" por construção, não por duas listas mantidas em sincronia à mão.
+    excludes = [f":(exclude){n}" for n in dict.fromkeys((*exclude, *writeproof.NOT_A_WRITE))]
     _git(ws, "add", "-A", "--", ".", *excludes)
     dropped = _razor(ws, min_kb)
     if dropped:

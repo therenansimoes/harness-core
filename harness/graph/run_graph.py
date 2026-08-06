@@ -86,6 +86,7 @@ from harness.ruler.verify import (
 )
 from harness.types import ExecRequest, ExecResult, RunRow, Selection, UnitSpec, Verdict
 from harness.workspace import setup as ws_setup
+from harness.workspace import writeproof
 from harness.workspace.provision import add_worktree, remove_worktree
 from harness.workspace.sealing import VERIFIER_NAMES, is_verifier, verifier_visible
 
@@ -946,6 +947,16 @@ def _provision(state: RunState, config=None) -> dict:
         # Fail-open: setup que quebra segue para o executor (que pode consertar
         # o ambiente). O evento carrega `setup_failed` para o trace não perder.
         setup = ws_setup.ensure(ws, get_project(unit.project))
+    # Baseline de prova-de-escrita: o que já está sujo ANTES do agente tocar o
+    # workspace (setup.log, env_file do provision). POR RUN, não por attempt —
+    # `_provision` é keyed sem attempt, e regravar no retry apagaria a prova de
+    # que o attempt 0 já tinha escrito algo. Fail-open aqui: um provision que
+    # não consegue gravar o baseline não pode travar o run; a régua downstream
+    # (`harness proof-of-write`) já REPROVA sozinha sem baseline (fail-closed).
+    try:
+        writeproof.save_baseline(ws)
+    except Exception:
+        pass
     sec = time.monotonic() - t0
     # Baseline junto do workspace: um SIGKILL entre copiar e medir não pode
     # deixar um provision "pela metade" — payload único, escrita única.
@@ -1801,6 +1812,13 @@ def _record(state: RunState, config=None) -> dict:
         exit_reason = "done"
     # `ok` é o veredito da régua, não a opinião do agente.
     ok = bool(decision and decision.action == "accept")
+    if unit.project:
+        # Aceite que não entregou nada não é aceite: sem isto, `RunRow.ok=True`
+        # alimenta ab.py/tune/mining como sucesso, e o loop aprende a régua
+        # errada em vez de aprender a entregar.
+        acc = store.get_node(run_id, "accept", db) or {}
+        if ok and acc and not acc.get("commit"):
+            ok, exit_reason = False, "entrega_vazia"
 
     row_id, wrote = store.record_run_once(
         RunRow(

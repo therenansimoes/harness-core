@@ -46,16 +46,16 @@ GO_CMD = "go test ./..."
 # (não é trivial: falha quando o run não mudou arquivo nenhum) e é infinitamente
 # melhor que aceitar um run que não fez nada.
 #
-# `git status --porcelain` e não `git diff --quiet`: o status enxerga também
-# arquivo NOVO, e o `git diff` antigo era cego a untracked — run que só CRIAVA
-# arquivo saía vermelho sem motivo. Os symlinks de cache do provision
-# (`node_modules`, `.venv`, `.cache`) são untracked e sujariam o status mesmo
-# com o agente parado, daí os pathspecs `:(exclude)`. O `grep -q .` sai 0
-# quando sobrou qualquer mudança.
-FALLBACK_CMD = (
-    "git status --porcelain -- "
-    "':(exclude)node_modules' ':(exclude).venv' ':(exclude).cache' | grep -q ."
-)
+# NÃO é mais `git status --porcelain | grep -q .`: a régua roda na worktree
+# isolada, que já nasce suja do PRÓPRIO harness (`ws_setup.ensure` grava
+# `.harness/setup.log` e `env_file` antes do agente, tools somam
+# symbols/repomap/procs.json depois) — `git status` conta esse lixo como
+# "mudou" e o `grep -q .` casa mesmo quando o agente não escreveu nada.
+# `harness proof-of-write` compara contra o baseline gravado no INSTANTE do
+# provision (`workspace/writeproof.py`), não contra zero: única referência
+# honesta de "o que é trabalho do agente". Reprova (exit != 0) sem baseline,
+# sem repo, ou sem arquivo novo — nenhum falso-aceite alcançável.
+FALLBACK_CMD = "harness proof-of-write"
 
 MAKE_TEST_RE = re.compile(r"^test:", re.MULTILINE)
 # Tamanho do pedaço legível do id. O sufixo aleatório é que garante unicidade;
@@ -143,9 +143,11 @@ def ensure_repo(cwd: Path) -> tuple[Path, bool]:
         repo = Path(cwd).resolve()
         _git(repo, "-c", "init.defaultBranch=main", "init", "-q")
         _semear_gitignore(repo)
+        _semear_exclude(repo)
         _commit_tudo(repo, INITIAL_COMMIT)
         return repo, True
 
+    _semear_exclude(achado)
     if not _has_commit(achado):
         _commit_tudo(achado, INITIAL_COMMIT)
         return achado, False
@@ -167,6 +169,38 @@ def _semear_gitignore(repo: Path) -> None:
     if alvo.exists():
         return
     alvo.write_text(f"{GITIGNORE_LINE}\n", encoding="utf-8")
+
+
+def _semear_exclude(repo: Path) -> None:
+    """`.harness/` fora do painel Changes MESMO quando o repo já tem
+    `.gitignore` próprio (`_semear_gitignore` só entra no repo que a gente
+    acabou de criar — este roda para TODO repo, novo ou existente).
+
+    `info/exclude` é local ao `.git` e untracked: não vira diff pro usuário
+    revisar, e worktree ligada (é assim que `_provision` roda unidade de
+    projeto) herda do git-common-dir. Fail-open — não é a defesa principal
+    (isso é `workspace/writeproof.py`, L1), só limpa o sintoma do painel."""
+    proc = _git(repo, "rev-parse", "--git-common-dir")
+    if proc.returncode != 0:
+        return
+    common = proc.stdout.strip()
+    if not common:
+        return
+    common_dir = Path(common)
+    if not common_dir.is_absolute():
+        common_dir = repo / common_dir
+    exclude = common_dir / "info" / "exclude"
+    try:
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        atual = exclude.read_text(encoding="utf-8") if exclude.is_file() else ""
+        if GITIGNORE_LINE in atual.splitlines():
+            return
+        with exclude.open("a", encoding="utf-8") as fh:
+            if atual and not atual.endswith("\n"):
+                fh.write("\n")
+            fh.write(f"{GITIGNORE_LINE}\n")
+    except OSError:
+        pass
 
 
 # --------------------------------------------------------------------------- régua

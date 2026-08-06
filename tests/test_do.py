@@ -90,6 +90,12 @@ def test_detect_verify_fallback_passa_na_validacao_do_add(tmp_path):
     validate_verify_cmd(cmd)  # não levanta: a régua fraca ainda é uma régua
 
 
+def test_fallback_cmd_passa_na_validacao_do_add():
+    """`FALLBACK_CMD` virou `harness proof-of-write` (baseline do provision, não
+    `git status` cru) — continua sendo régua determinística de verdade."""
+    add.validate_verify_cmd(do.FALLBACK_CMD)
+
+
 def test_pytest_vence_package_json(tmp_path):
     """Repo poliglota: a evidência mais forte (suíte declarada) manda."""
     (tmp_path / "tests").mkdir()
