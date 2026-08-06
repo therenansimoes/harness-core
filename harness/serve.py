@@ -74,6 +74,8 @@ MODEL_NOT_FOUND = 404
 MAX_MODEL_ID_CHARS = 120
 MAX_USD_CAP = 5.0
 MAX_RUNNING_JOBS = 1
+AUTO_DO_ENV = "HARNESS_SERVE_AUTO_DO"  # "0" => desliga o gateway de ação inteiro
+ACTION_MAX_CHARS = 2000  # acima disso é despejo de texto, não pedido
 CHUNK_CHARS = 120  # tamanho da fatia de cada frame SSE
 STATE_MAX_CHARS = 2000  # mesmo raciocínio de deepagents_backend.TARGET_CONSTITUTION_MAX_CHARS
 BASE_URL_ENV = "OPENAI_BASE_URL"  # mesma var de vision.py / deepagents_backend
@@ -930,8 +932,11 @@ def system_prompt(cwd: Path, detection: Detection | None = None) -> str:
     base = (
         "Você é o harness, mas nesta conversa o contexto é outro projeto —\n"
         f"{frase}\n"
-        "Responda em português, curto (no máximo 8 linhas). Nesta conversa você NÃO\n"
-        "executa nada: para agir, o usuário usa os comandos com barra listados abaixo.\n\n"
+        "Responda em português, curto (no máximo 8 linhas). Você não edita arquivo nenhum\n"
+        "nesta conversa — quem executa é o harness, em segundo plano.\n"
+        "Se o usuário PEDIR UMA AÇÃO (mudar, criar, corrigir, refatorar, fazer backup),\n"
+        "NÃO ensine o passo a passo e NÃO peça para ele rodar comando: o servidor\n"
+        "despacha a execução sozinho. Responda perguntas; ação não é papo.\n\n"
         f"{HELP}{jobs_linha}"
     )
     state = _clip(workspace_state_text(det))
@@ -1057,6 +1062,146 @@ def chat_notes(ex: Executor, text: str, ctx: ServeContext) -> list[str]:
     return []
 
 
+# --------------------------------------------------------------------------- gateway de ação: texto livre que vira /do
+#
+# Regra do usuário (final): pedido de AÇÃO em texto livre dispara IMEDIATAMENTE,
+# em qualquer modo — sem proposta, sem "aprova", sem marcador, sem estado entre
+# turnos. Pin explícito (local ou pago) é consentimento permanente: dispara com
+# AQUELE executor. Auto ("harness") dispara na hora com o executor LOCAL
+# forçado. Guardrails: `--max-usd` fail-closed (teto $5), `--no-apply`,
+# `MAX_RUNNING_JOBS=1`, kill switch `HARNESS_SERVE_AUTO_DO=0`, opt-out por
+# mensagem ("só pergunta"). Nada aqui deriva de histórico — os predicados só
+# olham o texto do turno atual.
+
+_AFFIRM_RE = re.compile(
+    r"^(sim|isso|ok|okay|beleza|blz|bora|manda|manda ver|manda bala|vai|vai la|vai lá|"
+    r"pode|pode ir|pode sim|aprovo|aprova|aprovado|confirmo|confirmado|faz|faz isso|"
+    r"faça|faça isso|faca isso|yes|y|go|do it|ship it)"
+    r"[\s,.!]*(pode|manda|vai|isso|por favor|pfv|então|entao)?[\s,.!]*$"
+)
+_QUESTION_RE = re.compile(
+    r"^[\s\W]*(como|qual|quais|quando|onde|por que|por quê|porque|pq|o que|que que|quem|"
+    r"quanto|quantos|quantas|existe|tem como|dá pra|da pra|dá para|é possível|e possivel|"
+    r"posso|pode me|explica|explique|explicar|resume|resuma|me diz|me fala|mostra|mostre|"
+    r"lista|liste|what|how|why|when|where|which|who|can you|could you|does|is it)"
+    r"(?![0-9a-zà-ú])"
+)
+_ACTION_RE = re.compile(
+    r"(?<![0-9a-zà-ú])("
+    r"melhor|corrig|arrum|conserta|conserte|ajeit|implementa|implemente|implementar|"
+    r"cria|crie|criar|adiciona|adicione|adicionar|remove|remova|remover|apaga|apague|"
+    r"deleta|delete|refator|reescrev|reescreva|migra|migre|atualiza|atualize|renomeia|"
+    r"renomeie|move|mova|ajusta|ajuste|troca|troque|substitui|substitua|padroniz|otimiz|"
+    r"documenta|documente|testa|teste|escreve|escreva|gera|gere|configura|configure|"
+    r"instala|instale|roda|rode|executa|execute|faz|faça|faca|fazer|coloca|coloque|"
+    r"sobe|suba|commita|commite|backup|deploy)"
+)
+_NO_DISPATCH_RE = re.compile(
+    r"não dispara|nao dispara|não execute|nao execute|"
+    r"só pergunta|so pergunta|sem disparar|não roda nada|nao roda nada"
+)
+
+
+def is_affirmation(t: str) -> bool:
+    """Afirmação solta ("sim", "bora", "faz isso") — usada SÓ como VETO dentro
+    de `is_action_request`, nunca como gatilho de dispatch: este módulo não
+    guarda estado entre turnos, então "sim" sozinho não tem o que confirmar."""
+    return len(t) <= 40 and _AFFIRM_RE.match(t.lower()) is not None
+
+
+def is_action_request(text: str) -> bool:
+    """Todos os predicados desta seção rodam sobre `text.strip().lower()` —
+    zero I/O, zero LLM (`chat_route` pode ser chamada 2x por request sem
+    custo). Ordem é load-bearing, cada veto documentado:
+    1. vazio / começa com "/" / maior que `ACTION_MAX_CHARS` → não é pedido de
+       ação (é comando ou despejo de texto).
+    2. `_NO_DISPATCH_RE` → opt-out explícito por mensagem ("só pergunta",
+       "não dispara").
+    3. `is_affirmation` → VETO load-bearing: "faz isso" solto não pode virar
+       task sem conteúdo. Não "simplificar" isso embora — sem este veto,
+       confirmar qualquer coisa no papo normal dispararia um /do vazio de
+       sentido.
+    4. `_QUESTION_RE` → pergunta não é pedido de ação.
+    5. sobrou: bate `_ACTION_RE`? só aí dispara.
+    """
+    t = text.strip().lower()
+    if not t or t.startswith("/") or len(t) > ACTION_MAX_CHARS:
+        return False
+    if _NO_DISPATCH_RE.search(t):
+        return False
+    if is_affirmation(t):
+        return False
+    if _QUESTION_RE.match(t):
+        return False
+    return _ACTION_RE.search(t) is not None
+
+
+def auto_do_enabled() -> bool:
+    """Lido na hora, mesmo padrão de `STRICT_MODEL_ENV`: kill switch de
+    ambiente, sem cache — `AUTO_DO_ENV=0` desliga o gateway inteiro."""
+    return os.environ.get(AUTO_DO_ENV) != "0"
+
+
+ROUTE_CMD = "/comando"
+ROUTE_DISPATCH = "ação→do"
+ROUTE_TEXT = "texto"
+ROUTE_EMPTY = "-"
+
+
+def chat_route(text: str, ctx: ServeContext) -> str:
+    """`rota` é intenção, não desfecho — dispatch recusado pelo `_cmd_do`
+    ("já tem job rodando") ainda loga `ação→do`. Não plumbar desfecho de volta
+    pra cá."""
+    stripped = text.strip()
+    if not stripped:
+        return ROUTE_EMPTY
+    if stripped.startswith("/"):
+        return ROUTE_CMD
+    if not auto_do_enabled():
+        return ROUTE_TEXT
+    if is_action_request(stripped):
+        return ROUTE_DISPATCH
+    return ROUTE_TEXT
+
+
+def chat_executor(ctx: ServeContext) -> Executor:
+    """O executor EFETIVO do dispatch vindo do chat:
+    - `ctx.executor` pinado explicitamente (id != MODEL_ID) → ele (local ou
+      pago — pin é consentimento).
+    - auto → primeiro executor LOCAL de `executors()` que não seja o auto
+      (`e.local and e.id != MODEL_ID`, nunca o literal "harness:local" —
+      `_tier_alias` pode nomear um segundo tier local `local-<tier>`). Sem
+      nenhum local (models.toml quebrado) → `auto_executor()` mesmo (dispatch
+      sem pin; o teto segura)."""
+    ex = ctx.executor
+    if ex is not None and ex.id != MODEL_ID:
+        return ex
+    return next((e for e in executors() if e.local and e.id != MODEL_ID), auto_executor())
+
+
+def _dispatch_from_chat(task: str, ctx: ServeContext) -> str:
+    """Monta o motivo (1ª linha da resposta) e delega pro `_cmd_do` — ÚNICO
+    caminho de dispatch (bounds, `MAX_RUNNING_JOBS`, record, job-id +
+    `/status`). Sem janela extra de dedupe de task: um regenerate do Cursor
+    segundos depois bate no `MAX_RUNNING_JOBS` dentro do próprio `_cmd_do` (um
+    run de `harness do` leva minutos) — não adicionar strptime/timestamp
+    aqui."""
+    pin = ctx.executor is not None and ctx.executor.id != MODEL_ID
+    ex = chat_executor(ctx)
+    if pin:
+        motivo = (
+            f'executando direto — executor {ex.id} pinado'
+            f'{" ($0)" if ex.local else f" · PAGO, teto ${MAX_USD_CAP:.2f}"}.'
+        )
+    else:
+        motivo = (
+            f'executando direto no executor local ({ex.id}, $0) — quer outro executor: '
+            f'pina harness:<id> ou usa /do. Para não disparar: "só pergunta" ou {AUTO_DO_ENV}=0.'
+        )
+    ctx2 = replace(ctx, executor=ex)
+    return f"{motivo}\n{_cmd_do(task, ctx2)}"
+
+
 HELP = """\
 comandos do harness:
   /status                      — doctor, auto-aprovação e jobs em andamento
@@ -1071,6 +1216,9 @@ comandos do harness:
   /models                       — executores disponíveis (id pro campo "model" do cliente)
   /help                         — esta lista
 texto sem barra vai para o modelo local (LM Studio, porta 1234) — chat é sempre local e $0.
+texto livre pedindo AÇÃO: eu executo na hora (harness do em segundo plano, --no-apply, teto $5.00) —
+no auto vai pro executor local ($0); executor pago só com pin explícito ou /do.
+"só pergunta" no texto (ou HARNESS_SERVE_AUTO_DO=0 no serve) desliga o disparo.
 """
 
 
@@ -1262,8 +1410,9 @@ _COMMANDS: dict[str, Callable[[str, ServeContext], str]] = {
 
 
 def handle_message(text: str, ctx: ServeContext) -> str:
-    stripped = text.strip()
-    if stripped.startswith("/"):
+    route = chat_route(text, ctx)
+    if route == ROUTE_CMD:
+        stripped = text.strip()
         rest = stripped[1:]
         name, _, arg = rest.partition(" ")
         name = name.strip().lower()
@@ -1271,6 +1420,8 @@ def handle_message(text: str, ctx: ServeContext) -> str:
         if handler is None:
             return f"comando desconhecido: /{name}\n\n{HELP}"
         return handler(arg, ctx)
+    if route == ROUTE_DISPATCH:
+        return _dispatch_from_chat(text.strip(), ctx)
     ex = ctx.executor or auto_executor()
     notes = chat_notes(ex, text, ctx)
     reply = llm_reply(text, ctx)
@@ -1639,8 +1790,9 @@ class _Handler(BaseHTTPRequestHandler):
         req_ctx = replace(ctx_for_request(messages, self.ctx), executor=ex, requested_model=requested)
         self._log_state["ws"] = _ws_field(req_ctx)
         user_text = last_user_text(messages)
-        stripped = user_text.strip()
-        self._log_state["rota"] = "/comando" if stripped.startswith("/") else ("texto" if stripped else "-")
+        # `chat_route` é pura (zero I/O) — chamada aqui só pro verbose/log e
+        # de novo dentro de `handle_message`; as duas nunca podem divergir.
+        self._log_state["rota"] = chat_route(user_text, req_ctx)
         text = handle_message(user_text, req_ctx)
         cid = new_id()
         created = int(time.time())

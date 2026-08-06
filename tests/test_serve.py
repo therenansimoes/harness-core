@@ -1040,6 +1040,11 @@ def test_chat_com_executor_pago_responde_local_e_avisa(tmp_path: Path, monkeypat
 
 
 def test_auto_avisa_tier_pago_so_com_sinal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # "preciso refatorar este módulo" bate `_ACTION_RE` ("refator") — sem
+    # desligar o gateway de ação aqui este teste dispararia um /do de
+    # verdade em vez de exercitar o `route_hint` do caminho de texto livre
+    # que ele quer provar.
+    monkeypatch.setenv(serve.AUTO_DO_ENV, "0")
     monkeypatch.setattr(serve, "_bd", lambda *a, **kw: (0, ""))
     monkeypatch.setattr(
         serve,
@@ -1265,3 +1270,232 @@ def test_debug_dump_dir_ilegivel_nao_derruba_a_request(
     assert "/do" in json.loads(raw)["choices"][0]["message"]["content"]
     err = capsys.readouterr().err
     assert "ilegível" in err
+
+
+# --------------------------------------------------------------------------- gateway de ação (chat que dispara /do)
+
+
+def _pin_local() -> serve.Executor:
+    return serve.Executor(
+        id="harness:local", tier="t0", backend="deepagents", run_model="openai:qwen/qwen3.5-9b",
+        local=True, label="",
+    )
+
+
+def _pin_pago() -> serve.Executor:
+    return serve.Executor(
+        id="harness:haiku", tier="t1", backend="claude_code", run_model="haiku", local=False, label="",
+    )
+
+
+def test_chat_route_acao_vs_pergunta(tmp_path: Path) -> None:
+    ctx_auto = _ctx(tmp_path)
+    ctx_pin = serve.ServeContext(cwd=tmp_path, executor=_pin_local())
+
+    acoes = [
+        "Melhore o template de propostas, faça backup do codigo atual",
+        "corrige o bug do formulário",
+        "adiciona um campo de desconto",
+    ]
+    for texto in acoes:
+        assert serve.chat_route(texto, ctx_auto) == serve.ROUTE_DISPATCH
+        assert serve.chat_route(texto, ctx_pin) == serve.ROUTE_DISPATCH
+
+    textos = [
+        "como funciona o backup?",
+        "o que faz esse arquivo?",
+        "oi, tudo bem?",
+        "mostra as tarefas prontas",
+        "faz isso",  # afirmação solta — veto load-bearing, não vira task
+        "só pergunta: melhorar o template faria sentido?",
+    ]
+    for texto in textos:
+        assert serve.chat_route(texto, ctx_auto) == serve.ROUTE_TEXT
+
+
+def test_acao_em_auto_dispara_no_executor_local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    _fake_tiers(monkeypatch)
+
+    def fail_http_post(*a, **kw):
+        pytest.fail("`_http_post` não deveria ser chamado — ação dispara sem passar pelo LLM")
+
+    monkeypatch.setattr(serve, "_http_post", fail_http_post)
+    capturados: list[list[str]] = []
+
+    def fake_popen(argv: list[str], *, cwd: Path, log: Path, env: dict[str, str] | None = None) -> int:
+        capturados.append(argv)
+        return 424242
+
+    monkeypatch.setattr(serve, "_popen", fake_popen)
+    ctx = _ctx(tmp_path)  # sem executor pinado => auto
+
+    task = "Melhore o template de propostas, faça backup do codigo atual"
+    resp = serve.handle_message(task, ctx)
+    assert len(capturados) == 1
+    argv = capturados[0]
+    assert task in argv
+    assert "--no-apply" in argv
+    assert argv[argv.index("--max-usd") + 1] == "5.00"
+    assert argv[argv.index("--backend") + 1] == "deepagents"
+    assert argv[argv.index("--model") + 1] == "openai:qwen/qwen3.5-9b"
+    assert "job " in resp
+    assert "/status" in resp
+    assert "$0" in resp
+
+
+def test_acao_com_pin_local_dispara_no_pinado(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+
+    def fail_http_post(*a, **kw):
+        pytest.fail("`_http_post` não deveria ser chamado — ação dispara sem passar pelo LLM")
+
+    monkeypatch.setattr(serve, "_http_post", fail_http_post)
+    capturados: list[list[str]] = []
+    monkeypatch.setattr(serve, "_popen", lambda argv, **kw: capturados.append(argv) or 1)
+
+    ctx = serve.ServeContext(cwd=tmp_path, executor=_pin_local())
+    resp = serve.handle_message("corrige o bug do formulário", ctx)
+    assert len(capturados) == 1
+    argv = capturados[0]
+    assert argv[argv.index("--backend") + 1] == "deepagents"
+    assert "job " in resp
+
+
+def test_acao_com_pin_pago_dispara_no_pago_com_aviso(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+
+    def fail_http_post(*a, **kw):
+        pytest.fail("`_http_post` não deveria ser chamado — ação dispara sem passar pelo LLM")
+
+    monkeypatch.setattr(serve, "_http_post", fail_http_post)
+    capturados: list[list[str]] = []
+    monkeypatch.setattr(serve, "_popen", lambda argv, **kw: capturados.append(argv) or 1)
+
+    ctx = serve.ServeContext(cwd=tmp_path, executor=_pin_pago())
+    resp = serve.handle_message("adiciona um campo de desconto", ctx)
+    assert len(capturados) == 1
+    argv = capturados[0]
+    assert argv[argv.index("--backend") + 1] == "claude_code"
+    assert "PAGO" in resp
+    assert "5.00" in resp
+
+
+def test_pergunta_nao_dispara(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(serve, "_bd", lambda *a, **kw: (0, ""))
+
+    def fail_popen(*a, **kw):
+        pytest.fail("`_popen` não deveria ser chamado — é pergunta, não ação")
+
+    monkeypatch.setattr(serve, "_popen", fail_popen)
+    monkeypatch.setattr(
+        serve,
+        "_http_post",
+        lambda url, payload, timeout_s: (
+            200,
+            json.dumps({"choices": [{"message": {"content": "resposta do modelo"}}]}),
+        ),
+    )
+
+    ctx_pin = serve.ServeContext(cwd=tmp_path, executor=_pin_local())
+    resp_pin = serve.handle_message("como funciona o backup?", ctx_pin)
+    assert "resposta do modelo" in resp_pin
+
+    ctx_auto = _ctx(tmp_path)
+    resp_auto = serve.handle_message("o que faz esse arquivo?", ctx_auto)
+    assert "resposta do modelo" in resp_auto
+
+
+def test_opt_out_frase_e_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx_pin = serve.ServeContext(cwd=tmp_path, executor=_pin_local())
+    assert serve.chat_route("só pergunta: melhora o template", ctx_pin) == serve.ROUTE_TEXT
+
+    def fail_popen(*a, **kw):
+        pytest.fail("`_popen` não deveria ser chamado — opt-out por frase/env")
+
+    monkeypatch.setattr(serve, "_popen", fail_popen)
+    monkeypatch.setattr(serve, "_bd", lambda *a, **kw: (0, ""))
+    monkeypatch.setattr(
+        serve, "_http_post", lambda url, payload, timeout_s: (200, json.dumps({"choices": [{"message": {"content": "ok"}}]}))
+    )
+    resp_frase = serve.handle_message("só pergunta: melhora o template", ctx_pin)
+    assert "ok" in resp_frase
+
+    monkeypatch.setenv(serve.AUTO_DO_ENV, "0")
+    ctx_auto = _ctx(tmp_path)
+    assert serve.chat_route("corrige o bug do formulário", ctx_auto) == serve.ROUTE_TEXT
+    resp_env = serve.handle_message("corrige o bug do formulário", ctx_auto)
+    assert "ok" in resp_env
+
+
+def test_regenerate_nao_duplica(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    chamadas = []
+    monkeypatch.setattr(serve, "_popen", lambda *a, **kw: chamadas.append(1) or 1)
+    monkeypatch.setattr(serve, "job_running", lambda job: True)
+    ctx = _ctx(tmp_path)
+
+    task = "corrige o bug do formulário"
+    primeiro = serve.handle_message(task, ctx)
+    assert "job " in primeiro
+    assert len(chamadas) == 1
+
+    segundo = serve.handle_message(task, ctx)
+    assert "já tem um job rodando" in segundo
+    assert len(chamadas) == 1  # regenerate segundos depois não dispara um segundo _popen
+
+
+def test_system_prompt_manda_nao_ensinar_passo_a_passo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(serve, "_bd", lambda *a, **kw: (0, ""))
+    ws = _git_repo(tmp_path, "gateway-prompt")
+    det = serve.validate_workspace(str(ws), (ws.parent.resolve(),))
+    assert det.verdict == "ok"
+
+    prompt_detectado = serve.system_prompt(tmp_path, det)
+    assert "NÃO ensine o passo a passo" in prompt_detectado
+
+    prompt_sem_deteccao = serve.system_prompt(tmp_path)
+    assert "NÃO ensine o passo a passo" not in prompt_sem_deteccao
+
+
+def test_rota_verbose_mostra_o_gateway(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(serve, "_popen", lambda *a, **kw: 424242)
+    port, t = _serve(tmp_path, max_requests=1, verbose=True)
+    status, _raw, _ = _post(
+        port,
+        {"model": "harness", "messages": [{"role": "user", "content": "corrige o bug do formulário"}]},
+    )
+    t.join(5)
+    assert status == 200
+    err = capsys.readouterr().err
+    assert "rota=ação→do" in err
+
+
+def test_e2e_acao_pelo_shape_do_cursor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    ws = _git_repo(tmp_path, "cursorws-acao")
+    capturados: list[list[str]] = []
+
+    def fake_popen(argv: list[str], *, cwd: Path, log: Path, env: dict[str, str] | None = None) -> int:
+        capturados.append(argv)
+        return 424242
+
+    monkeypatch.setattr(serve, "_popen", fake_popen)
+    port, t = _serve(tmp_path, max_requests=1, workspace_roots=(ws.parent,))
+
+    task = "Melhore o template de propostas, faça backup do codigo atual"
+    status, raw, _ = _post(port, _cursor_body(ws, task))
+    t.join(5)
+    assert status == 200
+    content = json.loads(raw)["choices"][0]["message"]["content"]
+    assert len(capturados) == 1
+    assert task in capturados[0]
+    assert "job " in content
