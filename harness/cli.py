@@ -57,6 +57,9 @@ IMPROVE_ANSWER = '{"action":"abort"}'
 # Nome de check: curto e sem espaço porque ele viaja em log, payload e hint.
 CHECK_NAME_RE = re.compile(r"[a-z0-9_-]{1,32}")
 PACKAGE = "harness-core"
+# Allowlist, não denylist: um check do doctor criado amanhã vira aviso por
+# padrão no quickstart — o tapete de boas-vindas sub-alarma de propósito.
+QUICKSTART_BLOCKERS = frozenset({"git", "config", "data", "genome", "actions"})
 
 
 def _versao() -> str:
@@ -437,7 +440,9 @@ def _last_event(final: dict, node: str) -> dict:
     return next((e for e in reversed(final.get("events", [])) if e.get("node") == node), {})
 
 
-def _graph_final(args: argparse.Namespace, unit: UnitSpec, sel: Selection) -> tuple[dict, float]:
+def _graph_final(
+    args: argparse.Namespace, unit: UnitSpec, sel: Selection, progress=None
+) -> tuple[dict, float]:
     """Roda a unidade no grafo e devolve `(estado final, segundos)`.
 
     Separado do `_run_via_graph` porque o `harness do` precisa do estado (branch
@@ -472,6 +477,7 @@ def _graph_final(args: argparse.Namespace, unit: UnitSpec, sel: Selection) -> tu
         store.data_dir(),
         thread_id=uuid.uuid4().hex[:12],
         route=args.route,
+        on_stage=None if progress is None else progress.stage,
     )
     return final, time.monotonic() - t0
 
@@ -566,6 +572,35 @@ def _linha_do(rotulo: str, valor: object) -> str:
     return f"{rotulo:>9}  {valor}"
 
 
+def _plano_linhas(needs_plan: bool, task: str, project: str) -> list[str]:
+    """As linhas do `plano` no relatório do `do`, com o critério por extenso.
+
+    `plano não` era lido como veredito sobre o pedido do usuário. Quem decide é
+    `run_graph._needs_plan`, por tamanho e por verbo — e quem quer o trabalho
+    quebrado em passos de verdade usa o `decompose`, que é outro comando.
+    """
+    # Import tardio: run_graph importa `harness.cli` (load_unit) e o ciclo
+    # fecharia no import do módulo, não aqui.
+    from harness.graph.run_graph import PLAN_PROMPT_CHARS
+
+    if needs_plan:
+        cabeca = "sim — o harness mandou o agente planejar antes de editar"
+    else:
+        cabeca = (
+            "não — pedido curto e direto; o harness só manda planejar antes "
+            f"quando o pedido passa de {PLAN_PROMPT_CHARS} caracteres ou fala em "
+            "refatorar, implementar, reescrever, migrar ou mexer em vários arquivos"
+        )
+    return [
+        _linha_do("plano", cabeca),
+        _linha_do(
+            "",
+            f'quer o trabalho quebrado em passos? harness decompose "{task}" '
+            f"--project {project}",
+        ),
+    ]
+
+
 def _rota_txt(modo: str, sel: Selection) -> str:
     return f"{modo} → {sel.tier or MANUAL_TIER} {sel.backend} {sel.model or '-'} (kind={sel.kind})"
 
@@ -618,7 +653,8 @@ def cmd_do(args: argparse.Namespace) -> int:
     comando adiciona é a decisão de cada default.
     """
     from harness import do as do_mod
-    from harness.add import AddError, validate_verify_cmd
+    from harness.add import UI_VERIFY_SUFFIX, AddError, validate_verify_cmd
+    from harness.progress import Progress
     from harness.projects import IntegrateError, default_branch, delivery_branch, integrate
 
     paths.ensure_user_config()
@@ -637,6 +673,12 @@ def cmd_do(args: argparse.Namespace) -> int:
     else:
         verify_cmd, detectado = do_mod.detect_verify(repo)
         motivo = f"detectado: {detectado}"
+
+    # Sufixo DEPOIS da validação, como no `add`: a régua tem de se sustentar
+    # sozinha; o ui-verify é exigência extra, não muleta para régua fraca.
+    if args.ui and "harness ui-verify" not in verify_cmd:
+        verify_cmd += UI_VERIFY_SUFFIX
+        motivo = f"{motivo} + --ui"
 
     project = do_mod.ensure_project(repo)
     unit_dir = do_mod.write_unit(
@@ -666,27 +708,35 @@ def cmd_do(args: argparse.Namespace) -> int:
         return 0
 
     try:
-        final, sec = _graph_final(args, unit, sel)
-        # Servidor local desligado não é fracasso da unidade: sobe um degrau de
-        # custo e tenta de novo, UMA vez. Teto de duas execuções por comando —
-        # subir tier em cascata é decisão de orçamento, não de disponibilidade.
-        if _sem_turno(final) and (acima := _proximo_tier(final.get("selection") or sel)):
-            print(f"LM Studio fora do ar (porta 1234) — subindo para {acima.name}")
-            args.route, args.backend, args.model = ROUTE_MANUAL, acima.backend, acima.model or None
-            sel = _resolve_route(args, unit)
-            final, sec = _graph_final(args, unit, sel)
-        elif _sem_turno(final):
-            print(
-                "nenhum executor respondeu e não há tier acima deste — rode `harness doctor`",
-                file=sys.stderr,
-            )
-            return 2
+        with Progress() as progress:
+            final, sec = _graph_final(args, unit, sel, progress)
+            # Servidor local desligado não é fracasso da unidade: sobe um degrau de
+            # custo e tenta de novo, UMA vez. Teto de duas execuções por comando —
+            # subir tier em cascata é decisão de orçamento, não de disponibilidade.
+            if _sem_turno(final) and (acima := _proximo_tier(final.get("selection") or sel)):
+                print(f"LM Studio fora do ar (porta 1234) — subindo para {acima.name}")
+                args.route, args.backend, args.model = (
+                    ROUTE_MANUAL,
+                    acima.backend,
+                    acima.model or None,
+                )
+                sel = _resolve_route(args, unit)
+                final, sec = _graph_final(args, unit, sel, progress)
+            elif _sem_turno(final):
+                print(
+                    "nenhum executor respondeu e não há tier acima deste — rode `harness doctor`",
+                    file=sys.stderr,
+                )
+                return 2
 
         decision = final.get("decision")
         aceito = decision is not None and decision.action == "accept"
         res = final.get("exec")
         print(_linha_do("rota", _rota_txt(args.route, final.get("selection") or sel)))
-        print(_linha_do("plano", "sim" if _last_event(final, "plan").get("needs_plan") else "não"))
+        for linha in _plano_linhas(
+            bool(_last_event(final, "plan").get("needs_plan")), args.task, project
+        ):
+            print(linha)
 
         aplicado = ""
         if aceito and not args.no_apply:
@@ -703,7 +753,9 @@ def cmd_do(args: argparse.Namespace) -> int:
 
         if aceito:
             arquivos = len(res.files_changed) if res else 0
-            print(_linha_do("resultado", f"ACEITO em {sec:.1f}s · {arquivos} arquivo(s){aplicado}"))
+            descartados = _last_event(final, "accept").get("dropped") or []
+            fora = f" · fora da entrega: {', '.join(descartados)}" if descartados else ""
+            print(_linha_do("resultado", f"ACEITO em {sec:.1f}s · {arquivos} arquivo(s){aplicado}{fora}"))
         else:
             print(_linha_do("resultado", f"NÃO ACEITO ({_motivo_nao_aceito(decision)})"))
         print(
@@ -733,6 +785,11 @@ def cmd_quickstart(args: argparse.Namespace) -> int:
     sempre a mesma ("por que não rodou?"), e a resposta quase sempre é uma peça
     de fora do harness (servidor local desligado, CLI não instalado). Só o que
     NÃO está ok aparece — lista de 25 linhas verdes não é boas-vindas.
+
+    Downgrade de propósito: o doctor usa FALHA para tudo que reprova, mas a
+    maioria não impede `harness do` (backend alternativo indisponível, catálogo
+    vazio). Gritar FALHA num tapete de boas-vindas ensina o leitor a ignorar a
+    palavra — só o que está em `QUICKSTART_BLOCKERS` continua FALHA aqui.
     """
     from harness import doctor
 
@@ -746,15 +803,24 @@ def cmd_quickstart(args: argparse.Namespace) -> int:
 
     # Com `root=` explícito: o quickstart roda de qualquer cwd, e o ambiente que
     # ele acabou de semear é `~/.harness`.
-    pendencias = [c for c in doctor.checks(root=paths.home_root()) if c.status != doctor.OK]
+    nao_ok = [c for c in doctor.checks(root=paths.home_root()) if c.status != doctor.OK]
     if not shutil.which("git"):
-        pendencias.append(doctor.Check("git", doctor.FAIL, "git não está no PATH — instale antes"))
-    if not pendencias:
+        nao_ok.append(doctor.Check("git", doctor.FAIL, "git não está no PATH — instale antes"))
+    bloqueadores = [c for c in nao_ok if c.name in QUICKSTART_BLOCKERS and c.status == doctor.FAIL]
+    avisos = [c for c in nao_ok if c not in bloqueadores]
+    if not bloqueadores and not avisos:
         print("ambiente pronto: nada faltando.")
         return 0
-    print("o que falta (nada aqui impede tentar):")
-    for c in pendencias:
-        print(f"  {c.status:<5} {c.name:<20} {c.detail}")
+    if bloqueadores:
+        print("o que impede rodar (resolva antes):")
+        for c in bloqueadores:
+            print(f"  {doctor.FAIL:<5} {c.name:<20} {c.detail}")
+    if avisos:
+        if bloqueadores:
+            print()
+        print("o que falta (nada aqui impede tentar):")
+        for c in avisos:
+            print(f"  {doctor.WARN:<5} {c.name:<20} {c.detail}")
     return 0
 
 
@@ -1988,6 +2054,11 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="CMD",
         help="a régua que prova que ficou pronto; sem ela o harness detecta "
         "pela cara do repo (pytest, npm test, make test, cargo, go)",
+    )
+    adv.add_argument(
+        "--ui",
+        action="store_true",
+        help="tarefa de frontend: gruda `harness ui-verify dist --expect-asset css` na régua",
     )
     adv.add_argument(
         "--kind",

@@ -16,6 +16,7 @@ provisionamento default (cópia em `$HARNESS_DATA_DIR/ws/<run_id>`) segue igual.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import subprocess
@@ -25,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from harness.routing import config_dir
+from harness.uiverify import SHOT_NAME
 
 PROJECTS_FILE = "projects.toml"
 # Mesma tabela que o `harness add` lê (`[projects.<nome>]`): registro único, um
@@ -281,6 +283,11 @@ def milestone_progress(proj: Project) -> list[tuple[str, int, int]]:
 
 # --- entrega em branch --------------------------------------------------------
 
+# 20kb é a calibração do ui-verify: um PNG abaixo disso é tela em branco, não asset.
+MIN_DELIVER_KB = 20.0
+JUNK_NAMES = (SHOT_NAME,)
+JUNK_SUFFIXES = (".png",)
+
 
 def run_branch(run_id: str) -> str:
     """Branch efêmera do run dentro do repo do projeto."""
@@ -293,20 +300,46 @@ def delivery_branch(unit_id: str) -> str:
     return f"harness/{safe}"
 
 
+def _razor(ws: Path, min_kb: float) -> list[str]:
+    """Caminhos staged (só adições) que são lixo de ferramenta: o screenshot do
+    ui-verify, por nome, e qualquer PNG abaixo de `min_kb` (tela em branco)."""
+    proc = _git(ws, "diff", "--cached", "--name-only", "--diff-filter=A", "-z")
+    rels = [p for p in proc.stdout.split("\x00") if p]
+    junk = []
+    for rel in rels:
+        path = Path(rel)
+        if path.name in JUNK_NAMES:
+            junk.append(rel)
+            continue
+        if path.suffix.lower() in JUNK_SUFFIXES:
+            with contextlib.suppress(OSError):
+                if (ws / rel).stat().st_size < min_kb * 1024:
+                    junk.append(rel)
+    return sorted(junk)
+
+
 def deliver(
     ws: Path,
     unit_id: str,
     run_id: str,
     cost_usd: float | None = None,
     exclude: tuple[str, ...] = (),
-) -> tuple[str, str | None]:
+    min_kb: float = MIN_DELIVER_KB,
+) -> tuple[str, str | None, tuple[str, ...]]:
     """Commita o que o run escreveu no worktree e renomeia a branch efêmera para
-    `harness/<unit_id>`. Devolve `(branch, commit)`; commit é None quando o run
-    não mudou nada. Nada de merge — a branch fica para review humano."""
+    `harness/<unit_id>`. Devolve `(branch, commit, dropped)`; commit é None quando
+    o run não mudou nada. Nada de merge — a branch fica para review humano.
+
+    Antes do commit, um razor tira do staging o lixo de ferramenta (o screenshot
+    do ui-verify) e PNG em branco abaixo de `min_kb`; `dropped` volta pro chamador
+    porque um descarte silencioso é pior bug que o vazamento."""
     # `.harness` sempre fora: é o scratch do run (log da régua, backups do
     # edit_range, cache do web_fetch) e nada disso pertence à branch de entrega.
     excludes = [f":(exclude){name}" for name in (*exclude, ".harness")]
     _git(ws, "add", "-A", "--", ".", *excludes)
+    dropped = _razor(ws, min_kb)
+    if dropped:
+        _git(ws, "rm", "--cached", "-q", "-f", "--", *dropped)
     commit = None
     if _git(ws, "diff", "--cached", "--quiet").returncode != 0:
         msg = (
@@ -333,7 +366,7 @@ def deliver(
     # do run — pior nome, mesma evidência.
     if _git(ws, "branch", "-M", branch).returncode != 0:
         branch = run_branch(run_id)
-    return (branch, commit)
+    return (branch, commit, tuple(dropped))
 
 
 class IntegrateError(RuntimeError):

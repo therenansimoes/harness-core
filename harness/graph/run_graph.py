@@ -36,7 +36,7 @@ import subprocess
 import time
 import tomllib
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -1421,10 +1421,12 @@ def _accept(state: RunState, config=None) -> dict:
     db = _db(config)
     saved = store.get_node(run_id, "accept", db)
     if saved is not None:
-        return {"events": [_event("accept", branch=saved["branch"], reused=True)]}
+        dropped_saved = saved.get("dropped")
+        extra_saved = {"dropped": dropped_saved} if dropped_saved else {}
+        return {"events": [_event("accept", branch=saved["branch"], reused=True, **extra_saved)]}
 
     result = state.get("exec")
-    branch, commit = deliver(
+    branch, commit, dropped = deliver(
         Path(state["workspace"]),
         unit.id,
         run_id,
@@ -1432,8 +1434,9 @@ def _accept(state: RunState, config=None) -> dict:
         # Material do run fora da entrega: log da régua e trace de ferramenta.
         exclude=(VERIFY_LOG, TRACE_FILE),
     )
-    store.record_node(run_id, "accept", {"branch": branch, "commit": commit}, db)
-    return {"events": [_event("accept", branch=branch, commit=commit)]}
+    store.record_node(run_id, "accept", {"branch": branch, "commit": commit, "dropped": list(dropped)}, db)
+    extra = {"dropped": list(dropped)} if dropped else {}
+    return {"events": [_event("accept", branch=branch, commit=commit, **extra)]}
 
 
 def _retry(state: RunState, config=None) -> dict:
@@ -1651,6 +1654,7 @@ def run_unit(
     thread_id: str,
     max_attempts: int | None = None,
     route: str = ROUTE_MANUAL,
+    on_stage: Callable[[str], None] | None = None,
 ) -> RunState:
     """Roda uma unidade ponta a ponta. Mesmo `thread_id` + `data_dir` = retomada.
 
@@ -1659,6 +1663,8 @@ def run_unit(
     `route="auto"` entrega backend/model/tier ao router e por isso é excludente
     com `backend`: aceitar os dois e ignorar um em silêncio seria mentir sobre
     quem executou.
+    `on_stage` recebe o nome de cada nó que TERMINOU; sem ele o caminho é o
+    `invoke` de sempre.
     """
     # Import tardio: o cli vai chamar o grafo, então o grafo não importa o cli
     # no topo (ciclo).
@@ -1700,7 +1706,23 @@ def run_unit(
         # `next` não vazio = thread parou no meio: retoma sem reinjetar entrada.
         pending = bool(graph.get_state(config).next)
         payload = None if pending else initial_state(unit, thread_id, max_attempts)
-        final = graph.invoke(payload, config)
+        if on_stage is None:
+            final = graph.invoke(payload, config)
+        else:
+            # stream com os dois modos: `updates` traz o nome do nó, `values` traz o
+            # estado em memória (objetos vivos — Decision/UnitSpec não passam pelo
+            # serde do checkpointer). O último chunk de `values` é o que o invoke
+            # devolveria.
+            final = None
+            for mode, chunk in graph.stream(payload, config, stream_mode=["updates", "values"]):
+                if mode == "values":
+                    final = chunk
+                else:
+                    for node in chunk:
+                        if not node.startswith("__"):  # __interrupt__ e afins não são etapa
+                            on_stage(node)
+            if final is None:
+                final = graph.get_state(config).values
     # Worktree de projeto é transitório: o artefato é a branch, não o checkout.
     if unit.project:
         dispose_project_worktree(final, data_dir)

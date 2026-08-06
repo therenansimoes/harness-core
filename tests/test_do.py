@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from harness import cli, do
+from harness import add, cli, do
 from harness.ledger import store
 
 MOCK_VERIFY = "test -f mock_output.txt"
@@ -361,6 +361,67 @@ def test_do_verify_vermelho_nao_aplica_nada(virgem, capsys):
     assert not (virgem / "mock_output.txt").exists()
 
 
+def test_ui_gruda_o_ui_verify_na_regua(virgem, capsys):
+    rc = cli.main(["do", "faz a home", "--ui", "--dry-run"])
+
+    assert rc == 0
+    assert add.UI_VERIFY_SUFFIX.strip() in capsys.readouterr().out
+
+
+def test_ui_nao_duplica_o_ui_verify(virgem, capsys):
+    rc = cli.main(
+        [
+            "do",
+            "faz a home",
+            "--verify-cmd",
+            "npm run build && harness ui-verify dist --expect-asset css",
+            "--ui",
+            "--dry-run",
+        ]
+    )
+
+    assert rc == 0
+    assert capsys.readouterr().out.count("ui-verify") == 1
+
+
+def test_plano_explica_o_criterio_nos_dois_lados():
+    from harness.graph.run_graph import PLAN_PROMPT_CHARS
+
+    sim = cli._plano_linhas(True, "faz a home", "meu-projeto")
+    nao = cli._plano_linhas(False, "faz a home", "meu-projeto")
+
+    assert any("mandou o agente planejar" in linha for linha in sim)
+    assert any(str(PLAN_PROMPT_CHARS) in linha for linha in nao)
+    assert any("refatorar" in linha for linha in nao)
+    for linhas in (sim, nao):
+        assert any("harness decompose" in linha for linha in linhas)
+        assert any("--project meu-projeto" in linha for linha in linhas)
+
+
+def test_do_mock_mostra_etapas_e_o_ponteiro_do_decompose(virgem, capsys, harness_home):
+    rc = cli.main(
+        [
+            "do",
+            "escreve o mock",
+            "--backend",
+            "mock",
+            "--route",
+            "manual",
+            "--verify-cmd",
+            MOCK_VERIFY,
+        ]
+    )
+
+    assert rc == 0
+    saida = capsys.readouterr()
+    assert "régua rodada" in saida.err
+    assert "harness decompose" in saida.out
+    # Discriminador do formato do chunk: se `values` chegasse defasado em
+    # relação a `updates`, o `record` do último superstep sumiria do estado
+    # final e o ledger apareceria como "#None" no relatório.
+    assert "#None" not in saida.out
+
+
 # --- ajuda ------------------------------------------------------------------------
 
 
@@ -390,3 +451,48 @@ def test_quickstart_semeia_config_e_lista_o_que_falta(virgem, capsys, harness_ho
     assert rc == 0
     assert (harness_home / "config" / "ruler.toml").is_file()
     assert 'harness do "' in out
+
+
+def test_quickstart_nao_grita_falha_para_pendencia_nao_bloqueante(
+    virgem, capsys, harness_home, monkeypatch
+):
+    from harness import doctor
+
+    monkeypatch.setattr(
+        doctor,
+        "checks",
+        lambda root=None: [
+            doctor.Check("backend:x", doctor.FAIL, "sem credencial"),
+            doctor.Check("catalog", doctor.WARN, "vazio"),
+        ],
+    )
+
+    rc = cli.main(["quickstart"])
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "FALHA" not in out
+    assert "nada aqui impede tentar" in out
+    assert "backend:x" in out
+    assert "catalog" in out
+
+
+def test_quickstart_mostra_falha_so_para_bloqueador(virgem, capsys, harness_home, monkeypatch):
+    from harness import doctor
+
+    monkeypatch.setattr(
+        doctor,
+        "checks",
+        lambda root=None: [doctor.Check("backend:x", doctor.FAIL, "sem credencial")],
+    )
+    monkeypatch.setattr(cli.shutil, "which", lambda n: None if n == "git" else f"/usr/bin/{n}")
+
+    rc = cli.main(["quickstart"])
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "o que impede rodar" in out
+    linha_git = next(line for line in out.splitlines() if "git" in line and "PATH" in line)
+    assert "FALHA" in linha_git
+    linha_backend = next(line for line in out.splitlines() if "backend:x" in line)
+    assert "aviso" in linha_backend
