@@ -22,7 +22,9 @@ backend = "deepagents"
 # LM Studio local (MLX, porta 1234), $0 por run — o ÚNICO runtime local desde
 # 2026-08-04. Auditoria 2026-08-03: o 3B anterior falhou todas as unidades do dia
 # (não fecha ler+editar+verificar). O teto de turnos acompanha o modelo do t0.
-model = "openai:qwen/qwen3.5-9b"
+# 2026-08-06: trocado do qwen3.5-9b genérico (3 runs vazios no dia) pro coder-tuned
+# já carregado no LM Studio; candidato pesquisado pra upgrade: Ornith-1.0-9B Q6_K.
+model = "openai:qwopus3.5-4b-coder-mtp"
 max_turns = 40
 cost_rank = 0
 
