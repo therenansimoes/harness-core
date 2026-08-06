@@ -484,9 +484,27 @@ PLAN_ORDER = (
 )
 
 
+def _gate_text(prompt: str) -> str:
+    """O pedido, sem o texto que o harness colou nele.
+
+    O `do` cola `ENTREGA_LIMPA` em todo pedido (do.unit_prompt): o bloco sozinho
+    já passa de PLAN_PROMPT_CHARS e casa `\\barquivos\\b`, então o gate disparava
+    em 100% dos runs e cada um pagava um turno de planner. Import tardio: `do` é
+    camada de CLI e o núcleo não o carrega no import. Bloco que mudou de texto
+    (unit.toml antiga) não casa e o gate volta a superestimar — erra para o lado
+    seguro.
+    """
+    from harness.do import ENTREGA_LIMPA
+
+    for bloco in (ENTREGA_LIMPA,):
+        prompt = prompt.replace(bloco, "")
+    return prompt.strip()
+
+
 def _needs_plan(prompt: str) -> bool:
     """Tarefa grande o bastante para valer um plano antes da primeira edição."""
-    return len(prompt) > PLAN_PROMPT_CHARS or PLAN_TRIGGERS.search(prompt) is not None
+    texto = _gate_text(prompt)
+    return len(texto) > PLAN_PROMPT_CHARS or PLAN_TRIGGERS.search(texto) is not None
 
 
 def _plan(state: RunState, config=None) -> dict:

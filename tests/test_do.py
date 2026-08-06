@@ -416,6 +416,9 @@ def test_do_mock_mostra_etapas_e_o_ponteiro_do_decompose(virgem, capsys, harness
     saida = capsys.readouterr()
     assert "régua rodada" in saida.err
     assert "harness decompose" in saida.out
+    # Pedido curto: depois do fix o gate NÃO dispara mais só por causa do
+    # boilerplate de entrega (o turno de planner era pago em todo `do`).
+    assert "pedido curto e direto" in saida.out
     # Discriminador do formato do chunk: se `values` chegasse defasado em
     # relação a `updates`, o `record` do último superstep sumiria do estado
     # final e o ledger apareceria como "#None" no relatório.

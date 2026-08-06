@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from harness import do
 from harness.backends import deepagents_backend as da
 from harness.graph import run_graph as rg
 from harness.types import ExecRequest, UnitSpec
@@ -125,6 +126,36 @@ def test_gate_do_plano_pega_multi_arquivo_e_ignora_tarefa_curta():
     # Um arquivo, um passo: plano aqui é só turno gasto.
     assert rg._needs_plan("no arquivo /soma.py troque o - por + na função soma") is False
     assert rg._needs_plan("corrija o typo em app.py") is False
+
+
+def test_gate_desconta_o_boilerplate_de_entrega_do_do():
+    """Prova o bug: o bloco sozinho dispara as DUAS pernas do gate."""
+    cru = do.unit_prompt("corrija o typo em app.py")
+    assert len(cru) > rg.PLAN_PROMPT_CHARS                     # perna do tamanho
+    assert rg.PLAN_TRIGGERS.search(do.ENTREGA_LIMPA) is not None  # perna do regex
+    assert rg._needs_plan(cru) is False
+
+
+def test_gate_text_e_o_pedido_literal():
+    """Guarda de drift: mudou ENTREGA_LIMPA sem mexer no strip, quebra aqui."""
+    assert rg._gate_text(do.unit_prompt("oi")) == "oi"
+    # Prompt sem boilerplate (add/decompose/queue) passa intacto.
+    assert rg._gate_text("mude os arquivos a.py e b.py") == "mude os arquivos a.py e b.py"
+
+
+def test_gate_ainda_dispara_no_pedido_grande_vindo_do_do():
+    assert rg._needs_plan(do.unit_prompt("refatore o parser")) is True
+    assert rg._needs_plan(do.unit_prompt("x" * (rg.PLAN_PROMPT_CHARS + 1))) is True
+
+
+def test_no_plan_com_unidade_do_do_nao_carimba_o_flag(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    out = rg._plan({"unit": _unit(do.unit_prompt("troque - por + em /soma.py")), "attempt": 0})
+    assert out["needs_plan"] is False
+    assert out["events"][0]["needs_plan"] is False
+
+    grande = rg._plan({"unit": _unit(do.unit_prompt("refatore o parser")), "attempt": 0})
+    assert grande["needs_plan"] is True
 
 
 def test_needs_plan_prepende_a_ordem_no_prompt():

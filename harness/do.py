@@ -296,6 +296,9 @@ def project_name(repo: Path) -> str:
 # integrate commitou os dois no branch default: no `do` não existe revisor entre
 # o que o agente escreve em arquivo e o repo do usuário. Explicação é resposta,
 # não artefato.
+# `run_graph._gate_text` remove ESTE texto antes de medir o gate do plano — o
+# bloco sozinho estoura PLAN_PROMPT_CHARS e casa PLAN_TRIGGERS. Mudou aqui,
+# o teste de drift em tests/test_planning.py quebra.
 ENTREGA_LIMPA = """Regras de entrega (valem acima de qualquer preferência sua):
 - Entregue SÓ os arquivos do produto: o que o pedido acima precisa para funcionar.
 - NÃO crie arquivo de anotação, resumo, instrução ou plano (README de mudanças, \
