@@ -23,6 +23,7 @@ BUDGET_EXIT = "budget"  # ExitReason do execute barrado pelo teto
 BREACH_REASON = "ceiling:teto_de_gasto"
 BLIND_REASON = "ceiling:gasto_ilegivel"
 NO_COST_REASON = "ceiling:backend_sem_custo"
+ADVISOR_NODE = "advise"  # nó do consultor pago (harness.graph.advisor.ADVISOR_NODE)
 
 
 @dataclass(frozen=True)
@@ -58,14 +59,24 @@ NO_BREACH = Breach(False)
 
 
 def spent_for_run(run_id: str, db: Path, through_attempt: int) -> float:
-    """Soma `cost_usd` de todos os `execute` de `0` até `through_attempt`, do
+    """Soma `cost_usd` de todos os `execute` de `0` até `through_attempt`, MAIS
+    todos os `advise` (consultor pago) de `0` até `through_attempt + 1`, do
     ledger. `through_attempt < 0` = nenhuma tentativa ainda -> `0.0`, sem
-    tocar o banco. Custo torto ou ausente PROPAGA (quem converte é `check`)."""
+    tocar o banco. Custo torto ou ausente PROPAGA (quem converte é `check`).
+
+    O `+1` no `advise` não é folga: `advise` roda ANTES do `execute` da MESMA
+    tentativa (`retry → reflect → advise → route → … → execute`); sem ele o
+    check que precede o `execute` da tentativa N ficaria cego justo pro turno
+    pago que acabou de sair.
+    """
     if through_attempt < 0:
         return 0.0
     total = 0.0
     for a in range(through_attempt + 1):
         payload = store.get_node(run_id, "execute", db, attempt=a)
+        total += float((payload or {}).get("cost_usd") or 0.0)
+    for a in range(through_attempt + 2):
+        payload = store.get_node(run_id, ADVISOR_NODE, db, attempt=a)
         total += float((payload or {}).get("cost_usd") or 0.0)
     return total
 

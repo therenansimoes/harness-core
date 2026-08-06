@@ -20,18 +20,23 @@
 # arrays de topo (`nodes`, `edges`) precisam vir ANTES de qualquer
 # [kinds.<kind>].
 #
-# Fora do caminho do retry este default reproduz a topologia embutida. A única
-# variação: `reflect` é o CHECKER do retry — entra entre `retry` e `route`, lê o
-# cadáver da tentativa reprovada (exit code do verify, files_changed do exec,
-# verify_cmd da unidade — o TEXTO do log do verificador selado nunca entra, sob
-# pena de vazar gabarito) e deixa um hint literal no estado, que o `execute` da
-# tentativa seguinte cola no prompt. Determinístico, $0, fail-open: sem material
-# o hint é vazio e a tentativa roda com o prompt cru, como antes. Tirar
-# ["retry","reflect"]/["reflect","route"] e voltar ["retry","route"] desliga.
+# Fora do caminho do retry este default reproduz a topologia embutida. A
+# variação: `reflect` é o checker GRÁTIS do retry — entra entre `retry` e
+# `advise`, lê o cadáver da tentativa reprovada (exit code do verify,
+# files_changed do exec, verify_cmd da unidade — o TEXTO do log do verificador
+# selado nunca entra, sob pena de vazar gabarito) e deixa um hint literal no
+# estado, que o `execute` da tentativa seguinte cola no prompt. Determinístico,
+# $0, fail-open: sem material o hint é vazio e a tentativa roda com o prompt
+# cru, como antes. `advise` é o checker PAGO: só gasta um turno de consultoria
+# quando `--advisor <tier>` está armado E a régua reprovou — desarmado, o nó
+# devolve `{}` sem evento nem escrita, byte-idêntico a não existir. Tirar as
+# duas arestas ["reflect","advise"]/["advise","route"] e voltar
+# ["reflect","route"] desliga sem tocar código.
 
 nodes = [
   "plan",
   "reflect",
+  "advise",
   "route",
   "provision",
   "execute",
@@ -54,7 +59,8 @@ edges = [
   ["verify", "measure"],
   ["measure", "gate"],
   ["retry", "reflect"],
-  ["reflect", "route"],
+  ["reflect", "advise"],
+  ["advise", "route"],
   ["accept", "record"],
   ["escalate", "record"],
   ["revert", "record"],

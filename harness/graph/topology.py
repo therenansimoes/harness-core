@@ -64,6 +64,7 @@ NODE_IMPLS = {
     "revert": _rg._revert,
     "record": _rg._record,
     "reflect": _reflect,
+    "advise": _rg._advise,
 }
 
 

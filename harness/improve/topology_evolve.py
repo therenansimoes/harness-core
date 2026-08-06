@@ -34,6 +34,12 @@ OPERATORS: frozenset[str] = frozenset(
     {"insert_node", "remove_node", "rewire_edge", "split_parallel"}
 )
 
+# Nó PAGO com fiação própria de config — a evolução estrutural não move nós
+# que gastam dinheiro; quem liga/desliga é o humano via topology.toml. Fonte
+# única em `topology_grammar` (já sai de `gram.INSERTABLE` lá); aliasado aqui
+# pra filtrar explícito nos operadores, sem depender só da derivação de INSERTABLE.
+EVOLVE_FROZEN = gram.EVOLVE_FROZEN
+
 
 def _load_full(root: Path | str | None, spec_path: Path | str | None) -> dict:
     p = Path(spec_path) if spec_path is not None else root_dir(root) / actions.TOPOLOGY_FILE
@@ -65,7 +71,7 @@ def _splice_candidates(pairs: list[tuple[str, str]]) -> list[int]:
 def _insert_node(
     nodes: list[str], pairs: list[tuple[str, str]], rng: Random
 ) -> tuple[list[str], list[tuple[str, str]], str] | None:
-    candidates = sorted(gram.INSERTABLE - set(nodes))
+    candidates = sorted(gram.INSERTABLE - EVOLVE_FROZEN - set(nodes))
     slots = _splice_candidates(pairs)
     if not candidates or not slots:
         return None
@@ -81,7 +87,11 @@ def _remove_node(
 ) -> tuple[list[str], list[tuple[str, str]], str] | None:
     """Só insertable com grau 1/1: religar src→dst é inequívoco. Nó de espinha
     ou terminal nunca sai — quem tira `verify` do grafo não está evoluindo."""
-    candidates = [n for n in sorted(set(nodes) & gram.INSERTABLE) if _degrees(pairs, n) == (1, 1)]
+    candidates = [
+        n
+        for n in sorted(set(nodes) & (gram.INSERTABLE - EVOLVE_FROZEN))
+        if _degrees(pairs, n) == (1, 1)
+    ]
     if not candidates:
         return None
     node = rng.choice(candidates)

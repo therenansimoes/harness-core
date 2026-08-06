@@ -14,6 +14,9 @@ verify_timeout_s = 120.0
 # Teto duro de 60s no nó: o defer roda dentro do grafo, não em timer.
 blocker_defer_s = 30
 
+advisor_turns = 1        # turnos PAGOS de consultoria por run (teto duro; <1 é ignorado)
+advisor_timeout_s = 180.0
+
 [nodes]
 # false => o nó degrada para o stub antigo (sem KPI / sem prova de tamper).
 measure = true
@@ -28,3 +31,6 @@ ui_verify = true
 # default: turno gasto batendo na mesma parede é turno perdido. `false` volta ao
 # retry cego. Unidade sem `[checks]` ignora isto — score é 1.0 fixo lá.
 delta_gate = true
+# O tail do verify é o material que faz o conselho do consultor pago valer a
+# pena; `false` pra run de benchmark selado, onde o tail pode carregar gabarito.
+advisor_share_tail = true

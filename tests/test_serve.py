@@ -883,8 +883,77 @@ def test_corpo_gigante_413(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
 def test_executores_saem_do_models_toml(monkeypatch: pytest.MonkeyPatch) -> None:
     _fake_tiers(monkeypatch)
     execs = serve.executors()
-    assert [e.id for e in execs] == ["harness", "harness:local", "harness:haiku", "harness:claude_code"]
-    assert [e.local for e in execs] == [True, True, False, False]
+    # `harness:full` (híbrido: sempre local + consultor pago) fecha a lista —
+    # só existe porque `_fake_tiers` tem local (t0) E pago (t1/t2) juntos.
+    assert [e.id for e in execs] == [
+        "harness",
+        "harness:local",
+        "harness:haiku",
+        "harness:claude_code",
+        "harness:full",
+    ]
+    assert [e.local for e in execs] == [True, True, False, False, True]
+    assert execs[-1].advisor_tier == "t1"
+
+
+def test_full_e_ultimo_e_hibrido_local_mais_consultor(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_tiers(monkeypatch)
+    execs = serve.executors()
+    full = execs[-1]
+    assert full.id == serve.FULL_ID
+    assert full.local is True
+    assert full.tier == ""
+    assert full.advisor_tier == "t1"  # primeiro tier pago (harness:haiku)
+    assert full.backend == "deepagents"  # backend do tier local (t0)
+
+    # `harness:t0` continua resolvendo pro executor puramente local, não pro
+    # híbrido — `harness:full` não tem tier, então não casa o alias oculto.
+    ex = serve.resolve_executor("harness:t0")
+    assert ex is not None
+    assert ex.id == "harness:local"
+
+
+def test_full_argv_tem_backend_local_e_advisor_pago(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_tiers(monkeypatch)
+    full = next(e for e in serve.executors() if e.id == serve.FULL_ID)
+    assert serve.executor_argv(full) == [
+        "--backend", "deepagents", "--model", "openai:qwen/qwen3.5-9b", "--advisor", "t1",
+    ]
+
+
+def test_chat_executor_em_auto_nunca_devolve_full(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fake_tiers(monkeypatch)
+    ctx = _ctx(tmp_path)  # sem pin => auto
+    ex = serve.chat_executor(ctx)
+    assert ex.id != serve.FULL_ID
+    assert ex.id == "harness:local"
+
+
+def test_acao_com_pin_full_dispara_local_e_avisa_consultor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    _fake_tiers(monkeypatch)
+
+    def fail_http_post(*a, **kw):
+        pytest.fail("`_http_post` não deveria ser chamado — ação dispara sem passar pelo LLM")
+
+    monkeypatch.setattr(serve, "_http_post", fail_http_post)
+    capturados: list[list[str]] = []
+    monkeypatch.setattr(serve, "_popen", lambda argv, **kw: capturados.append(argv) or 1)
+
+    full = next(e for e in serve.executors() if e.id == serve.FULL_ID)
+    ctx = serve.ServeContext(cwd=tmp_path, executor=full)
+    resp = serve.handle_message("adiciona um campo de desconto", ctx)
+
+    assert len(capturados) == 1
+    argv = capturados[0]
+    assert argv[argv.index("--backend") + 1] == "deepagents"
+    assert "claude_code" not in argv
+    assert argv[argv.index("--advisor") + 1] == "t1"
+    assert "consultor" in resp
 
 
 def test_models_toml_quebrado_degrada_pro_auto(monkeypatch: pytest.MonkeyPatch) -> None:

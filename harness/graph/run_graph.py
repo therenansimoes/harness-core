@@ -56,6 +56,7 @@ from harness.governor.governor import (
     load_gov,
     taper_turns,
 )
+from harness.graph import advisor
 from harness.graph.checkpoint import open_checkpointer
 from harness.graph.state import Budget, Decision, Event, RunState
 from harness.ledger import store
@@ -100,6 +101,12 @@ CFG_ROUTE = "harness_route"
 # ambiente e fail-open.
 CFG_MAX_USD = "harness_max_usd"
 CFG_SPENT_BEFORE = "harness_spent_before_usd"
+# Consultor pago (`--advisor <tier>`, nó `advise`): três primitivos str|None —
+# `CFG_ADVISOR_BACKEND` ausente/vazio é o sinal de DESARMADO que
+# `advisor.resolve` lê (ver `graph/advisor.py`).
+CFG_ADVISOR_BACKEND = "harness_advisor_backend"
+CFG_ADVISOR_MODEL = "harness_advisor_model"
+CFG_ADVISOR_TIER = "harness_advisor_tier"
 
 DEFAULT_MAX_TURNS = 30  # auditoria 2026-08-03: 8 model calls não cobrem ler+editar+verificar
 VERIFY_TIMEOUT_S = 120.0
@@ -158,6 +165,16 @@ class GraphPolicy:
     delta_gate: bool = True
     # Quanto o retry espera quando o agente declarou `external_wait`.
     blocker_defer_s: float = BLOCKER_DEFER_S
+    # Teto de turnos PAGOS de consultoria por run (nó `advise`). NÃO desliga em
+    # 0 — `_policy_int` recusa `< 1` e cai no default 1. Quem desliga o
+    # consultor é a ausência de `--advisor` (`advisor.resolve` -> None) ou
+    # tirar o nó da topologia, nunca este número.
+    advisor_turns: int = 1
+    advisor_timeout_s: float = 180.0
+    # O tail do verify entra no prompt do consultor (material que faz o
+    # diagnóstico valer). `false` pra run selado, onde o tail pode carregar
+    # gabarito do verificador.
+    advisor_share_tail: bool = True
 
 
 def _policy_int(raw: Any, default: int) -> int:
@@ -205,6 +222,9 @@ def load_policy(path: Path | None = None) -> GraphPolicy:
         ui_verify_dist=_policy_str(data.get("ui_verify_dist"), base.ui_verify_dist),
         delta_gate=_policy_bool(nodes.get("delta_gate"), base.delta_gate),
         blocker_defer_s=_policy_float(data.get("blocker_defer_s"), base.blocker_defer_s),
+        advisor_turns=_policy_int(data.get("advisor_turns"), base.advisor_turns),
+        advisor_timeout_s=_policy_float(data.get("advisor_timeout_s"), base.advisor_timeout_s),
+        advisor_share_tail=_policy_bool(nodes.get("advisor_share_tail"), base.advisor_share_tail),
     )
 
 
@@ -973,10 +993,12 @@ def _prior_query(state: RunState) -> str:
 
 
 def _prompt(state: RunState) -> str:
-    """Prompt da tentativa: o da unidade, mais o hint do checker se houver.
+    """Prompt da tentativa: o da unidade, mais o hint do checker grátis
+    (`reflect`) e o diagnóstico do consultor pago (`advise`), se houver.
 
     Import lazy do reflect para não amarrar run_graph a um módulo que a
-    topologia pode nem usar; sem hint (default) a string é a de sempre.
+    topologia pode nem usar; sem hint e sem conselho (default) a string é a
+    de sempre — byte a byte, inclusive na primeira tentativa.
 
     A ordem do plano vai PRIMEIRO (`needs_plan` carimbado no nó `plan`): o
     executor pequeno obedece a primeira linha do prompt, não a última.
@@ -985,7 +1007,8 @@ def _prompt(state: RunState) -> str:
     if state.get("needs_plan"):
         base = f"{PLAN_ORDER}\n\n{base}"
     hint = str(state.get("reflect_hint") or "").strip()
-    if not hint:
+    advice = str(state.get("advisor_hint") or "").strip()
+    if not hint and not advice:
         return base
 
     from harness import trust_boundary
@@ -998,20 +1021,182 @@ def _prompt(state: RunState) -> str:
     # A query é `_prior_query`, não o hint — ver o docstring de lá.
     prior = prior_decisions(state["unit"].kind, _prior_query(state))
     if not trust_boundary.enabled():
-        out = f"{base}\n\n{HINT_HEADER}\n{hint}"
-        return f"{out}\n\n{prior}" if prior else out
+        out = f"{base}\n\n{HINT_HEADER}\n{hint}" if hint else base
+        if prior:
+            out = f"{out}\n\n{prior}"
+        # Conselho por ÚLTIMO: é o material mais caro (custou dinheiro), fica
+        # mais perto do fim do prompt, onde o executor pequeno costuma olhar
+        # por último antes de agir.
+        if advice:
+            out = f"{out}\n\n## {advisor.ADVISOR_HEADER}\n{advice}"
+        return out
 
-    # Hint e precedente são texto de OUTRO run (checker e humano), não da
-    # unidade: vão no bloco de dado, antes da tarefa, para não competirem com
-    # ela como ordem. Único canal disponível aqui — `ExecRequest.prompt` é uma
-    # string — então o rótulo `TASK_HEADER` é o que marca o fim do dado.
+    # Hint, precedente e conselho são texto de OUTRO run (checker grátis,
+    # humano, checker pago), não da unidade: vão no bloco de dado, antes da
+    # tarefa, para não competirem com ela como ordem. Único canal disponível
+    # aqui — `ExecRequest.prompt` é uma string — então o rótulo `TASK_HEADER`
+    # é o que marca o fim do dado. Seção vazia (`advice == ""` quando
+    # desarmado/não disparou) é ignorada por `build_untrusted_block` sozinho.
     block = trust_boundary.build_untrusted_block(
         # `HINT_HEADER` já vem com o "## " do markdown; o bloco põe o dele.
-        {HINT_HEADER.lstrip("# "): hint, "Precedente humano": prior}
+        {HINT_HEADER.lstrip("# "): hint, "Precedente humano": prior, advisor.ADVISOR_HEADER: advice}
     )
     if not block:
         return base
     return f"{block}\n\n{trust_boundary.TASK_HEADER}\n{base}"
+
+
+def _advise(state: RunState, config=None) -> dict:
+    """Nó do consultor PAGO: um turno read-only de um modelo pago quando o
+    executor local travou de verdade (verify vermelho) e `--advisor <tier>`
+    está armado. Fora disso — desarmado, run saudável, teto de turnos, sem
+    material — devolve sem gastar, e desarmado devolve `return {}` puro (sem
+    evento, sem escrita): a topologia com este nó reproduz byte a byte a
+    topologia sem ele.
+
+    Execução fica 100% no executor local por construção: este nó nunca entra
+    em `_route`/`_execute`, só lê (`READ_ONLY_TOOLS`) e escreve texto no
+    estado (`advisor_hint`), que `_prompt` cola na tentativa seguinte.
+    `_reorg_spent`/`_gov_cost` (governor de ambiente, fail-open) não contam o
+    turno pago — só o teto explícito (`ceiling`) vale dinheiro aqui.
+    """
+    run_id = state["run_id"]
+    attempt = state.get("attempt", 0)
+    db = _db(config)
+    plan = advisor.resolve(
+        _cfg(config, CFG_ADVISOR_BACKEND),
+        _cfg(config, CFG_ADVISOR_MODEL) or "",
+        _cfg(config, CFG_ADVISOR_TIER) or "",
+    )
+    if plan is None:
+        return {}
+
+    saved = store.get_node(run_id, advisor.ADVISOR_NODE, db, attempt=attempt)
+    if saved is not None:
+        return {
+            "advisor_hint": saved.get("text") or "",
+            "events": [_event("advise", reused=True, attempt=attempt)],
+        }
+
+    # Material da tentativa anterior DO LEDGER — mesmo motivo de
+    # `reflect.hydrate`: `_retry` já zerou `exec`/`verdict` no estado antes
+    # deste nó rodar.
+    exec_payload = store.get_node(run_id, "execute", db, attempt=attempt - 1)
+    verify_payload = store.get_node(run_id, "verify", db, attempt=attempt - 1)
+    exit_reason = exec_payload.get("exit_reason") if exec_payload else None
+    verify_passed = verify_payload.get("passed") if verify_payload else None
+    turns = exec_payload.get("turns", 0) if exec_payload else 0
+    files = exec_payload.get("files_changed") or [] if exec_payload else []
+    tail = verify_payload.get("tail", "") if verify_payload else ""
+
+    policy = load_policy()
+    fire, motivo = advisor.should_advise(
+        armed=True,  # `plan is None` já teria retornado {} acima.
+        attempt=attempt,
+        exit_reason=exit_reason,
+        verify_passed=verify_passed,
+        used=advisor.turns_used(run_id, db, attempt),
+        cap=policy.advisor_turns,
+    )
+    if not state.get("workspace"):
+        fire, motivo = False, "sem_workspace"
+    if not fire:
+        store.record_node(
+            run_id, advisor.ADVISOR_NODE, {"called": False, "reason": motivo, "cost_usd": 0.0}, db,
+            attempt=attempt,
+        )
+        # NUNCA "advisor_hint": "" — conselho é pegajoso, some só quando outro
+        # turno o substitui, não quando este nó apenas não disparou.
+        return {"events": [_event("advise", called=False, reason=motivo, attempt=attempt)]}
+
+    # Teto ANTES de despachar — mesmo choke point do `_execute`: nada de
+    # dinheiro sai sem passar por aqui.
+    cel = _ceiling(config)
+    if cel.active:
+        br = ceiling.check(
+            cel, run_id, db, attempt, registry.get_backend(plan.backend).capabilities().reports_cost
+        )
+        if br.fired:
+            store.record_node(
+                run_id, advisor.ADVISOR_NODE, {"called": False, "reason": br.reason, "cost_usd": 0.0},
+                db, attempt=attempt,
+            )
+            return {"events": [_event("advise", called=False, reason=br.reason, attempt=attempt)]}
+
+    trace = run_log_dir(run_id, _cfg(config, CFG_DATA_DIR, "data")) / f"advise.a{attempt}.json"
+    try:
+        result = registry.get_backend(plan.backend).execute(
+            ExecRequest(
+                prompt=advisor.build_prompt(
+                    task=state["unit"].prompt,
+                    verify_cmd=state["unit"].verify_cmd,
+                    attempt=attempt,
+                    exit_reason=exit_reason,
+                    turns=turns,
+                    files=files,
+                    tail=tail if policy.advisor_share_tail else "",
+                    hint=str(state.get("reflect_hint") or ""),
+                ),
+                workspace=Path(state["workspace"]),
+                tools=advisor.READ_ONLY_TOOLS,
+                model=plan.model or None,
+                max_turns=1,
+                timeout_s=policy.advisor_timeout_s,
+                trace_path=trace,
+                run_id=run_id,
+                kind=state["unit"].kind,
+            )
+        )
+    except Exception as exc:
+        reason = f"erro:{type(exc).__name__}"
+        store.record_node(
+            run_id, advisor.ADVISOR_NODE, {"called": False, "reason": reason, "cost_usd": 0.0}, db,
+            attempt=attempt,
+        )
+        return {"events": [_event("advise", called=False, reason=reason, attempt=attempt)]}
+
+    # INVARIANTE DO DINHEIRO: consultor que executa não é consultor. O custo
+    # já saiu e é gravado do mesmo jeito; o texto morre.
+    if result.files_changed:
+        text, ignored = "", "escreveu_arquivo"
+    else:
+        text = advisor.extract_text(result.trace_path) if result.ok else ""
+        ignored = ""
+
+    store.record_node(
+        run_id,
+        advisor.ADVISOR_NODE,
+        {
+            "called": True,
+            "cost_usd": float(result.cost_usd or 0.0),
+            "tokens_in": result.tokens_in,
+            "tokens_out": result.tokens_out,
+            "backend": plan.backend,
+            "model": plan.model,
+            "tier": plan.tier,
+            "exit_reason": result.exit_reason,
+            "chars": len(text),
+            "ignored": ignored,
+            "text": text,
+        },
+        db,
+        attempt=attempt,
+    )
+    return {
+        "advisor_hint": text,
+        "events": [
+            _event(
+                "advise",
+                called=True,
+                attempt=attempt,
+                tier=plan.tier or plan.backend,
+                ok=result.ok,
+                cost_usd=float(result.cost_usd or 0.0),
+                chars=len(text),
+                **({"ignored": ignored} if ignored else {}),
+            )
+        ],
+    }
 
 
 def _execute(state: RunState, config=None) -> dict:
@@ -1745,6 +1930,7 @@ def initial_state(unit: UnitSpec, run_id: str, max_attempts: int) -> RunState:
         decision=None,
         budget=Budget(max_attempts=max_attempts),
         reflect_hint="",
+        advisor_hint="",
         events=[],
     )
 
@@ -1760,6 +1946,7 @@ def run_unit(
     on_stage: Callable[[str], None] | None = None,
     max_usd: float | None = None,
     spent_before: float | None = 0.0,
+    advisor: tuple[str, str | None, str] | None = None,
 ) -> RunState:
     """Roda uma unidade ponta a ponta. Mesmo `thread_id` + `data_dir` = retomada.
 
@@ -1775,6 +1962,9 @@ def run_unit(
     tier em `cmd_do`, por exemplo) — `0.0` é "nada gasto ainda", `None` é
     "gasto DESCONHECIDO", que com teto ativo barra a próxima tentativa por
     precaução (fail-closed) em vez de fingir zero.
+    `advisor=None` (o default) = sem consultor pago, os três `CFG_ADVISOR_*`
+    viajam `None` — nó `advise` desarmado, `return {}` byte a byte. Não-None é
+    `(backend, model, tier)` do `--advisor <tier>` resolvido pelo chamador.
     """
     # Import tardio: o cli vai chamar o grafo, então o grafo não importa o cli
     # no topo (ciclo).
@@ -1811,6 +2001,9 @@ def run_unit(
                 CFG_ROUTE: route,
                 CFG_MAX_USD: max_usd,
                 CFG_SPENT_BEFORE: spent_before,
+                CFG_ADVISOR_BACKEND: advisor[0] if advisor else None,
+                CFG_ADVISOR_MODEL: advisor[1] if advisor else None,
+                CFG_ADVISOR_TIER: advisor[2] if advisor else None,
             },
             # Cada tentativa gasta ~8 supersteps; sobra folga para o loop de retry.
             "recursion_limit": 12 * (max_attempts + 1),

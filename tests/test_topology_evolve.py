@@ -64,15 +64,17 @@ def topo_path(sandbox: Path) -> Path:
 
 
 def sem_reflect(sandbox: Path) -> Path:
-    """Default anterior ao reflect (retry->route direto): sem isso o
-    `insert_node` não tem material, já que `reflect` é o único insertable."""
+    """Default anterior ao reflect/advise (retry->route direto): sem isso o
+    `insert_node` não tem material, já que `reflect` é o único insertable
+    (advise é EVOLVE_FROZEN — nunca candidato — e tirar só `reflect` deixaria
+    `advise` órfão, sem aresta de entrada)."""
     p = topo_path(sandbox)
     spec = topology.load_spec(p)
-    edges = [tuple(e) for e in spec["edges"] if "reflect" not in e]
+    edges = [tuple(e) for e in spec["edges"] if "reflect" not in e and "advise" not in e]
     p.write_text(
         adapters.render_topology(
             {
-                "nodes": [n for n in spec["nodes"] if n != "reflect"],
+                "nodes": [n for n in spec["nodes"] if n not in ("reflect", "advise")],
                 "edges": [list(e) for e in [*edges, ("retry", "route")]],
             }
         ),
@@ -93,6 +95,61 @@ def test_default_do_repo_e_legal():
 def test_insertable_nao_contem_espinha_nem_terminal():
     assert frozenset({"reflect"}) == gram.INSERTABLE
     assert not gram.INSERTABLE & (gram.SPINE | gram.TERMINAL)
+
+
+def test_advise_nunca_e_candidato_de_mutacao(sandbox):
+    """`advise` é nó real — está em NODE_IMPLS e no default do repo, com o
+    mesmo perfil estrutural de `reflect` (grau 1/1 na perna do retry). Nó
+    PAGO não é material de mutação estrutural: fica de fora de
+    `gram.INSERTABLE` e nenhum operador (direto ou via `propose`, em nenhuma
+    seed) produz proposta que insira, remova ou religue `advise`."""
+    assert "advise" in topology.NODE_IMPLS
+    assert "advise" in topology.load_spec()["nodes"]
+    assert "advise" not in gram.INSERTABLE  # fora mesmo tendo o grau certo
+
+    # candidato direto: grafo onde advise tem grau 1/1, igual a reflect.
+    nodes = ["retry", "reflect", "advise", "route"]
+    pairs = [("retry", "reflect"), ("reflect", "advise"), ("advise", "route")]
+    vistos_remove = 0
+    for seed in range(200):
+        out = tev._remove_node(list(nodes), list(pairs), Random(seed))
+        if out is None:
+            continue
+        vistos_remove += 1
+        removed = set(nodes) - set(out[0])
+        assert removed == {"reflect"}
+    assert vistos_remove > 0
+
+    bare_nodes = ["retry", "route"]
+    bare_pairs = [("retry", "route")]
+    vistos_insert = 0
+    for seed in range(200):
+        out = tev._insert_node(list(bare_nodes), list(bare_pairs), Random(seed))
+        if out is None:
+            continue
+        vistos_insert += 1
+        added = set(out[0]) - set(bare_nodes)
+        assert added == {"reflect"}
+    assert vistos_insert > 0
+
+    # integração: fuzz de propose por cima do default real do repo.
+    vistas = 0
+    for seed in range(200):
+        for operator in sorted(tev.OPERATORS):
+            for kind in KINDS:
+                p = tev.propose(kind, operator, Random(seed), root=sandbox)
+                if p is None:
+                    continue
+                vistas += 1
+                spec = tomllib.loads(p.new_text)
+                section = by_kind.resolve_spec(spec, kind)
+                pairs = tev._pairs(section)
+                # advise nunca é o nó inserido/removido: continua presente e com
+                # o mesmo grau 1/1 de sempre (vizinhos podem mudar — reflect
+                # saindo religa retry->advise — mas advise em si não é tocado).
+                assert "advise" in section["nodes"]
+                assert tev._degrees(pairs, "advise") == (1, 1)
+    assert vistas > 0
 
 
 def test_aresta_rank_invertida_rejeitada():
@@ -141,7 +198,9 @@ def test_remove_reflect_no_default_e_a_proposta_do_kind(sandbox):
     # topo intocado, kind com corpo próprio sem reflect
     assert "reflect" in spec["nodes"]
     assert "reflect" not in spec["kinds"]["code"]["nodes"]
-    assert ["retry", "route"] in spec["kinds"]["code"]["edges"]
+    # advise fica na espinha default (desarmado é grátis); tirar o reflect
+    # reconecta retry→advise, não retry→route
+    assert ["retry", "advise"] in spec["kinds"]["code"]["edges"]
 
 
 def test_insert_node_materializa_secao_do_kind(sandbox):

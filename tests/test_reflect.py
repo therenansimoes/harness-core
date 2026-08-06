@@ -152,6 +152,7 @@ def test_topologia_default_do_repo_tem_reflect_na_perna_do_retry():
     spec = topology.load_spec()
     edges = [tuple(e) for e in spec["edges"]]
     assert "reflect" in spec["nodes"]
-    assert ("retry", "reflect") in edges and ("reflect", "route") in edges
+    assert ("retry", "reflect") in edges and ("reflect", "advise") in edges
+    assert ("advise", "route") in edges
     assert ("retry", "route") not in edges
     topology.build(spec)  # compila: default do repo é spec válida

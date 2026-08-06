@@ -54,9 +54,15 @@ TERMINAL = frozenset({"accept", "retry", "escalate", "revert", "record"})
 # `reflect` não têm rank, então a regra de inversão nem se aplica a elas.
 BACK_EDGES = frozenset({("retry", "route")})
 
+# Nó PAGO com fiação própria de config — a evolução estrutural não move nós
+# que gastam dinheiro; quem liga/desliga é o humano via topology.toml.
+EVOLVE_FROZEN = frozenset({"advise"})
+
 # Whitelist de inserção: o que sobra da espinha e dos terminais. Derivado do
 # NODE_IMPLS de propósito — nó novo no runtime entra aqui sem editar isto.
-INSERTABLE = frozenset(topology.NODE_IMPLS) - SPINE - TERMINAL - {"gate"}
+# EVOLVE_FROZEN sai daqui também: "insertable" tem que continuar significando
+# "candidato de mutação estrutural", não só "fora da espinha/terminais".
+INSERTABLE = frozenset(topology.NODE_IMPLS) - SPINE - TERMINAL - {"gate"} - EVOLVE_FROZEN
 
 
 def insertable() -> frozenset[str]:

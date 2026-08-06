@@ -448,6 +448,7 @@ def _graph_final(
     sel: Selection,
     progress=None,
     spent_before: float | None = 0.0,
+    advisor: tuple[str, str | None, str] | None = None,
 ) -> tuple[dict, float]:
     """Roda a unidade no grafo e devolve `(estado final, segundos)`.
 
@@ -458,6 +459,8 @@ def _graph_final(
     de tier) — só quem chama sabendo disso passa algo diferente do default.
     `args.max_usd` via `getattr`, não `args.max_usd` direto: o namespace do
     `cmd_run` não tem esse atributo, e `run` continua sem teto explícito.
+    `advisor=None` (o default): só `cmd_do` resolve `--advisor <tier>` e passa
+    algo diferente — `cmd_run` não tem essa flag.
     """
     from harness.graph.run_graph import run_unit
 
@@ -490,6 +493,7 @@ def _graph_final(
         on_stage=None if progress is None else progress.stage,
         max_usd=getattr(args, "max_usd", None),
         spent_before=spent_before,
+        advisor=advisor,
     )
     return final, time.monotonic() - t0
 
@@ -679,6 +683,24 @@ def cmd_do(args: argparse.Namespace) -> int:
     if args.max_usd is not None and args.max_usd <= 0:
         print("--max-usd tem que ser maior que zero", file=sys.stderr)
         return 2
+    # `--advisor <tier>`: um consultor PAGO read-only que só entra quando a
+    # régua reprovar (nó `advise` do grafo) — a execução continua 100% local.
+    # Resolvido aqui, cedo, para falhar com a mesma clareza de um tier
+    # desconhecido em vez de estourar lá dentro do grafo.
+    advisor: tuple[str, str | None, str] | None = None
+    if args.advisor is not None:
+        try:
+            cfg = router.load_config()
+            t = router.tier_by_name(cfg, args.advisor)
+        except (router.RouterError, OSError) as exc:
+            print(f"--advisor: {exc}", file=sys.stderr)
+            nomes: list[str] = []
+            with contextlib.suppress(Exception):
+                nomes = [tier.name for tier in router.tiers(router.load_config())]
+            if nomes:
+                print(f"tiers disponíveis: {', '.join(nomes)}", file=sys.stderr)
+            return 2
+        advisor = (t.backend, t.model or None, t.name)
     do_mod.pin_home_paths()
     repo, criado = do_mod.ensure_repo(Path.cwd())
     if criado:
@@ -725,6 +747,17 @@ def cmd_do(args: argparse.Namespace) -> int:
     print(_linha_do("régua", f"{verify_cmd}  ({motivo})"))
     if args.max_usd:
         print(_linha_do("teto", f"${args.max_usd:.2f} neste comando (todas as tentativas)"))
+    if advisor:
+        from harness.graph.run_graph import load_policy
+
+        graph_policy = load_policy()
+        print(
+            _linha_do(
+                "consultor",
+                f"{advisor[2]} · {advisor[0]} — só entra se a régua reprovar "
+                f"(máx {graph_policy.advisor_turns} turno, dentro do teto)",
+            )
+        )
     if args.dry_run:
         print(_linha_do("rota", _rota_txt(args.route, sel)))
         print(_linha_do("unit", unit_dir))
@@ -732,7 +765,7 @@ def cmd_do(args: argparse.Namespace) -> int:
 
     try:
         with Progress() as progress:
-            final, sec = _graph_final(args, unit, sel, progress)
+            final, sec = _graph_final(args, unit, sel, progress, advisor=advisor)
             # Servidor local desligado não é fracasso da unidade: sobe um degrau de
             # custo e tenta de novo, UMA vez. Teto de duas execuções por comando —
             # subir tier em cascata é decisão de orçamento, não de disponibilidade.
@@ -754,7 +787,7 @@ def cmd_do(args: argparse.Namespace) -> int:
                     )
                 except Exception:
                     gasto = None  # desconhecido -> fail-closed no _execute
-                final, sec = _graph_final(args, unit, sel, progress, spent_before=gasto)
+                final, sec = _graph_final(args, unit, sel, progress, spent_before=gasto, advisor=advisor)
             elif _sem_turno(final):
                 print(
                     "nenhum executor respondeu e não há tier acima deste — rode `harness doctor`",
@@ -798,6 +831,18 @@ def cmd_do(args: argparse.Namespace) -> int:
                 f"· detalhes: harness report",
             )
         )
+        # `RunRow.cost_usd` NÃO muda — segue o custo do executor local, o que
+        # `ab.py`/`autopilot` já esperam sem migração; o gasto do consultor
+        # (pensamento, não execução) é uma linha à parte, só quando > 0.
+        advise_evts = [e for e in final.get("events", []) if e.get("node") == "advise"]
+        consultor_usd = sum(float(e.get("cost_usd") or 0.0) for e in advise_evts)
+        if consultor_usd > 0:
+            n_turnos = sum(1 for e in advise_evts if float(e.get("cost_usd") or 0.0) > 0)
+            print(
+                _linha_do(
+                    "consultor", f"${consultor_usd:.4f} em {n_turnos} turno(s) — pensamento, não execução"
+                )
+            )
         if not aceito:
             tail = _last_event(final, "verify").get("tail", "")
             if tail:
@@ -2307,6 +2352,13 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help="teto de gasto DESTE comando em dólar, somando todas as tentativas; "
         "estourou, o run para e nada é aplicado",
+    )
+    adv.add_argument(
+        "--advisor",
+        default=None,
+        metavar="TIER",
+        dest="advisor",
+        help="tier PAGO que só ACONSELHA quando o local trava (a execução continua no executor local)",
     )
     adv.add_argument(
         "--no-apply",

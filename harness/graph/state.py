@@ -54,6 +54,13 @@ class RunState(TypedDict):
     # porque é específico DESTA execução — conhecimento entre runs é episódico.
     # Quem lê usa `get(..., "")`: estado de checkpoint antigo não tem a chave.
     reflect_hint: str
+    # Texto do consultor PAGO (nó `advise`) da tentativa anterior. Mesmo
+    # contrato do `reflect_hint`: SEM reducer — `advise` nunca pode entrar em
+    # fan-out (RunState só tem reducer em `events`; qualquer outra chave
+    # escrita por dois nós no mesmo super-step é `InvalidUpdateError` — ver
+    # `improve/topology_grammar.EVENTS_ONLY_SAFE`). Quem lê usa `get(..., "")`:
+    # checkpoint antigo (antes deste campo existir) não tem a chave.
+    advisor_hint: str
     # Carimbo do nó `plan`: a tarefa é grande o bastante para exigir plano antes
     # de editar. Só um flag — o plano em si é do executor (planner + write_todos),
     # aqui não roda LLM. Quem lê usa `get(..., False)`: checkpoint antigo não tem.

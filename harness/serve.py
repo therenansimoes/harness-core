@@ -69,6 +69,7 @@ UNAUTHORIZED = 401
 FORBIDDEN = 403  # fail-closed: fora do loopback e sem key, mesmo 403 do webhook
 MODEL_ID = "harness"
 EXECUTOR_PREFIX = "harness:"
+FULL_ID = f"{EXECUTOR_PREFIX}full"  # executor híbrido: local $0 + consultor pago read-only
 STRICT_MODEL_ENV = "HARNESS_SERVE_STRICT_MODEL"  # "0" => id desconhecido vira auto
 MODEL_NOT_FOUND = 404
 MAX_MODEL_ID_CHARS = 120
@@ -171,6 +172,10 @@ class Executor:
     run_model: str  # modelo pro argv do `harness do`; "" = o backend escolhe
     local: bool  # roda no runtime desta máquina => responde chat, custo $0
     label: str  # 1 linha descritiva
+    # Tier PAGO de consultoria (`harness:full` — ver `executors()`). "" em
+    # todos os outros. ÚLTIMO campo, com default: mantém `auto_executor()` e
+    # os literais posicionais de teste válidos sem editar.
+    advisor_tier: str = ""
 
 
 def auto_executor() -> Executor:
@@ -227,6 +232,29 @@ def executors() -> list[Executor]:
                     run_model=t.model,
                     local=_runs_local(t.backend, t.model),
                     label=f"{t.name} · {t.backend}" + (f" · {t.model}" if t.model else ""),
+                )
+            )
+        # `harness:full`: executor híbrido — SEMPRE roda local ($0), e o
+        # PRIMEIRO tier pago vira consultor read-only só quando a régua
+        # reprova (`--advisor`, `harness/graph/advisor.py`). Só existe quando
+        # os dois papéis estão disponíveis.
+        local = next((e for e in execs if e.local and e.id != MODEL_ID), None)
+        pago = next((e for e in execs if not e.local), None)
+        if local is not None and pago is not None:
+            # ÚLTIMO da lista de propósito: `chat_executor` pega o PRIMEIRO
+            # local em `auto`, e este não pode roubar esse lugar do tier
+            # puramente local. `tier=""` de propósito: o alias oculto
+            # `harness:<tier>` de `resolve_executor` não pode casar dois
+            # executores com o mesmo tier.
+            execs.append(
+                Executor(
+                    id=FULL_ID,
+                    tier="",
+                    backend=local.backend,
+                    run_model=local.run_model,
+                    local=True,
+                    label=f"executa sempre local ({local.tier}) · consultor {pago.tier} só quando trava",
+                    advisor_tier=pago.tier,
                 )
             )
         return execs
@@ -651,6 +679,8 @@ def executor_argv(ex: Executor) -> list[str]:
     argv = ["--backend", ex.backend]
     if ex.run_model:
         argv += ["--model", ex.run_model]
+    if ex.advisor_tier:
+        argv += ["--advisor", ex.advisor_tier]
     return argv
 
 
@@ -1169,15 +1199,20 @@ def chat_executor(ctx: ServeContext) -> Executor:
     """O executor EFETIVO do dispatch vindo do chat:
     - `ctx.executor` pinado explicitamente (id != MODEL_ID) → ele (local ou
       pago — pin é consentimento).
-    - auto → primeiro executor LOCAL de `executors()` que não seja o auto
-      (`e.local and e.id != MODEL_ID`, nunca o literal "harness:local" —
-      `_tier_alias` pode nomear um segundo tier local `local-<tier>`). Sem
-      nenhum local (models.toml quebrado) → `auto_executor()` mesmo (dispatch
-      sem pin; o teto segura)."""
+    - auto → primeiro executor LOCAL de `executors()` que não seja o auto NEM
+      o modo consultor (`e.local and not e.advisor_tier and e.id != MODEL_ID`,
+      nunca o literal "harness:local" — `_tier_alias` pode nomear um segundo
+      tier local `local-<tier>`). `harness:full` tem `advisor_tier` setado
+      justamente pra ficar fora daqui: auto nunca escolhe modo consultor
+      sozinho, só por pin explícito. Sem nenhum local (models.toml quebrado)
+      → `auto_executor()` mesmo (dispatch sem pin; o teto segura)."""
     ex = ctx.executor
     if ex is not None and ex.id != MODEL_ID:
         return ex
-    return next((e for e in executors() if e.local and e.id != MODEL_ID), auto_executor())
+    return next(
+        (e for e in executors() if e.local and not e.advisor_tier and e.id != MODEL_ID),
+        auto_executor(),
+    )
 
 
 def _dispatch_from_chat(task: str, ctx: ServeContext) -> str:
@@ -1190,10 +1225,17 @@ def _dispatch_from_chat(task: str, ctx: ServeContext) -> str:
     pin = ctx.executor is not None and ctx.executor.id != MODEL_ID
     ex = chat_executor(ctx)
     if pin:
-        motivo = (
-            f'executando direto — executor {ex.id} pinado'
-            f'{" ($0)" if ex.local else f" · PAGO, teto ${MAX_USD_CAP:.2f}"}.'
-        )
+        if ex.advisor_tier:
+            motivo = (
+                f"executando direto — {ex.id} pinado: execução local ($0); "
+                f"consultor {ex.advisor_tier} (PAGO) só se a régua reprovar, "
+                f"dentro do teto ${MAX_USD_CAP:.2f}."
+            )
+        else:
+            motivo = (
+                f'executando direto — executor {ex.id} pinado'
+                f'{" ($0)" if ex.local else f" · PAGO, teto ${MAX_USD_CAP:.2f}"}.'
+            )
     else:
         motivo = (
             f'executando direto no executor local ({ex.id}, $0) — quer outro executor: '
@@ -1220,6 +1262,7 @@ texto sem barra vai para o modelo local (LM Studio, porta 1234) — chat é semp
 texto livre pedindo AÇÃO: eu executo na hora (harness do em segundo plano, --no-apply, teto $5.00) —
 no auto vai pro executor local ($0); executor pago só com pin explícito ou /do.
 "só pergunta" no texto (ou HARNESS_SERVE_AUTO_DO=0 no serve) desliga o disparo.
+harness:full — executa SEMPRE no local ($0); o modelo pago só PENSA (1 turno, read-only) quando a régua reprova.
 """
 
 
@@ -1388,7 +1431,8 @@ def _cmd_models(_arg: str, ctx: ServeContext) -> str:
     pin = ctx.executor.id if ctx.executor else None
     linhas = [
         f"{'→ ' if e.id == pin else '  '}{e.id:<22} "
-        f"{'chat + /do' if e.local else 'só /do (pago)'}  {e.backend or 'router'} · {e.run_model or '—'}"
+        f"{f'chat + /do · consultor {e.advisor_tier}' if e.advisor_tier else ('chat + /do' if e.local else 'só /do (pago)')}"
+        f"  {e.backend or 'router'} · {e.run_model or '—'}"
         for e in executors()
     ]
     linhas.append("chat é sempre local ($0); executor pago só executa via /do (teto $5.00).")
