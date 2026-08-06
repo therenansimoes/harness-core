@@ -338,9 +338,15 @@ def llm_available() -> bool:
     return status == 200
 
 
-def system_prompt() -> str:
+def system_prompt(cwd: Path) -> str:
     base = (
         "Você é o harness, o agente de engenharia que roda na máquina do Renan.\n"
+        f"Plugado em {cwd} — você é o canal de controle SÓ deste repo (harness-core);\n"
+        "não enxerga o projeto/workspace aberto no editor do usuário. Se perguntarem\n"
+        'sobre "este projeto"/"meu projeto"/o código aberto e o contexto sugerir que\n'
+        "não é este repo, diga que não vê o workspace do editor e aponte os comandos\n"
+        "com barra abaixo ou os modelos nativos do Cursor — nunca chute sobre outro\n"
+        "projeto.\n"
         "Responda em português, curto (no máximo 8 linhas). Nesta conversa você NÃO\n"
         "executa nada: para agir, o usuário usa os comandos com barra listados abaixo.\n\n"
         f"{HELP}"
@@ -366,12 +372,12 @@ def _clip(text: str, limit: int = STATE_MAX_CHARS) -> str:
     return text[:limit] + "\n… (cortado)"
 
 
-def llm_reply(text: str) -> str | None:
+def llm_reply(text: str, cwd: Path) -> str | None:
     model = str(_chat_model()).removeprefix(OPENAI_PREFIX)
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": system_prompt()},
+            {"role": "system", "content": system_prompt(cwd)},
             {"role": "user", "content": text},
         ],
         "temperature": 0.2,
@@ -531,7 +537,7 @@ def handle_message(text: str, ctx: ServeContext) -> str:
         if handler is None:
             return f"comando desconhecido: /{name}\n\n{HELP}"
         return handler(arg, ctx)
-    reply = llm_reply(text)
+    reply = llm_reply(text, ctx.cwd)
     if reply is None:
         return (
             f"LM Studio não respondeu em {llm_base_url()} — sem modelo local eu só "

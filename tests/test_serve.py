@@ -340,8 +340,9 @@ def test_system_prompt_traz_bloco_untrusted_e_tamanho_limitado(
     monkeypatch.delenv("HARNESS_TRUST_BOUNDARY", raising=False)
     monkeypatch.setattr(serve, "_bd", lambda *a, **kw: (0, "hc-1 tarefa"))
 
-    prompt = serve.system_prompt()
+    prompt = serve.system_prompt(tmp_path)
     assert "untrusted_reference_data" in prompt
+    assert str(tmp_path) in prompt
     base_len = len(serve.HELP) + 300
     assert len(prompt) <= 2 * serve.STATE_MAX_CHARS + base_len + 500
 
