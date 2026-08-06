@@ -1,6 +1,6 @@
 # harness-core — Claude Code notes
 
-- Pending work & decisions: read `PROGRESS.md` FIRST (single source, max 1 page).
+- Pending work & decisions: run `bd ready` FIRST (beads issue tracker, single source — PROGRESS.md was retired 2026-08-05). Create/close issues with `bd create` / `bd close <id>` as you work.
 - `STATUS.md` / `README.md`: grep what you need; never read whole.
 - Tests: `uv run --extra deepagents pytest -q`. NEVER remove the `-m` marker filter in `pyproject.toml` — `claude_cli`-marked tests spend real money.
 - Lint: `uv run ruff check .`
