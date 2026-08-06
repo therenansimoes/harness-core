@@ -40,3 +40,7 @@ enabled = false
 # loop não consegue mexer. VAZIO de propósito: sem pin nada auto-ativa, e é o
 # humano que olha o bundle uma vez e cola o par aqui
 # (`harness selfapprove status` imprime o valor corrente de cada artefato).
+#
+# Pinado 2026-08-06 sob a decisão do Renan ("melhoria mensurável não precisa
+# de mim"): bundle de 4 casos conferido, manifest v2.
+"skills/python-fixes.md" = "v2:e1111c5770ca43a1354c29354b7c49911118ffb76973bf73082d8a9414fe5808"
