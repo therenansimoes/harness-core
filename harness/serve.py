@@ -100,6 +100,7 @@ USER_QUERY_RE = re.compile(r"<user_query>(.*?)</user_query>", re.DOTALL | re.IGN
 SCAN_CHARS_PER_MSG = 20_000  # o bloco user_info é pequeno; teto por mensagem, não por índice
 MAX_BODY_BYTES = 8 * 1024 * 1024  # 100+ mensagens com tool results é entrada de cliente sem teto
 PAYLOAD_TOO_LARGE = 413
+METHOD_NOT_ALLOWED = 405  # PUT/DELETE/PATCH/OPTIONS/HEAD — rotas não implementadas hoje
 MAX_PATH_CHARS = 4096
 WORKSPACE_ROOTS_ENV = "HARNESS_SERVE_WORKSPACE_ROOTS"
 GIT_TIMEOUT_S = 5.0
@@ -1605,11 +1606,17 @@ class _Handler(BaseHTTPRequestHandler):
 
     @property
     def verbose(self) -> bool:
-        return bool(getattr(self.server, "verbose", False))
+        # `--trace` implica a linha resumo do `--verbose` de brinde — quem
+        # liga o dump cru também quer o resumo de 1 linha por request.
+        return bool(getattr(self.server, "verbose", False)) or self.trace
 
     @property
     def debug_dump(self) -> Path | None:
         return getattr(self.server, "debug_dump", None)  # type: ignore[attr-defined]
+
+    @property
+    def trace(self) -> bool:
+        return bool(getattr(self.server, "trace", False))
 
     def _begin_request(self) -> None:
         """Reseta o estado de inspeção no início de CADA `do_GET`/`do_POST` —
@@ -1634,11 +1641,25 @@ class _Handler(BaseHTTPRequestHandler):
             "body": None,
             "status": None,
         }
+        # Estado do `--trace` — cru, nunca passa por `_redact_headers` (essa
+        # é a mesma máscara que o `--debug-dump` usa, "***" sem "Bearer ");
+        # aqui a máscara é a literal do bloco REQ, ver `_trace_flush_req`.
+        self._trace_body_text: str | None = None  # None = sentinela "ainda não lido"
+        self._trace_req_flushed = False
+        self._trace_resp_header_flushed = False
+        # Buffer de resposta teado nos write sites (`_raw`/`_stream`) — usado
+        # tanto pro print do bloco RESP quanto pro campo "response" do
+        # `--debug-dump`; só acumula quando alguma das duas flags está
+        # ligada, senão é lista vazia e zero custo no caminho default.
+        self._resp_capture_active = bool(self.trace or self.debug_dump is not None)
+        self._resp_body_chunks: list[bytes] = []
 
     def _finish_request(self) -> None:
         """Chamado no `finally` de `do_GET`/`do_POST` — roda depois que a
         resposta já foi escrita, então nunca atrasa nem quebra a request em
         si (o dump falhando é só um aviso, ver `_write_debug_dump`)."""
+        if self.trace:
+            print("───── END", file=sys.stderr)
         if self.verbose:
             self._print_verbose_line()
         if self.debug_dump is not None:
@@ -1656,6 +1677,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _write_debug_dump(self) -> None:
         assert self.debug_dump is not None
+        self._dump_state["response"] = self._trace_response_field()
         try:
             line = json.dumps(self._dump_state, default=str) + "\n"
             with open(self.debug_dump, "a", encoding="utf-8") as fh:
@@ -1676,6 +1698,67 @@ class _Handler(BaseHTTPRequestHandler):
         dump = getattr(self, "_dump_state", None)
         if dump is not None:
             dump["status"] = status
+
+    def _trace_flush_req(self) -> None:
+        """Imprime o bloco `───── REQ` uma única vez por request — chamado
+        tanto no primeiro write site da resposta (`_raw`/`_stream`, cobre os
+        casos em que o corpo nunca é resolvido, ex. 401/413) quanto em
+        `_trace_set_body` assim que o corpo é conhecido (cobre o caso comum:
+        rota que demora — `llm_reply` chega a `LLM_TIMEOUT_S`, ninguém quer
+        esperar a resposta pra ver o que foi mandado)."""
+        if not self.trace or self._trace_req_flushed:
+            return
+        self._trace_req_flushed = True
+        print(f"───── REQ {self.command} {self.path} {self.request_version}", file=sys.stderr)
+        for k, v in self.headers.items():
+            v_out = "Bearer ***" if k.lower() == "authorization" else v
+            print(f"{k}: {v_out}", file=sys.stderr)
+        print(file=sys.stderr)
+        body = self._trace_body_text
+        print(body if body is not None else "corpo: (não lido — refusado antes)", file=sys.stderr)
+
+    def _trace_set_body(self, raw: bytes) -> None:
+        """Registra o corpo cru da request pro bloco `───── REQ` — chamado
+        assim que o corpo é lido de verdade (POST/PUT/... com auth ok e
+        dentro do teto) ou, pro GET, com corpo vazio depois do gate de auth
+        (ver `_do_GET_inner`: GET nunca lê corpo, sucesso ou 401). Sem isto,
+        o sentinela `None` de `_begin_request` vira a nota de "não lido"."""
+        if self.trace:
+            self._trace_body_text = raw.decode("utf-8", errors="replace")
+            self._trace_flush_req()
+
+    def _trace_flush_resp_header(self, status: int, headers: dict[str, str]) -> None:
+        self._trace_flush_req()
+        if not self.trace or self._trace_resp_header_flushed:
+            return
+        self._trace_resp_header_flushed = True
+        print(f"───── RESP {status}", file=sys.stderr)
+        for k, v in headers.items():
+            print(f"{k}: {v}", file=sys.stderr)
+
+    def _capture_response_chunk(self, chunk: bytes) -> None:
+        """Tee do corpo de resposta — `_raw` manda de uma vez, `_stream`
+        manda um frame SSE por chamada. Só acumula quando `--trace` ou
+        `--debug-dump` está ligado (`_resp_capture_active`, calculado em
+        `_begin_request`); no caminho default é lista vazia sempre."""
+        if self._resp_capture_active:
+            self._resp_body_chunks.append(chunk)
+
+    def _trace_response_field(self) -> dict[str, Any]:
+        """Campo `response` do `--debug-dump`: mesmo buffer teado nos write
+        sites, JSON parseado quando cabe no teto de `DEBUG_DUMP_BODY_MAX_BYTES`
+        (mesmo padrão do corpo da request em `_do_POST_inner`), senão string
+        bruta truncada — cobre tanto a resposta `_json` (um blob) quanto o
+        SSE (frames concatenados, que não parseiam como JSON único)."""
+        raw = b"".join(self._resp_body_chunks)
+        text = raw.decode("utf-8", errors="replace")[:DEBUG_DUMP_BODY_MAX_BYTES]
+        body: Any = text
+        if len(raw) <= DEBUG_DUMP_BODY_MAX_BYTES:
+            try:
+                body = json.loads(text)
+            except ValueError:
+                body = text
+        return {"status": self._dump_state.get("status"), "body": body}
 
     def _authorized(self) -> bool:
         """Porta de entrada de toda rota — chamada antes de olhar o path ou
@@ -1708,6 +1791,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _do_GET_inner(self) -> None:
         if not self._authorized():
             return
+        self._trace_set_body(b"")  # GET nunca lê corpo — depois do gate: 401 mostra "não lido"
         path = self.path.split("?", 1)[0].rstrip("/")
         if path in ("/v1/models", "/models"):
             self._json(200, models_payload())
@@ -1753,9 +1837,11 @@ class _Handler(BaseHTTPRequestHandler):
             raw = self.rfile.read(length)
             body = json.loads(raw or b"{}")
         except (ValueError, OSError) as exc:
+            self._trace_set_body(raw)
             self._dump_state["body"] = _dump_truncated_raw(raw)
             self._error(400, f"corpo inválido: {exc}")
             return
+        self._trace_set_body(raw)
         # corpo grande porém válido: no dump o JSON parseado passa inteiro só
         # até o teto de `DEBUG_DUMP_BODY_MAX_BYTES` — acima disso vira bruto
         # truncado, senão o .jsonl de debug cresce sem fim junto do corpo.
@@ -1818,16 +1904,78 @@ class _Handler(BaseHTTPRequestHandler):
         self._log_state["resp_len"] = len(text)
         self._dump_state["status"] = 200
 
+    # PUT/DELETE/PATCH/OPTIONS/HEAD não têm rota — mesmo gate de auth do
+    # GET/POST, mas sempre 405. O corpo é lido (dentro do teto de
+    # `MAX_BODY_BYTES`, mesmo 413 do POST) porque não tem outro jeito
+    # correto de responder e manter o framing keep-alive: se a conexão
+    # continuar e ninguém drenar o corpo, os bytes que sobraram no socket
+    # viram o início (torto) da próxima request.
+    def do_PUT(self) -> None:
+        self._begin_request()
+        try:
+            self._do_unsupported_inner()
+        finally:
+            self._finish_request()
+
+    def do_DELETE(self) -> None:
+        self._begin_request()
+        try:
+            self._do_unsupported_inner()
+        finally:
+            self._finish_request()
+
+    def do_PATCH(self) -> None:
+        self._begin_request()
+        try:
+            self._do_unsupported_inner()
+        finally:
+            self._finish_request()
+
+    def do_OPTIONS(self) -> None:
+        self._begin_request()
+        try:
+            self._do_unsupported_inner()
+        finally:
+            self._finish_request()
+
+    def do_HEAD(self) -> None:
+        self._begin_request()
+        try:
+            self._do_unsupported_inner()
+        finally:
+            self._finish_request()
+
+    def _do_unsupported_inner(self) -> None:
+        if not self._authorized():
+            return
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > MAX_BODY_BYTES:
+            self.close_connection = True
+            self._error(PAYLOAD_TOO_LARGE, f"corpo maior que {MAX_BODY_BYTES} bytes")
+            return
+        raw = self.rfile.read(length) if length else b""
+        self._trace_set_body(raw)
+        self._error(METHOD_NOT_ALLOWED, "método não suportado")
+
     def _stream(self, cid: str, created: int, text: str, *, model: str = MODEL_ID) -> None:
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Transfer-Encoding", "chunked")
         self.end_headers()
+        headers = {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Transfer-Encoding": "chunked",
+        }
         try:
             for frame in stream_chunks(text, cid=cid, created=created, model=model):
                 self.wfile.write(b"%x\r\n%s\r\n" % (len(frame), frame))
                 self.wfile.flush()
+                self._capture_response_chunk(frame)
+                if self.trace:
+                    self._trace_flush_resp_header(200, headers)
+                    print(f"sse> {frame.decode('utf-8', errors='replace')}", file=sys.stderr)
             self.wfile.write(b"0\r\n\r\n")
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
@@ -1838,8 +1986,17 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            # HEAD nunca lê corpo (RFC): o `http.client` do cliente zera o
+            # `length` esperado e os bytes ficam no socket, corrompendo o
+            # framing da próxima request keep-alive. O `Content-Length`
+            # acima segue correto — só o corpo em si não vai pro wire.
+            self.wfile.write(body)
         self._record_response(status, len(body))
+        self._capture_response_chunk(body)
+        if self.trace:
+            self._trace_flush_resp_header(status, {"Content-Type": ctype, "Content-Length": str(len(body))})
+            print(body.decode("utf-8", errors="replace"), file=sys.stderr)
 
     def _json(self, status: int, payload: dict[str, Any]) -> None:
         self._raw(status, "application/json", json.dumps(payload).encode("utf-8"))
@@ -1884,6 +2041,7 @@ def serve(
     workspace_roots: Sequence[str | Path] | None = None,
     verbose: bool = False,
     debug_dump: Path | None = None,
+    trace: bool = False,
 ) -> None:
     # Fail-closed do webhook: fora do loopback, key é obrigatória. Loopback
     # sem key segue exatamente como hoje — sem auth nenhuma.
@@ -1907,6 +2065,10 @@ def serve(
     # zero print, zero arquivo, zero diferença de comportamento de hoje.
     server.verbose = verbose  # type: ignore[attr-defined]
     server.debug_dump = debug_dump  # type: ignore[attr-defined]
+    # `--trace`: dump cru de request/response no stderr (ver `_Handler.trace`
+    # e os write sites `_raw`/`_stream`) — mesmo padrão off-by-default; a
+    # propriedade `verbose` do handler já embute `trace` (ver seu docstring).
+    server.trace = trace  # type: ignore[attr-defined]
     try:
         if on_bind is not None:
             on_bind(server.server_address[1])

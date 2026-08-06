@@ -49,6 +49,7 @@ def _serve(
     workspace_roots: tuple[Path, ...] | None = None,
     verbose: bool = False,
     debug_dump: Path | None = None,
+    trace: bool = False,
 ) -> tuple[int, threading.Thread]:
     bound: list[int] = []
     ready = threading.Event()
@@ -69,6 +70,7 @@ def _serve(
             "workspace_roots": workspace_roots,
             "verbose": verbose,
             "debug_dump": debug_dump,
+            "trace": trace,
         },
         daemon=True,
     )
@@ -496,10 +498,14 @@ def test_parser_wiring() -> None:
     assert nswd.workspace_root is None
     assert nswd.verbose is False
     assert nswd.debug_dump is None
+    assert nswd.trace is False
 
     nsv = p.parse_args(["serve", "--verbose", "--debug-dump", "/tmp/dump.jsonl"])
     assert nsv.verbose is True
     assert nsv.debug_dump == Path("/tmp/dump.jsonl")
+
+    nst = p.parse_args(["serve", "--trace"])
+    assert nst.trace is True
 
 
 # --------------------------------------------------------------------------- workspace do Cursor: extração
@@ -1270,6 +1276,106 @@ def test_debug_dump_dir_ilegivel_nao_derruba_a_request(
     assert "/do" in json.loads(raw)["choices"][0]["message"]["content"]
     err = capsys.readouterr().err
     assert "ilegível" in err
+
+
+# --------------------------------------------------------------------------- inspeção de requests: --trace
+
+
+def test_trace_off_sem_bloco_req_no_stderr(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # Sem --trace: zero diferença do comportamento de hoje, nem o marcador
+    # do bloco cru aparece no stderr.
+    port, t = _serve(tmp_path, max_requests=1)
+    status, raw, _ = _post(port, {"model": "harness", "messages": [{"role": "user", "content": "/help"}]})
+    t.join(5)
+    assert status == 200
+    assert "/do" in json.loads(raw)["choices"][0]["message"]["content"]
+    err = capsys.readouterr().err
+    assert "───── REQ" not in err
+
+
+def test_trace_mostra_req_e_resp_cru_sem_vazar_a_key(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    port, t = _serve(tmp_path, max_requests=1, api_key="segredo-trace", trace=True)
+    status, _raw, _ = _post(
+        port,
+        {"model": "harness", "messages": [{"role": "user", "content": "/help"}]},
+        headers={"Authorization": "Bearer segredo-trace"},
+    )
+    t.join(5)
+    assert status == 200
+    err = capsys.readouterr().err
+    assert "───── REQ POST /v1/chat/completions HTTP/1.1" in err
+    assert "Authorization: Bearer ***" in err
+    assert '"content": "/help"' in err  # corpo cru da request, sem truncar
+    assert "───── RESP 200" in err
+    assert "/do" in err  # corpo cru da resposta
+    assert "───── END" in err
+    assert "segredo-trace" not in err  # a key nunca aparece, nem mascarada
+
+
+def test_trace_cobre_401(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # Auth falha ANTES do corpo ser lido — trace mostra a nota em vez do
+    # corpo, mas o bloco REQ/RESP/END aparece inteiro do mesmo jeito.
+    port, t = _serve(tmp_path, max_requests=1, api_key="segredo", trace=True)
+    status, _ = _get(port, "/v1/models")
+    t.join(5)
+    assert status == 401
+    err = capsys.readouterr().err
+    assert "───── REQ GET /v1/models HTTP/1.1" in err
+    assert "corpo: (não lido — refusado antes)" in err
+    assert "───── RESP 401" in err
+    assert "───── END" in err
+    assert "segredo" not in err
+
+
+def test_trace_metodo_nao_suportado_405(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    port, t = _serve(tmp_path, max_requests=1, trace=True)
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/v1/chat/completions", method="PUT")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            status = resp.status
+    except urllib.error.HTTPError as e:
+        status = e.code
+    t.join(5)
+    assert status == 405
+    err = capsys.readouterr().err
+    assert "───── REQ PUT /v1/chat/completions HTTP/1.1" in err
+    assert "───── RESP 405" in err
+    assert "suportado" in err  # `json.dumps` escapa acento (ensure_ascii): "método não suportado"
+    assert "───── END" in err
+
+
+def test_trace_sse_um_chunk_por_linha(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    port, t = _serve(tmp_path, max_requests=1, trace=True)
+    data = json.dumps(
+        {"model": "harness", "stream": True, "messages": [{"role": "user", "content": "/help"}]}
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/v1/chat/completions",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        resp.read()
+    t.join(5)
+    err = capsys.readouterr().err
+    assert "───── RESP 200" in err
+    assert err.count("sse> data: ") >= 2
+    assert "sse> data: [DONE]" in err
+    assert "───── END" in err
+
+
+def test_debug_dump_ganha_campo_response(tmp_path: Path) -> None:
+    dump_path = tmp_path / "dump.jsonl"
+    port, t = _serve(tmp_path, max_requests=1, debug_dump=dump_path)
+    status, _raw, _ = _post(port, {"model": "harness", "messages": [{"role": "user", "content": "/help"}]})
+    t.join(5)
+    assert status == 200
+    entry = json.loads(dump_path.read_text(encoding="utf-8").strip("\n"))
+    assert entry["response"]["status"] == 200
+    assert "/do" in entry["response"]["body"]["choices"][0]["message"]["content"]
 
 
 # --------------------------------------------------------------------------- gateway de ação (chat que dispara /do)

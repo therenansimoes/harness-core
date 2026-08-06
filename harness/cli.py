@@ -2196,6 +2196,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
     modos = []
     if args.verbose:
         modos.append("verbose")
+    if args.trace:
+        modos.append("trace")
     if args.debug_dump:
         modos.append(f"debug-dump={args.debug_dump}")
     modos_txt = f" · modos: {', '.join(modos)}" if modos else ""
@@ -2208,6 +2210,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
             workspace_roots=roots,
             verbose=args.verbose,
             debug_dump=args.debug_dump,
+            trace=args.trace,
             on_bind=lambda p: print(
                 f"[serve] http://{args.host}:{p}/v1 · modelo 'harness' · repo {cwd} · "
                 f"roots: {roots or 'default'}{modos_txt}"
@@ -3132,6 +3135,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="1 linha no stderr por request atendida (método, rota, model pedido→resolvido, "
         "workspace, resp) — nunca conteúdo de mensagem nem a api key",
+    )
+    srv.add_argument(
+        "--trace",
+        action="store_true",
+        help="dump cru no stderr de CADA request/response — método/rota/headers/corpo completo "
+        "sem truncar, chunk SSE por linha; só o Authorization vem mascarado ('Bearer ***'), "
+        "todo o resto (inclusive segredos que o Cursor mande no corpo) vai pro terminal; "
+        "liga --verbose junto",
     )
     srv.add_argument(
         "--debug-dump",
