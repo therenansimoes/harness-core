@@ -1,6 +1,6 @@
 # STATUS — source of truth for harness-core
 
-**Updated:** 2026-08-04. Technical north: `docs/SPEC-rebuild.md` (core rebuild)
+**Updated:** 2026-08-05. Technical north: `docs/SPEC-rebuild.md` (core rebuild)
 and `docs/SPEC-MULTIPROJECT.md` (real projects). Real library APIs:
 `docs/RESEARCH-deepagents-api.md`. Architecture detail: `docs/ARCHITECTURE.md`.
 
@@ -22,11 +22,12 @@ the public repo carries only fixtures and synthetic benchmarks.
 
 Measured on this machine, on the current tree:
 
-- `uv run --extra deepagents pytest -q` → **1274 passed, 1 skipped, 5 deselected**
-  (43s).
-- `uv run harness doctor` → **21 checks, 0 failures, 0 warnings**.
-- `uv run harness actions` → **14 registered actions**.
-- `uv run harness --help` → **27 subcommands**.
+- `uv run --extra deepagents pytest -q` → **1606 passed, 1 skipped, 5 deselected**
+  (55s).
+- `uv run harness doctor` → **22 checks, 0 failures, 1 warning** (local MLX
+  server not up — expected when off-grid fallback isn't running).
+- `uv run harness actions` → **15 registered actions**.
+- `uv run harness --help` → **36 subcommands**.
 - The executor exposes **25 harness tools** on top of deepagents' filesystem
   tools (enumerated per family in `README.md`).
 - `uv run harness frontier` → **5 open exams** (quarantine candidates the
@@ -36,6 +37,16 @@ Measured on this machine, on the current tree:
 - Real kill-9 resume test passes (`tests/test_resume.py`).
 - The improvement loop has run end to end against a local LM Studio/MLX model at
   **$0**.
+- **First real end-to-end delivery**: the bancada site, 5/5 units accepted and
+  integrated into `~/projects/bancada-app` master via the `claude_code` backend,
+  total cost **$3.63** (cap $5/run).
+- **Blind lay-tester run**: 2/2 units accepted, **$0.50**, zero flags, verdict
+  "a layperson can use it".
+- **Skills marketplace** shipped: `harness market sync|search|install|approve`,
+  human-gated activation, smoke-tested with 17 Anthropic skills.
+- **Off-grid fallback**: Anthropic primary, degrades to a local model with a
+  ledger stamp when the primary is unavailable.
+- **`PROGRESS.md` retired** in favor of beads (`bd ready`) for pending work.
 
 No benchmark score is claimed. Nothing here has been run against SWE-bench or
 any public suite, and no such number should be added to the docs without the
