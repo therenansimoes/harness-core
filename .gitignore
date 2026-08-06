@@ -12,8 +12,8 @@ test-results*
 .harness_ws/
 .harness_demo/
 _env/
-projects/*/ui/report.json
-projects/*/ui/test-results/
+# Repo-local project fixtures: runtime state, never in public history
+projects/
 benchmarks/held_in/task_*/fixtures/
 benchmarks/judge/task_*/fixtures/
 benchmarks/judge/task_*/.setup_base_sha
@@ -28,11 +28,6 @@ legacy/evolution/decisions.jsonl
 # continua existindo em disco (é o que `harness init`/`do` escrevem), só não
 # entra na história pública.
 config/projects.toml
-
-# Projetos privados/de família: nunca na história pública
-projects/website-faz-rogers/
-# Nota humana é avaliação subjetiva do operador
-projects/*/notes.tsv
 .claude/worktrees/
 .playwright-mcp/
 trace.jsonl
