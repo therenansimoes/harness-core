@@ -30,6 +30,16 @@ history, market, new, close, do, where). Não existe caminho, daqui, para
 na mão. `/do` dispara em segundo plano com `--no-apply`: uma mensagem de
 chat não merge sozinha na branch default.
 
+Protocolo nativo do Cursor (`harness/cursor_tools.py`, bead harness-core-z8n):
+quando o cliente declara `tools` utilizável (`cursor_tools.supports_tools`),
+este servidor PARA de rodar `harness do` em segundo plano por conta própria —
+ele devolve `tool_calls` (`Shell` rodando o comando NO TERMINAL DO CURSOR,
+sob a aprovação dele; `TodoWrite` de brinde quando o schema permite) e só
+resume o resultado no turno seguinte, que traz o `role=tool`. Esse caminho
+não grava job record: o terminal do Cursor é o registro, `jobs/` continua
+sendo só os processos que ESTE servidor sobe (`/do`, texto livre sem tools).
+Cliente sem `tools` utilizável mantém o comportamento de sempre, byte a byte.
+
 Workspace do Cursor: o corpo da request injeta um bloco `<user_info>` com o
 path do projeto aberto no editor (`Workspace Path: ...`, às vezes só `Is
 directory a git repo: Yes, at ...`). `extract_workspace`/`validate_workspace`
@@ -57,7 +67,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from harness import paths, trust_boundary
+from harness import cursor_tools, paths, trust_boundary
 from harness.governor.governor import load_gov
 from harness.ledger import store
 
@@ -1343,7 +1353,11 @@ def _cmd_close(arg: str, ctx: ServeContext) -> str:
 _MAX_USD_RE = re.compile(r"--max-usd\s+(\S+)")
 
 
-def _cmd_do(arg: str, ctx: ServeContext) -> str:
+def parse_do_arg(arg: str) -> tuple[str, float] | str:
+    """Parse + as 4 recusas do começo de `/do` (`--max-usd` não numérico,
+    task vazia, `--max-usd<=0`, `--max-usd` acima de `MAX_USD_CAP`), extraído
+    de `_cmd_do` pra `plan_turn` reusar sem duplicar a validação — a string
+    de erro passa pro chamador inalterada, `(task, max_usd)` no sucesso."""
     m = _MAX_USD_RE.search(arg)
     task = (_MAX_USD_RE.sub("", arg)).strip()
     max_usd = MAX_USD_CAP
@@ -1362,6 +1376,14 @@ def _cmd_do(arg: str, ctx: ServeContext) -> str:
             f"recusado: --max-usd {max_usd:.2f} passa do teto do servidor "
             f"({MAX_USD_CAP:.2f}). Nada foi disparado."
         )
+    return task, max_usd
+
+
+def _cmd_do(arg: str, ctx: ServeContext) -> str:
+    parsed = parse_do_arg(arg)
+    if isinstance(parsed, str):
+        return parsed
+    task, max_usd = parsed
     running = [j for j in list_jobs() if job_running(j)]
     if len(running) >= MAX_RUNNING_JOBS:
         jid = running[0].get("id")
@@ -1492,6 +1514,153 @@ def last_user_text(messages: list[dict]) -> str:
     return ""
 
 
+# --------------------------------------------------------------------------- turnos: precedência com/sem tools
+
+
+def md_paragraphs(text: str) -> str:
+    """Borda de render pro cliente com tools: linhas stripadas, vazias fora,
+    linha que já vinha indentada (2+ espaços — o padrão de `jobs_text`/`HELP`)
+    vira item de lista (`- <stripped>`), tudo junto com "\\n\\n". Idempotente
+    sobre texto que já é parágrafo separado por "\\n\\n": a própria saída,
+    rodada de novo aqui, dá o mesmo resultado (linha vazia cai fora, o resto
+    já está stripado e sem indentação de 2+ espaços)."""
+    linhas = []
+    for linha in text.split("\n"):
+        if not linha.strip():
+            continue
+        if re.match(r"^ {2,}", linha):
+            linhas.append(f"- {linha.strip()}")
+        else:
+            linhas.append(linha.strip())
+    return "\n\n".join(linhas)
+
+
+@dataclass(frozen=True)
+class Turn:
+    """Resposta de UM turno — texto pra render (`plan_turn`/`md_paragraphs`
+    decidem o formato) e, no caminho novo do Cursor, os `tool_calls` que vão
+    junto. `verbatim=True` pula `md_paragraphs` na borda de render (texto já
+    formatado por `handle_message`, ou o legado byte-idêntico quando o
+    cliente não declarou tools). `kind` alimenta `_log_state["rota"]` — os
+    valores de `chat_route` (`/comando`, `ação→do`, `texto`, `-`) mais os dois
+    novos deste módulo (`ação→tool_calls`, `desfecho`)."""
+
+    text: str
+    tool_calls: tuple[dict, ...] = ()
+    verbatim: bool = False
+    kind: str = ""
+
+
+_SHELL_DESCRIPTION = "roda harness do em segundo plano"  # 5-10 palavras — mesma régua do schema real
+
+
+def _todo_items(task: str) -> tuple[dict, ...]:
+    """2 itens fixos (a fixture real declara `minItems: 2` no `TodoWrite`) —
+    sem LLM, então o plano não é dinâmico: só marca que o dispatch está
+    rodando e que revisão/merge é o próximo passo humano."""
+    resumo = task if len(task) <= 80 else f"{task[:77]}..."
+    return (
+        {"id": "1", "content": f"rodar harness do — {resumo}", "status": "in_progress"},
+        {"id": "2", "content": "revisar branch de entrega e decidir merge", "status": "pending"},
+    )
+
+
+def _dispatch_turn(task: str, max_usd: float, ctx: ServeContext, body: dict, kind: str) -> Turn:
+    """Branch de dispatch do `plan_turn`: mesma recusa de concorrência de
+    hoje (`MAX_RUNNING_JOBS`, sem tool_calls); senão monta o `command` do
+    `Shell` via `cursor_tools.build_command` — MESMO argv de `dispatch_do`,
+    mas pro terminal do Cursor rodar, não pro `_popen` deste servidor.
+    `shell_call_args` devolvendo `None` (schema do Shell não cobre o que este
+    módulo sabe preencher — não deveria acontecer se `supports_tools` já
+    aprovou o mesmo schema, mas os dois checks não são o mesmo código) cai no
+    `_dispatch_from_chat` legado, `verbatim=True` (mesmo texto de sempre).
+    NA PRÁTICA hoje este `if` é morto: `supports_tools` e `shell_call_args`
+    validam o `required` do Shell contra o MESMO conjunto de defaults
+    (`cursor_tools._SHELL_DEFAULT_NAMES`), então um schema que passa o
+    primeiro sempre passa o segundo — é uma rede de segurança pros dois
+    checks divergirem no futuro, não um caminho vivo; ela também reusa
+    `_dispatch_from_chat`/`_cmd_do`, que reaplica `--max-usd` default
+    (`MAX_USD_CAP`) em vez do `max_usd` já parseado aqui — inofensivo
+    enquanto for inalcançável, mas quem for religar este branch precisa
+    saber disso antes de reativar.
+    `parallel_tool_calls is False` corta o `TodoWrite`: só o `Shell` importa
+    pra execução, o resto é só UX."""
+    running = [j for j in list_jobs() if job_running(j)]
+    if len(running) >= MAX_RUNNING_JOBS:
+        jid = running[0].get("id")
+        return Turn(
+            text=f"já tem um job rodando ({jid}) — espere terminar (/status). Nada foi disparado.",
+            kind=kind,
+        )
+    ex = chat_executor(ctx)
+    cmd = cursor_tools.build_command(
+        sys.executable,
+        str(paths.config_dir().resolve()),
+        str(store.data_dir().resolve()),
+        task,
+        max_usd,
+        executor_argv(ex),
+    )
+    schema = cursor_tools.tools_index(body)
+    shell_args = cursor_tools.shell_call_args(
+        schema.get(cursor_tools.SHELL_FN), cmd, str(ctx.cwd), _SHELL_DESCRIPTION
+    )
+    if shell_args is None:
+        return Turn(text=_dispatch_from_chat(task, ctx), verbatim=True, kind=kind)
+    calls: list[dict] = []
+    if body.get("parallel_tool_calls") is not False:
+        todo_schema = schema.get(cursor_tools.TODO_FN)
+        if isinstance(todo_schema, dict):
+            todo_args = cursor_tools.todo_call_args(todo_schema, _todo_items(task))
+            if todo_args is not None:
+                calls.append(cursor_tools.tool_call(cursor_tools.TODO_FN, todo_args, len(calls)))
+    calls.append(cursor_tools.tool_call(cursor_tools.SHELL_FN, shell_args, len(calls)))
+    preambulo = (
+        "Disparando o pedido em segundo plano, no terminal do Cursor — nada é "
+        "aplicado sozinho, eu volto com o resultado assim que terminar."
+    )
+    return Turn(text=preambulo, tool_calls=tuple(calls), kind="ação→tool_calls")
+
+
+def plan_turn(messages: list[dict], body: dict, ctx: ServeContext) -> Turn:
+    """Precedência do turno — ver docstring de `harness/cursor_tools.py`
+    §1 pro desenho completo:
+    1. sem tools utilizável (`cursor_tools.supports_tools`) → legado
+       byte-idêntico (`handle_message`, `verbatim=True`).
+    2. `summary_target` não-`None` → o turno anterior era o dispatch desta
+       função; resume o resultado (`kind="desfecho"`) e NUNCA emite
+       `tool_calls` de novo — isso limita o loop a 1 round-trip por
+       construção, nunca reencadeia outro dispatch sozinho.
+    3. `/do` (ROUTE_CMD) → `parse_do_arg`; erro vira turno de texto; sucesso
+       cai no branch de dispatch (`_dispatch_turn`).
+    4. ação livre (ROUTE_DISPATCH) → branch de dispatch com o teto padrão.
+    5. qualquer outra rota → `handle_message` de sempre; `verbatim` só quando
+       a rota é texto livre pro LLM (essa resposta é byte-idêntica); comando
+       formatado (`/status` etc.) ganha `md_paragraphs` na borda de render."""
+    if not cursor_tools.supports_tools(body):
+        user_text = last_user_text(messages)
+        return Turn(text=handle_message(user_text, ctx), verbatim=True, kind=chat_route(user_text, ctx))
+    target = cursor_tools.summary_target(messages)
+    if target is not None:
+        outcome = cursor_tools.parse_run_output("\n\n".join(target["results"]), target["exit_code"])
+        return Turn(text=cursor_tools.summary_md(outcome, target["task"]), kind="desfecho")
+    user_text = last_user_text(messages)
+    route = chat_route(user_text, ctx)
+    if route == ROUTE_CMD:
+        stripped = user_text.strip()
+        name, _, arg = stripped[1:].partition(" ")
+        if name.strip().lower() == "do":
+            parsed = parse_do_arg(arg)
+            if isinstance(parsed, str):
+                return Turn(text=parsed, kind=route)
+            task, max_usd = parsed
+            return _dispatch_turn(task, max_usd, ctx, body, route)
+        return Turn(text=handle_message(user_text, ctx), verbatim=False, kind=route)
+    if route == ROUTE_DISPATCH:
+        return _dispatch_turn(user_text.strip(), MAX_USD_CAP, ctx, body, route)
+    return Turn(text=handle_message(user_text, ctx), verbatim=(route == ROUTE_TEXT), kind=route)
+
+
 # --------------------------------------------------------------------------- OpenAI shapes
 
 
@@ -1526,19 +1695,34 @@ def model_error_payload(requested: str | None) -> dict:
     }
 
 
-def completion_payload(text: str, *, cid: str, created: int, model: str = MODEL_ID) -> dict:
+def completion_payload(
+    text: str, *, cid: str, created: int, model: str = MODEL_ID, tool_calls: tuple[dict, ...] | None = None
+) -> dict:
+    """`tool_calls=None` (default) é o envelope de sempre, byte-idêntico —
+    `message == {"role": "assistant", "content": text}` como antes de
+    harness-core-z8n. Com `tool_calls`, CORREÇÃO DE PROTOCOLO (validada
+    contra o `openai-openapi` oficial): `message.content` e `message.refusal`
+    são campos required-nullable, um cliente estrito lê `message.content`
+    incondicionalmente — `content` vira `None` quando não há preâmbulo
+    (`text` vazio) ou o texto quando há, `refusal` é sempre `None` (este
+    servidor nunca recusa), `finish_reason` vira `"tool_calls"`, e cada
+    entrada de `tool_calls` perde a key `"index"` (essa é só gramática de
+    streaming — ver `stream_chunks`)."""
+    message: dict[str, Any] = {"role": "assistant"}
+    if tool_calls:
+        message["content"] = text if text else None
+        message["refusal"] = None
+        message["tool_calls"] = [{k: v for k, v in tc.items() if k != "index"} for tc in tool_calls]
+        finish_reason = "tool_calls"
+    else:
+        message["content"] = text
+        finish_reason = "stop"
     return {
         "id": cid,
         "object": "chat.completion",
         "created": created,
         "model": model,
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": text},
-                "finish_reason": "stop",
-            }
-        ],
+        "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
         "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
     }
 
@@ -1547,7 +1731,17 @@ def _chunk_frame(payload: dict) -> bytes:
     return b"data: " + json.dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n\n"
 
 
-def stream_chunks(text: str, *, cid: str, created: int, model: str = MODEL_ID) -> Iterator[bytes]:
+def stream_chunks(
+    text: str, *, cid: str, created: int, model: str = MODEL_ID, tool_calls: tuple[dict, ...] = ()
+) -> Iterator[bytes]:
+    """Gramática SSE — TODO frame com `index` (choice única, sempre `0`) e
+    `finish_reason` explícitos (`None` nos intermediários, required no
+    schema mesmo nulo). Um frame por `tool_calls[i]`: `arguments` viaja
+    inteiro num delta só (nunca fatiado — é spec-legal, o cliente acumula
+    por `tool_calls[].index`, que aqui é o índice DA CHAMADA, distinto do
+    `index` da choice). Frame final: `finish_reason="tool_calls"` se saiu
+    alguma call, senão `"stop"` — comportamento de sempre quando
+    `tool_calls=()`."""
     base = {"id": cid, "object": "chat.completion.chunk", "created": created, "model": model}
     yield _chunk_frame(
         {**base, "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None}]}
@@ -1557,7 +1751,12 @@ def stream_chunks(text: str, *, cid: str, created: int, model: str = MODEL_ID) -
         yield _chunk_frame(
             {**base, "choices": [{"index": 0, "delta": {"content": pedaco}, "finish_reason": None}]}
         )
-    yield _chunk_frame({**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]})
+    for tc in tool_calls:
+        yield _chunk_frame(
+            {**base, "choices": [{"index": 0, "delta": {"tool_calls": [tc]}, "finish_reason": None}]}
+        )
+    finish_reason = "tool_calls" if tool_calls else "stop"
+    yield _chunk_frame({**base, "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}]})
     yield b"data: [DONE]\n\n"
 
 
@@ -1895,9 +2094,11 @@ class _Handler(BaseHTTPRequestHandler):
             return
         messages = body.get("messages") or []
         self._log_state["msgs"] = len(messages) if isinstance(messages, list) else 0
-        # `tools`/`stream_options` seguem ignorados — non-goals: nunca
-        # emitimos tool_calls nem usage chunk, e o Cursor aceita numa boa
-        # (não é gramática que ele exige para funcionar). `model` agora
+        # `tools` agora é lido de verdade (harness-core-z8n, ver
+        # `cursor_tools.supports_tools`/`plan_turn`): com `tools` utilizável,
+        # `harness do` roda no terminal do Cursor via `tool_calls`, não em
+        # segundo plano neste servidor. `stream_options` (usage chunk) segue
+        # ignorado — non-goal, o Cursor aceita numa boa sem ele. `model`
         # escolhe o executor — resolvido ANTES do stream: 404 é
         # irrepresentável no meio de um SSE, e o Cursor manda `stream=True`.
         requested = body.get("model") if isinstance(body.get("model"), str) else None
@@ -1919,11 +2120,14 @@ class _Handler(BaseHTTPRequestHandler):
         self._log_state["model_res"] = ex.id
         req_ctx = replace(ctx_for_request(messages, self.ctx), executor=ex, requested_model=requested)
         self._log_state["ws"] = _ws_field(req_ctx)
-        user_text = last_user_text(messages)
-        # `chat_route` é pura (zero I/O) — chamada aqui só pro verbose/log e
-        # de novo dentro de `handle_message`; as duas nunca podem divergir.
-        self._log_state["rota"] = chat_route(user_text, req_ctx)
-        text = handle_message(user_text, req_ctx)
+        # `supports_tools` é pura (zero I/O) — chamada aqui só pro veredito de
+        # render e de novo dentro de `plan_turn`; as duas nunca podem
+        # divergir (mesmo precedente de `chat_route`/`handle_message` antes
+        # deste bead).
+        tools_ok = cursor_tools.supports_tools(body)
+        turn = plan_turn(messages, body, req_ctx)
+        self._log_state["rota"] = turn.kind
+        text = turn.text if (turn.verbatim or not tools_ok) else md_paragraphs(turn.text)
         cid = new_id()
         created = int(time.time())
         # Eco o que o cliente pediu, não sempre o id canônico — mas só quando
@@ -1938,9 +2142,14 @@ class _Handler(BaseHTTPRequestHandler):
             if key == ex.id or (ex.tier and key == f"{EXECUTOR_PREFIX}{ex.tier}"):
                 echo = key
         if bool(body.get("stream")):
-            self._stream(cid, created, text, model=echo)
+            self._stream(cid, created, text, model=echo, tool_calls=turn.tool_calls)
         else:
-            self._json(200, completion_payload(text, cid=cid, created=created, model=echo))
+            self._json(
+                200,
+                completion_payload(
+                    text, cid=cid, created=created, model=echo, tool_calls=turn.tool_calls or None
+                ),
+            )
         # resp= no verbose é o texto de resposta de verdade (o que o modelo
         # respondeu), não o envelope OpenAI inteiro que `_raw` mediu — vale
         # pros dois formatos, stream e não-stream.
@@ -2001,7 +2210,15 @@ class _Handler(BaseHTTPRequestHandler):
         self._trace_set_body(raw)
         self._error(METHOD_NOT_ALLOWED, "método não suportado")
 
-    def _stream(self, cid: str, created: int, text: str, *, model: str = MODEL_ID) -> None:
+    def _stream(
+        self,
+        cid: str,
+        created: int,
+        text: str,
+        *,
+        model: str = MODEL_ID,
+        tool_calls: tuple[dict, ...] = (),
+    ) -> None:
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -2013,7 +2230,7 @@ class _Handler(BaseHTTPRequestHandler):
             "Transfer-Encoding": "chunked",
         }
         try:
-            for frame in stream_chunks(text, cid=cid, created=created, model=model):
+            for frame in stream_chunks(text, cid=cid, created=created, model=model, tool_calls=tool_calls):
                 self.wfile.write(b"%x\r\n%s\r\n" % (len(frame), frame))
                 self.wfile.flush()
                 self._capture_response_chunk(frame)

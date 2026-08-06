@@ -7,15 +7,34 @@ mesma convenção do webhook (`tests/test_triggers.py`).
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 
 import pytest
 
 from harness import serve
+
+FIXTURE_PATH = Path(__file__).parent / "fixtures" / "cursor_request.json"
+
+
+def _fixture() -> dict:
+    return json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+
+
+def _fixture_tools() -> list[dict]:
+    """Tools verbatim da captura real (harness-core-z8n) — `Shell` e
+    `TodoWrite` com o schema de verdade do Cursor, não uma aproximação."""
+    return _fixture()["tools"]
+
+
+_PROIBIDAS = ("tool_call", "Shell", "TodoWrite", "function call", "ferramenta")
+
 
 # --------------------------------------------------------------------------- helpers
 
@@ -189,6 +208,23 @@ def test_stream_chunks_texto_vazio_ainda_abre_e_fecha() -> None:
     frames = list(serve.stream_chunks("", cid="x", created=7))
     assert len(frames) == 3
     assert frames[-1] == b"data: [DONE]\n\n"
+
+
+def test_md_paragraphs_indentado_vira_item_de_lista() -> None:
+    texto = "doctor: 0 falha(s)\n  [harness] abc123  rodando     \"tarefa\"\nauto-aprovação: enabled=True"
+    out = serve.md_paragraphs(texto)
+    assert out == (
+        "doctor: 0 falha(s)"
+        "\n\n- [harness] abc123  rodando     \"tarefa\""
+        "\n\nauto-aprovação: enabled=True"
+    )
+
+
+def test_md_paragraphs_e_idempotente() -> None:
+    texto = serve.HELP  # já tem linhas indentadas de sobra (a lista de comandos)
+    uma_vez = serve.md_paragraphs(texto)
+    duas_vezes = serve.md_paragraphs(uma_vez)
+    assert duas_vezes == uma_vez
 
 
 # --------------------------------------------------------------------------- servidor vivo
@@ -457,9 +493,10 @@ def test_system_prompt_traz_bloco_untrusted_e_tamanho_limitado(
 
 
 def test_fonte_nao_tem_caminho_de_escrita_perigosa() -> None:
-    src = Path("harness/serve.py").read_text(encoding="utf-8")
-    for proibido in ("--yes", "market.approve", "approve_queued", "write_genome", "genome.write"):
-        assert proibido not in src
+    for arquivo in ("harness/serve.py", "harness/cursor_tools.py"):
+        src = Path(arquivo).read_text(encoding="utf-8")
+        for proibido in ("--yes", "market.approve", "approve_queued", "write_genome", "genome.write"):
+            assert proibido not in src, arquivo
 
     assert set(serve._COMMANDS) == {
         "help",
@@ -1674,3 +1711,421 @@ def test_e2e_acao_pelo_shape_do_cursor(tmp_path: Path, monkeypatch: pytest.Monke
     assert len(capturados) == 1
     assert task in capturados[0]
     assert "job " in content
+
+
+# --------------------------------------------------------------------------- protocolo nativo do Cursor (tool_calls, harness-core-z8n)
+
+
+def _shell_tool_call(command: str, call_id: str | None = "call_hx_test1") -> dict:
+    call: dict = {
+        "type": "function",
+        "function": {"name": serve.cursor_tools.SHELL_FN, "arguments": json.dumps({"command": command})},
+    }
+    if call_id is not None:
+        call["id"] = call_id
+    return {"role": "assistant", "content": None, "tool_calls": [call]}
+
+
+def _tool_result(text: str, call_id: str | None = "call_hx_test1") -> dict:
+    msg: dict = {"role": "tool", "content": text}
+    if call_id is not None:
+        msg["tool_call_id"] = call_id
+    return msg
+
+
+def test_acao_com_tools_responde_tool_calls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    ctx = _ctx(tmp_path)
+    chamado: list[object] = []
+    monkeypatch.setattr(serve, "_popen", lambda *a, **kw: chamado.append(1) or 1)
+
+    messages = [{"role": "user", "content": "conserta o bug do checkout"}]
+    body = {"model": "harness", "tools": _fixture_tools(), "messages": messages}
+    turn = serve.plan_turn(messages, body, ctx)
+
+    assert turn.kind == "ação→tool_calls"
+    assert len(turn.tool_calls) == 2
+    shell = next(c for c in turn.tool_calls if c["function"]["name"] == serve.cursor_tools.SHELL_FN)
+    args = json.loads(shell["function"]["arguments"])
+    assert args["working_directory"] == str(ctx.cwd)
+    assert chamado == []
+    jobs_dir = tmp_path / "data" / "serve" / "jobs"
+    assert not jobs_dir.exists() or not list(jobs_dir.glob("*.json"))
+
+    payload = serve.completion_payload(turn.text, cid="x", created=1, tool_calls=turn.tool_calls or None)
+    assert payload["choices"][0]["finish_reason"] == "tool_calls"
+
+
+def test_tool_result_vira_resumo_final(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    command = serve.cursor_tools.build_command("/usr/bin/python3", "/cfg", "/data", "conserta o bug", 5.0, [])
+    messages = [
+        {"role": "user", "content": "conserta o bug"},
+        _shell_tool_call(command),
+        _tool_result(
+            "Exit code: 0\n\nCommand output:\n\n```\nresultado  ACEITO em 42.3s · 3 arquivo(s) · "
+            "--no-apply: ficou em harness/do-abc123\n```"
+        ),
+    ]
+    body = {"model": "harness", "tools": _fixture_tools(), "messages": messages}
+    turn = serve.plan_turn(messages, body, ctx)
+
+    assert turn.kind == "desfecho"
+    assert turn.tool_calls == ()
+    payload = serve.completion_payload(turn.text, cid="x", created=1, tool_calls=turn.tool_calls or None)
+    assert payload["choices"][0]["finish_reason"] == "stop"
+    assert "`harness/do-abc123`" in turn.text
+    for proibida in _PROIBIDAS:
+        assert proibida not in turn.text
+
+
+def test_sem_tools_caminho_legado_identico(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    ctx = _ctx(tmp_path)
+    capturados: list[object] = []
+    # pid falso alto de propósito (mesma convenção de `test_do_ok_dispara_um_job`):
+    # pid 1 sob root faria `job_running` devolver True de verdade e o segundo
+    # dispatch cairia em "já tem um job rodando", quebrando a comparação.
+    monkeypatch.setattr(serve, "_popen", lambda *a, **kw: capturados.append(1) or 424242)
+    # jid fixo: a mesma task disparada duas vezes (uma via `plan_turn`, uma
+    # via `handle_message` direto) tem que render o MESMO texto — `started_at`
+    # não entra no texto (só no record em disco), só o `id` do job entra.
+    monkeypatch.setattr(serve.uuid, "uuid4", lambda: uuid.UUID(int=42))
+
+    messages = [{"role": "user", "content": "conserta o bug do checkout"}]
+    body = {"model": "harness", "messages": messages}  # sem "tools" — legado
+    turn = serve.plan_turn(messages, body, ctx)
+    assert turn.verbatim is True
+    assert len(capturados) == 1
+
+    esperado = serve.handle_message("conserta o bug do checkout", ctx)
+    assert len(capturados) == 2
+    assert turn.text == esperado
+
+
+def test_com_tools_status_ganha_quebra_dupla(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = _ctx(tmp_path)
+    monkeypatch.setattr(serve, "_bd", lambda *a, **kw: (0, "hc-1 tarefa"))
+    messages = [{"role": "user", "content": "/status"}]
+    body = {"model": "harness", "tools": _fixture_tools(), "messages": messages}
+    tools_ok = serve.cursor_tools.supports_tools(body)
+    turn = serve.plan_turn(messages, body, ctx)
+    text = turn.text if (turn.verbatim or not tools_ok) else serve.md_paragraphs(turn.text)
+
+    assert turn.tool_calls == ()
+    assert "\n\n" in text
+
+
+def test_pergunta_livre_com_tools_vai_pro_llm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = _ctx(tmp_path)
+    monkeypatch.setattr(serve, "_bd", lambda *a, **kw: (0, ""))
+    llm_body = json.dumps({"choices": [{"message": {"content": "resposta do modelo"}}]})
+    monkeypatch.setattr(serve, "_http_post", lambda url, payload, timeout_s: (200, llm_body))
+
+    messages = [{"role": "user", "content": "oi, como vai a fila?"}]
+    body = {"model": "harness", "tools": _fixture_tools(), "messages": messages}
+    turn = serve.plan_turn(messages, body, ctx)
+
+    assert turn.tool_calls == ()
+    assert turn.verbatim is True
+    assert turn.text == "resposta do modelo"
+    payload = serve.completion_payload(turn.text, cid="x", created=1, tool_calls=None)
+    assert payload["choices"][0]["finish_reason"] == "stop"
+
+
+def test_stream_tool_calls_grammar() -> None:
+    calls = (
+        serve.cursor_tools.tool_call(serve.cursor_tools.TODO_FN, {"todos": [], "merge": False}, 0),
+        serve.cursor_tools.tool_call(serve.cursor_tools.SHELL_FN, {"command": "echo oi"}, 1),
+    )
+    frames = list(serve.stream_chunks("Disparando o pedido", cid="x", created=7, tool_calls=calls))
+    assert frames[-1] == b"data: [DONE]\n\n"
+    parsed = [json.loads(f[len(b"data: ") : -2]) for f in frames[:-1]]
+    for p in parsed:
+        choice = p["choices"][0]
+        assert "index" in choice
+        assert "finish_reason" in choice
+
+    first = parsed[0]["choices"][0]
+    assert first["delta"] == {"role": "assistant", "content": ""}
+    assert first["finish_reason"] is None
+
+    tool_frames = [p["choices"][0] for p in parsed if "tool_calls" in p["choices"][0]["delta"]]
+    assert len(tool_frames) == 2
+    arguments_por_indice = {}
+    for i, choice in enumerate(tool_frames):
+        assert choice["finish_reason"] is None
+        tc = choice["delta"]["tool_calls"][0]
+        assert tc["index"] == i
+        arguments_por_indice[tc["index"]] = tc["function"]["arguments"]
+    assert json.loads(arguments_por_indice[0]) == {"todos": [], "merge": False}
+    assert json.loads(arguments_por_indice[1]) == {"command": "echo oi"}
+
+    final = parsed[-1]["choices"][0]
+    assert final["delta"] == {}
+    assert final["finish_reason"] == "tool_calls"
+
+
+def test_task_com_metacaracteres_fica_um_argumento_so(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    ctx = _ctx(tmp_path)
+    monkeypatch.setattr(serve, "_popen", lambda *a, **kw: 1)
+
+    task = "x'; rm -rf ~ #"
+    messages = [{"role": "user", "content": f"/do {task}"}]
+    body = {"model": "harness", "tools": _fixture_tools(), "messages": messages}
+    turn = serve.plan_turn(messages, body, ctx)
+
+    shell = next(c for c in turn.tool_calls if c["function"]["name"] == serve.cursor_tools.SHELL_FN)
+    cmd = json.loads(shell["function"]["arguments"])["command"]
+    tokens = shlex.split(cmd)
+
+    ex = serve.chat_executor(ctx)
+    esperado_cmd = serve.cursor_tools.build_command(
+        sys.executable,
+        str(serve.paths.config_dir().resolve()),
+        str(serve.store.data_dir().resolve()),
+        task,
+        serve.MAX_USD_CAP,
+        serve.executor_argv(ex),
+    )
+    esperado = shlex.split(esperado_cmd)
+    assert tokens == esperado
+    assert len(tokens) == len(esperado)
+
+
+def test_tools_sem_shell_cai_no_legado(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    ctx = _ctx(tmp_path)
+    monkeypatch.setattr(serve, "_popen", lambda *a, **kw: 1)
+
+    tools = [t for t in _fixture_tools() if t["function"]["name"] != serve.cursor_tools.SHELL_FN]
+    messages = [{"role": "user", "content": "/do conserta o bug"}]
+    body = {"model": "harness", "tools": tools, "messages": messages}
+    turn = serve.plan_turn(messages, body, ctx)
+
+    assert turn.tool_calls == ()
+    assert turn.verbatim is True
+
+
+def test_shell_com_required_desconhecido_cai_no_legado(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    ctx = _ctx(tmp_path)
+    monkeypatch.setattr(serve, "_popen", lambda *a, **kw: 1)
+
+    tools = []
+    for t in _fixture_tools():
+        if t["function"]["name"] == serve.cursor_tools.SHELL_FN:
+            schema = dict(t["function"]["parameters"])
+            schema["required"] = ["command", "surpresa_desconhecida"]
+            t = {"type": "function", "function": {"name": serve.cursor_tools.SHELL_FN, "parameters": schema}}
+        tools.append(t)
+    messages = [{"role": "user", "content": "/do conserta o bug"}]
+    body = {"model": "harness", "tools": tools, "messages": messages}
+    turn = serve.plan_turn(messages, body, ctx)
+
+    assert turn.tool_calls == ()
+    assert turn.verbatim is True
+
+
+def test_todowrite_schema_alien_emite_so_shell(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    ctx = _ctx(tmp_path)
+    monkeypatch.setattr(serve, "_popen", lambda *a, **kw: 1)
+
+    tools = []
+    for t in _fixture_tools():
+        if t["function"]["name"] == serve.cursor_tools.TODO_FN:
+            t = {
+                "type": "function",
+                "function": {
+                    "name": serve.cursor_tools.TODO_FN,
+                    "parameters": {"properties": {"todos": {"type": "string"}}},
+                },
+            }
+        tools.append(t)
+    messages = [{"role": "user", "content": "/do conserta o bug"}]
+    body = {"model": "harness", "tools": tools, "messages": messages}
+    turn = serve.plan_turn(messages, body, ctx)
+
+    assert len(turn.tool_calls) == 1
+    assert turn.tool_calls[0]["function"]["name"] == serve.cursor_tools.SHELL_FN
+
+
+def test_tool_result_incompleto_nao_mente(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    command = serve.cursor_tools.build_command("/usr/bin/python3", "/cfg", "/data", "faz algo", 5.0, [])
+    messages = [
+        {"role": "user", "content": "faz algo"},
+        _shell_tool_call(command),
+        _tool_result("Exit code: 0\n\nCommand output:\n\n```\nrodando ainda, sem linha de fechamento\n```"),
+    ]
+    body = {"model": "harness", "tools": _fixture_tools(), "messages": messages}
+    turn = serve.plan_turn(messages, body, ctx)
+
+    assert turn.kind == "desfecho"
+    assert "/status" not in turn.text
+    assert "segundo plano" in turn.text
+    assert "`harness report`" in turn.text
+
+
+def test_regenerate_nao_redispara(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = _ctx(tmp_path)
+    chamado: list[object] = []
+    monkeypatch.setattr(serve, "_popen", lambda *a, **kw: chamado.append(1) or 1)
+    command = serve.cursor_tools.build_command("/usr/bin/python3", "/cfg", "/data", "conserta o bug", 5.0, [])
+    tail = "<timestamp>x</timestamp>\n<user_query>\nconserta o bug\n</user_query>"
+    messages = [
+        {"role": "user", "content": "conserta o bug"},
+        _shell_tool_call(command),
+        _tool_result("Exit code: 0\n\nCommand output:\n\n```\nresultado  ACEITO em 1.0s · ficou em harness/do-x\n```"),
+        {"role": "user", "content": [{"type": "text", "text": tail}]},
+    ]
+    body = {"model": "harness", "tools": _fixture_tools(), "messages": messages}
+    turn = serve.plan_turn(messages, body, ctx)
+
+    assert turn.kind == "desfecho"
+    assert turn.tool_calls == ()
+    assert chamado == []
+
+
+def test_job_do_servidor_rodando_bloqueia_tool_calls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    ctx = _ctx(tmp_path)
+    monkeypatch.setattr(serve, "list_jobs", lambda: [{"id": "existing-job"}])
+    monkeypatch.setattr(serve, "job_running", lambda job: True)
+    chamado: list[object] = []
+    monkeypatch.setattr(serve, "_popen", lambda *a, **kw: chamado.append(1) or 1)
+
+    messages = [{"role": "user", "content": "/do conserta o bug"}]
+    body = {"model": "harness", "tools": _fixture_tools(), "messages": messages}
+    turn = serve.plan_turn(messages, body, ctx)
+
+    assert turn.tool_calls == ()
+    assert "já tem um job rodando" in turn.text
+    assert chamado == []
+
+
+def test_tool_result_content_string_e_parts(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    command = serve.cursor_tools.build_command("/usr/bin/python3", "/cfg", "/data", "faz algo", 5.0, [])
+    assistant = _shell_tool_call(command)
+    resultado_txt = "Exit code: 0\n\nCommand output:\n\n```\nresultado  ACEITO em 1.0s\n```"
+    variantes = (
+        {"role": "tool", "tool_call_id": "call_hx_test1", "content": resultado_txt},
+        {"role": "tool", "name": serve.cursor_tools.SHELL_FN, "tool_call_id": "call_hx_test1", "content": resultado_txt},
+        {
+            "role": "tool",
+            "tool_call_id": "call_hx_test1",
+            "content": [{"type": "text", "text": resultado_txt}],
+        },
+        {
+            "role": "tool",
+            "name": serve.cursor_tools.SHELL_FN,
+            "tool_call_id": "call_hx_test1",
+            "content": [{"type": "text", "text": resultado_txt}],
+        },
+    )
+    for tool_msg in variantes:
+        messages = [{"role": "user", "content": "faz algo"}, assistant, tool_msg]
+        body = {"model": "harness", "tools": _fixture_tools(), "messages": messages}
+        turn = serve.plan_turn(messages, body, ctx)
+        assert turn.kind == "desfecho"
+        assert "ACEITO" in turn.text
+
+
+def test_nonstream_tool_calls_shape() -> None:
+    call = serve.cursor_tools.tool_call(serve.cursor_tools.SHELL_FN, {"command": "echo oi"}, 0)
+
+    sem_preambulo = serve.completion_payload("", cid="x", created=1, tool_calls=(call,))
+    msg = sem_preambulo["choices"][0]["message"]
+    assert msg["content"] is None
+    assert msg["refusal"] is None
+    assert "index" not in msg["tool_calls"][0]
+    assert sem_preambulo["choices"][0]["finish_reason"] == "tool_calls"
+
+    com_preambulo = serve.completion_payload("Disparando...", cid="x", created=1, tool_calls=(call,))
+    msg2 = com_preambulo["choices"][0]["message"]
+    assert msg2["content"] == "Disparando..."
+    assert msg2["refusal"] is None
+
+
+def test_desfecho_com_shape_realista_da_fixture(tmp_path: Path) -> None:
+    """`summary_target`/`plan_turn` sobre o shape REAL de uma captura do
+    Cursor: `<user_info>` antes do assistant (não logo antes do tool result),
+    `role=tool` com `name`+`tool_call_id` (`_follow_up_example` da fixture,
+    verbatim) — não a lista mínima `[user, assistant, tool]` dos testes
+    diretos de `cursor_tools`."""
+    ctx = _ctx(tmp_path)
+    task = "melhore o template e faça backup"
+    command = serve.cursor_tools.build_command("/usr/bin/python3", "/cfg", "/data", task, 5.0, [])
+    user_info = (
+        "<user_info>\nWorkspace Path: /Users/exemplo/projects/projeto-exemplo\n"
+        "Is directory a git repo: Yes, at /Users/exemplo/projects/projeto-exemplo\n</user_info>"
+    )
+    tail = f"<timestamp>Thursday, Aug 6, 2026, 3:40 PM (UTC-3)</timestamp>\n<user_query>\n{task}\n</user_query>"
+    assistant = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_example123",
+                "type": "function",
+                "function": {"name": serve.cursor_tools.SHELL_FN, "arguments": json.dumps({"command": command})},
+            }
+        ],
+    }
+    messages = [
+        {"role": "system", "content": "system prompt do Cursor"},
+        {"role": "user", "content": user_info},
+        {"role": "user", "content": [{"type": "text", "text": tail}]},
+        assistant,
+        _fixture()["_follow_up_example"]["message"],
+    ]
+    body = {"model": "harness", "tools": _fixture_tools(), "messages": messages}
+    turn = serve.plan_turn(messages, body, ctx)
+
+    assert turn.kind == "desfecho"
+    assert turn.tool_calls == ()
+    assert "`harness/do-exemplo-abc123`" in turn.text
+    for proibida in _PROIBIDAS:
+        assert proibida not in turn.text
+
+
+def test_e2e_tools_dispara_tool_calls_pelo_handler(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Round-trip HTTP de verdade (não chamada direta de `plan_turn`) — cobre
+    a fiação real de `_do_POST_inner`: `tools_ok`, `turn.tool_calls or None`
+    (uma tupla vazia viraria o branch de tool_calls por engano — `or None` é
+    o que evita isso), `_stream`/`_json` recebendo `tool_calls`, e
+    `_log_state["rota"]` == `turn.kind` no `--verbose`."""
+    monkeypatch.setenv("HARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    ws = _git_repo(tmp_path, "cursor-tools-e2e")
+    chamado: list[object] = []
+    monkeypatch.setattr(serve, "_popen", lambda *a, **kw: chamado.append(1) or 1)
+    port, t = _serve(tmp_path, max_requests=1, workspace_roots=(ws.parent,), verbose=True)
+
+    body = _cursor_body(ws, "conserta o bug do checkout")
+    body["tools"] = _fixture_tools()
+    status, raw, _ = _post(port, body)
+    t.join(5)
+
+    assert status == 200
+    payload = json.loads(raw)
+    choice = payload["choices"][0]
+    assert choice["finish_reason"] == "tool_calls"
+    calls = choice["message"]["tool_calls"]
+    assert len(calls) == 2
+    preambulo = choice["message"]["content"]
+    assert isinstance(preambulo, str) and preambulo
+    for proibida in _PROIBIDAS:
+        assert proibida not in preambulo
+    assert chamado == []
+
+    err = capsys.readouterr().err
+    assert "rota=ação→tool_calls" in err
