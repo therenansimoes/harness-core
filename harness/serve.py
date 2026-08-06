@@ -14,6 +14,14 @@ mão aqui em vez de vir de um framework.
 Loopback por default (`127.0.0.1`): expor na rede é decisão explícita de
 quem sobe o processo, com aviso no stderr — não comportamento de fábrica.
 
+Autenticação segue o mesmo padrão de `harness/triggers/webhook.py`: com
+`api_key` configurada (via `--api-key` ou `HARNESS_SERVE_KEY`), toda request
+precisa do header `Authorization: Bearer <api_key>` (comparação em tempo
+constante) ou leva 401. Fora do loopback e sem key, o servidor SOBE
+recusando tudo com 403 em vez de subir aberto — mesma regra fail-closed do
+webhook, um endpoint de rede sem segredo não é "conveniente", é porta
+destrancada.
+
 A segurança do módulo é estrutural, não é uma checagem: `_COMMANDS` é um
 dict FECHADO de comandos de leitura e de baixo risco (status, ready, queue,
 history, market, new, close, do). Não existe caminho, daqui, para
@@ -25,6 +33,7 @@ chat não merge sozinha na branch default.
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import re
@@ -44,6 +53,10 @@ from harness.ledger import store
 
 DEFAULT_PORT = 8765
 DEFAULT_HOST = "127.0.0.1"
+API_KEY_ENV = "HARNESS_SERVE_KEY"
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+UNAUTHORIZED = 401
+FORBIDDEN = 403  # fail-closed: fora do loopback e sem key, mesmo 403 do webhook
 MODEL_ID = "harness"
 MAX_USD_CAP = 5.0
 MAX_RUNNING_JOBS = 1
@@ -594,6 +607,51 @@ def stream_chunks(text: str, *, cid: str, created: int) -> Iterator[bytes]:
     yield b"data: [DONE]\n\n"
 
 
+# --------------------------------------------------------------------------- auth
+
+NO_KEY_HELP = (
+    f"[serve] SEM API KEY fora do loopback: recusando tudo com {FORBIDDEN}. Para ligar, "
+    f"passe --api-key ou exporte {API_KEY_ENV}=<segredo>; o cliente manda o mesmo valor "
+    'no header Authorization: "Bearer <segredo>".'
+)
+
+
+def is_loopback(host: str) -> bool:
+    """127.0.0.1/localhost/::1 são a mesma máquina; qualquer outro host expõe na rede."""
+    return host in LOOPBACK_HOSTS
+
+
+def _bearer(raw: str | None) -> str | None:
+    """`Authorization: Bearer <token>` → token; formato torto vira None."""
+    if not raw or not raw.startswith("Bearer "):
+        return None
+    return raw[len("Bearer ") :]
+
+
+def key_ok(api_key: str | None, presented: str | None) -> bool:
+    """Comparação em tempo constante. Sem key configurada: sempre False —
+    quem chama decide se isso barra (fora do loopback) ou é irrelevante
+    (loopback sem key, comportamento de hoje)."""
+    if not api_key:
+        return False
+    return hmac.compare_digest(api_key.encode("utf-8"), (presented or "").encode("utf-8"))
+
+
+def auth_status(api_key: str | None, require_auth: bool, authorization_header: str | None) -> int | None:
+    """Porteiro puro, mesmo desenho de `webhook.screen_request`: `None` deixa
+    passar, senão devolve o status HTTP do refuso.
+
+    `require_auth` é True com key configurada OU host fora do loopback (a
+    regra fail-closed do webhook). Loopback sem key: `require_auth=False` e a
+    função sempre deixa passar — mantém o comportamento de hoje intacto.
+    """
+    if not require_auth:
+        return None
+    if not api_key:
+        return FORBIDDEN
+    return None if key_ok(api_key, _bearer(authorization_header)) else UNAUTHORIZED
+
+
 # --------------------------------------------------------------------------- handler + server
 
 
@@ -605,7 +663,30 @@ class _Handler(BaseHTTPRequestHandler):
     def ctx(self) -> ServeContext:
         return self.server.ctx  # type: ignore[attr-defined]
 
+    def _authorized(self) -> bool:
+        """Porta de entrada de toda rota — chamada antes de olhar o path ou
+        ler o corpo. `status is None` deixa passar; senão já escreve a
+        resposta (401 key errada/faltando, 403 fail-closed sem key fora do
+        loopback) e devolve False."""
+        status = auth_status(
+            self.server.api_key,  # type: ignore[attr-defined]
+            self.server.require_auth,  # type: ignore[attr-defined]
+            self.headers.get("Authorization"),
+        )
+        if status is None:
+            return True
+        # corpo (se houver) nunca é lido: quem não autenticou não dita o
+        # framing da próxima request na mesma conexão keep-alive.
+        self.close_connection = True
+        if status == UNAUTHORIZED:
+            self._json(UNAUTHORIZED, {"error": {"message": "invalid api key", "type": "invalid_request_error"}})
+        else:
+            self._error(status, f"sem api key configurada — host fora do loopback exige --api-key ou {API_KEY_ENV}")
+        return False
+
     def do_GET(self) -> None:
+        if not self._authorized():
+            return
         path = self.path.split("?", 1)[0].rstrip("/")
         if path in ("/v1/models", "/models"):
             self._json(200, models_payload())
@@ -616,6 +697,8 @@ class _Handler(BaseHTTPRequestHandler):
         self._error(404, f"rota desconhecida: {self.path}")
 
     def do_POST(self) -> None:
+        if not self._authorized():
+            return
         path = self.path.split("?", 1)[0].rstrip("/")
         if path not in ("/v1/chat/completions", "/chat/completions"):
             self._error(404, f"rota desconhecida: {self.path}")
@@ -676,9 +759,17 @@ def serve(
     cwd: Path | None = None,
     on_bind: Callable[[int], None] | None = None,
     max_requests: int | None = None,
+    api_key: str | None = None,
 ) -> None:
+    # Fail-closed do webhook: fora do loopback, key é obrigatória. Loopback
+    # sem key segue exatamente como hoje — sem auth nenhuma.
+    require_auth = bool(api_key) or not is_loopback(host)
+    if require_auth and not api_key:
+        print(NO_KEY_HELP, file=sys.stderr)
     server = ThreadingHTTPServer((host, port), _Handler)
     server.ctx = ServeContext(cwd=Path(cwd or Path.cwd()).resolve())  # type: ignore[attr-defined]
+    server.api_key = api_key  # type: ignore[attr-defined]
+    server.require_auth = require_auth  # type: ignore[attr-defined]
     try:
         if on_bind is not None:
             on_bind(server.server_address[1])

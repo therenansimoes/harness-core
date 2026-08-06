@@ -23,7 +23,7 @@ def _ctx(cwd: Path) -> serve.ServeContext:
     return serve.ServeContext(cwd=cwd)
 
 
-def _serve(cwd: Path, max_requests: int) -> tuple[int, threading.Thread]:
+def _serve(cwd: Path, max_requests: int, api_key: str | None = None) -> tuple[int, threading.Thread]:
     bound: list[int] = []
     ready = threading.Event()
 
@@ -33,7 +33,14 @@ def _serve(cwd: Path, max_requests: int) -> tuple[int, threading.Thread]:
 
     t = threading.Thread(
         target=serve.serve,
-        kwargs={"port": 0, "host": "127.0.0.1", "cwd": cwd, "on_bind": on_bind, "max_requests": max_requests},
+        kwargs={
+            "port": 0,
+            "host": "127.0.0.1",
+            "cwd": cwd,
+            "on_bind": on_bind,
+            "max_requests": max_requests,
+            "api_key": api_key,
+        },
         daemon=True,
     )
     t.start()
@@ -41,21 +48,21 @@ def _serve(cwd: Path, max_requests: int) -> tuple[int, threading.Thread]:
     return bound[0], t
 
 
-def _get(port: int, path: str) -> tuple[int, dict]:
-    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", method="GET")
+def _get(port: int, path: str, headers: dict[str, str] | None = None) -> tuple[int, dict]:
+    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", method="GET", headers=headers or {})
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
             return resp.status, json.loads(resp.read())
     except urllib.error.HTTPError as e:
-        return e.code, {}
+        return e.code, json.loads(e.read() or b"{}")
 
 
-def _post(port: int, body: dict) -> tuple[int, bytes, str]:
+def _post(port: int, body: dict, headers: dict[str, str] | None = None) -> tuple[int, bytes, str]:
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/v1/chat/completions",
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **(headers or {})},
         method="POST",
     )
     try:
@@ -141,6 +148,62 @@ def test_post_chat_completions_stream(tmp_path: Path) -> None:
     assert ctype == "text/event-stream"
     assert "chat.completion.chunk" in body
     assert body.rstrip().endswith("data: [DONE]")
+
+
+# --------------------------------------------------------------------------- api key
+
+
+def test_api_key_bearer_correto_200_em_todas_rotas(tmp_path: Path) -> None:
+    port, t = _serve(tmp_path, max_requests=2, api_key="segredo")
+    status_get, body_get = _get(port, "/v1/models", headers={"Authorization": "Bearer segredo"})
+    status_post, raw_post, _ = _post(
+        port,
+        {"model": "harness", "messages": [{"role": "user", "content": "/help"}]},
+        headers={"Authorization": "Bearer segredo"},
+    )
+    t.join(5)
+    assert status_get == 200
+    assert body_get["data"][0]["id"] == "harness"
+    assert status_post == 200
+    assert "/do" in json.loads(raw_post)["choices"][0]["message"]["content"]
+
+
+def test_api_key_faltando_ou_errada_401_em_todas_rotas(tmp_path: Path) -> None:
+    port, t = _serve(tmp_path, max_requests=4, api_key="segredo")
+    status_get_sem, body_get_sem = _get(port, "/v1/models")
+    status_get_errada, _ = _get(port, "/v1/models", headers={"Authorization": "Bearer errada"})
+    status_post_sem, raw_post_sem, _ = _post(port, {"messages": []})
+    status_post_errada, _, _ = _post(port, {"messages": []}, headers={"Authorization": "Bearer errada"})
+    t.join(5)
+    assert status_get_sem == 401
+    assert body_get_sem == {"error": {"message": "invalid api key", "type": "invalid_request_error"}}
+    assert status_get_errada == 401
+    assert status_post_sem == 401
+    assert json.loads(raw_post_sem) == {"error": {"message": "invalid api key", "type": "invalid_request_error"}}
+    assert status_post_errada == 401
+
+
+def test_sem_key_loopback_continua_sem_auth(tmp_path: Path) -> None:
+    # Mesmo caminho de `_serve` sem `api_key`: comportamento de hoje intacto.
+    port, t = _serve(tmp_path, max_requests=1)
+    status, body = _get(port, "/v1/models")
+    t.join(5)
+    assert status == 200
+    assert body["data"][0]["id"] == "harness"
+
+
+def test_auth_status_fail_closed_sem_key_fora_do_loopback() -> None:
+    # Porteiro puro (sem socket): mesmo desenho de `webhook.screen_request`.
+    assert serve.is_loopback("127.0.0.1")
+    assert serve.is_loopback("localhost")
+    assert serve.is_loopback("::1")
+    assert not serve.is_loopback("0.0.0.0")
+
+    assert serve.auth_status(None, True, "Bearer qualquer") == serve.FORBIDDEN
+    assert serve.auth_status(None, False, None) is None  # loopback sem key: passa
+    # sem "Bearer ": `_bearer` devolve None, key correta não bate contra None
+    assert serve.auth_status("segredo", True, "segredo") == serve.UNAUTHORIZED
+    assert serve.auth_status("segredo", True, "Bearer segredo") is None
 
 
 # --------------------------------------------------------------------------- router puro
@@ -311,6 +374,10 @@ def test_parser_wiring() -> None:
     ns = p.parse_args(["serve"])
     assert ns.port == 8765
     assert ns.host == "127.0.0.1"
+    assert ns.api_key is None
 
     ns0 = p.parse_args(["serve", "--port", "0"])
     assert ns0.port == 0
+
+    nsk = p.parse_args(["serve", "--api-key", "segredo"])
+    assert nsk.api_key == "segredo"

@@ -2144,22 +2144,28 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
     Loopback por default; outro `--host` expõe na rede e sai avisando no
     stderr, porque isso é decisão de quem sobe o processo, não default.
+    `--api-key` (ou `HARNESS_SERVE_KEY`, flag ganha) liga a exigência do
+    header `Authorization: Bearer <key>`; fora do loopback sem key o
+    `serve_openai` SOBE recusando tudo com 403 — mesmo padrão fail-closed
+    do `webhook`/`NO_TOKEN_HELP`.
     """
-    from harness.serve import DEFAULT_HOST
+    from harness.serve import API_KEY_ENV, is_loopback
     from harness.serve import serve as serve_openai
 
-    if args.host != DEFAULT_HOST and args.host != "localhost":
+    if not is_loopback(args.host):
         print(
             f"AVISO: --host {args.host} expõe o harness fora do loopback — qualquer um na "
             "rede vira dono da fila e do /do. Use proxy reverso com auth se for isso mesmo.",
             file=sys.stderr,
         )
+    api_key = args.api_key or (os.environ.get(API_KEY_ENV) or "").strip() or None
     cwd = Path.cwd()
     try:
         serve_openai(
             args.port,
             args.host,
             cwd=cwd,
+            api_key=api_key,
             on_bind=lambda p: print(f"[serve] http://{args.host}:{p}/v1 · modelo 'harness' · repo {cwd}"),
         )
     except KeyboardInterrupt:
@@ -3051,6 +3057,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--host",
         default="127.0.0.1",
         help="loopback por default; outro valor expõe na rede e sai com aviso no stderr",
+    )
+    srv.add_argument(
+        "--api-key",
+        default=None,
+        dest="api_key",
+        help="exige Authorization: Bearer <key> em toda request (fallback: env HARNESS_SERVE_KEY; "
+        "obrigatória fora do loopback — sem key aí o servidor sobe recusando tudo com 403)",
     )
     srv.set_defaults(func=cmd_serve)
 

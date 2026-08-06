@@ -18,14 +18,19 @@ Binds `127.0.0.1:8765` by default. The repo it acts on is the current
 working directory at startup, pinned once — a later request never changes
 which repo `/do` runs in, even if the client sends a different one.
 
-`--port N` and `--host H` are available; a `--host` other than the loopback
-address prints a warning to stderr (see "Safety scope").
+`--port N`, `--host H` and `--api-key K` are available (key also via
+`HARNESS_SERVE_KEY`, flag wins); a `--host` other than the loopback address
+prints a warning to stderr (see "Safety scope").
 
 ## Point Cursor at it
 
 Settings → Models → Add custom OpenAI-compatible provider:
 
-- **API key**: any non-empty string (ignored by the server).
+- **API key**: whatever you pass to `harness serve --api-key <key>` (or
+  export `HARNESS_SERVE_KEY=<key>`, flag wins). On loopback with no key
+  configured the server accepts requests without one, same as before — the
+  field just needs *some* value because most clients require non-empty. Off
+  loopback a key is mandatory (see "Safety scope" below).
 - **Base URL**: `http://127.0.0.1:8765/v1`
 - **Model**: `harness`
 
@@ -74,9 +79,37 @@ permission than a read.
   to the one the user asked for. If the governor's cap is `0` (unset), the
   reply says so explicitly instead of pretending `--max-usd` was honored.
 - Binds `127.0.0.1` by default. A non-loopback `--host` is accepted but
-  prints a warning to stderr — this server has no auth of its own, so
-  exposing it to a network hands out `/do` and the task queue to anyone who
-  can reach the port.
+  prints a warning to stderr.
+- With `--api-key`/`HARNESS_SERVE_KEY` set, every request needs
+  `Authorization: Bearer <key>` (constant-time compare) or gets a 401 —
+  applies to every route, streaming included. On loopback with no key
+  configured, the server still accepts requests without one (unchanged
+  default). Off loopback with no key, the server comes up refusing
+  everything with a 403 and prints a help line to stderr instead of serving
+  `/do` and the task queue to whoever can reach the port — same fail-closed
+  rule `harness webhook` uses for a missing token.
+
+## Tailscale
+
+Cursor does not call your machine directly: its chat client's requests
+originate from Cursor's own backend, so a tailnet-only route
+(`http://<node>.<tailnet>.ts.net:8765`) is unreachable from there — Cursor
+has no route into your tailnet. To point Cursor at `harness serve` running
+on a box you're not sitting at, use `tailscale funnel` to publish it over
+public HTTPS instead:
+
+```sh
+tailscale funnel 8765
+```
+
+That makes the port reachable from the open internet, so `--api-key` (or
+`HARNESS_SERVE_KEY`) is mandatory here — **pass it yourself**. Funnel
+forwards to your local port over loopback, so `harness serve`'s own
+fail-closed check (which looks at the `--host` you bound to, not at who is
+allowed to reach it) still sees `127.0.0.1` and won't turn auth on by
+itself. Skipping `--api-key` with funnel running means the default
+"loopback, no auth" behavior is silently serving `/do` and the task queue to
+the open internet.
 
 ## Where it writes
 
