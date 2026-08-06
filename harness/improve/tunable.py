@@ -45,6 +45,12 @@ class Tunable(Protocol):
 
     def produce(self, case: EvalCase, text: str) -> str: ...
 
+    def render(self, text: str, version: int) -> str:
+        """Os BYTES exatos que `write` vai gravar. Existe separado porque o que é
+        escaneado tem que ser o que é escrito: `SkillTunable.write` re-renderiza
+        (frontmatter reconstruído), e escanear o candidato mediria outro arquivo."""
+        ...
+
     def write(self, text: str, version: int) -> Path: ...
 
     def rewrite_prompt(
@@ -108,10 +114,8 @@ class SkillTunable:
         run = tune._run_case_real if self.runner == tune.RUNNER_REAL else tune._run_case
         return run(text, case, model=self.model, max_usd=self.max_usd)
 
-    def write(self, text: str, version: int) -> Path:
-        """Grava a skill no formato canônico. `version` fica na cadeia, não no
-        arquivo: o artefato é o vencedor, e carimbar a versão dentro dele mudaria
-        o `artifact_sha256` por um motivo que não é conteúdo."""
+    def render(self, text: str, version: int) -> str:
+        """Os bytes exatos que `write` vai gravar — mesmo cálculo, sem tocar disco."""
         meta = research._parse_skill(text)
         slug = str(meta.get("name") or PurePosixPath(self.artifact).stem)
         kinds = meta.get("kinds") or ["code"]
@@ -122,8 +126,14 @@ class SkillTunable:
             slug=slug,
             target_file=self.artifact,
         )
+        return research.render_skill(proposal, _skill_body(text))
+
+    def write(self, text: str, version: int) -> Path:
+        """Grava a skill no formato canônico. `version` fica na cadeia, não no
+        arquivo: o artefato é o vencedor, e carimbar a versão dentro dele mudaria
+        o `artifact_sha256` por um motivo que não é conteúdo."""
         path = root_dir(self.root) / self.artifact
-        research._write_new(path, research.render_skill(proposal, _skill_body(text)))
+        research._write_new(path, self.render(text, version))
         return path
 
     def rewrite_prompt(
@@ -180,6 +190,11 @@ class WorkflowTunable:
         nodes = spec_nodes(text)
         head = f"# caso: {case.prompt}"
         return "\n".join([head, *(f"# {n.id}: {n.impl}" for n in nodes)]) + "\n"
+
+    def render(self, text: str, version: int) -> str:
+        """Workflow é gravado como veio — não há re-render, então os bytes
+        escaneados já são os bytes que `write` grava."""
+        return text
 
     def write(self, text: str, version: int) -> Path:
         path = root_dir(self.root) / self.artifact

@@ -1,0 +1,42 @@
+# selfapprove.toml — quando o loop liga a própria proposta sem humano.
+#
+# Imutável no genoma pelo motivo do skills_market.toml: quem define o próprio
+# limiar de aprovação se aprova sozinho. Humano edita aqui; o loop não. E a
+# leitura só ACEITA este arquivo vindo da árvore protegida ($HARNESS_ROOT com o
+# genoma listando-o) — cópia em ~/.harness ou num config/ de cwd qualquer não
+# concede permissão nenhuma. Torto, ausente ou de fora => tudo vai para a fila.
+
+[selfapprove]
+enabled = true
+
+# Só ativa sozinho o que foi medido em COMPORTAMENTO. Não basta o carimbo
+# `runner=real`: `_run_case_real` cai no extrativo em silêncio quando o LM
+# Studio some, e o carimbo do run não muda. Por isso a fração de casos que
+# REALMENTE rodaram no modelo precisa ser 1.0.
+require_measured_behavior = true
+min_real_trial_frac = 1.0
+
+min_delta = 0.05
+min_delta_vs_none = 0.0
+# Casos DISTINTOS, não trials: trial repetido em runner determinístico é a mesma
+# medição N vezes. 4/1 é o maior bundle que existe hoje
+# (evals/skills/python-fixes: 4 casos, split 3 treino / 1 holdout).
+min_cases = 4
+min_holdout_cases = 1
+min_trials = 8
+min_holdout_trials = 2
+holdout_tolerance = 0.0
+
+[selfapprove.external]
+# Skill de registry de terceiro. Default OFF: o gate humano de
+# `harness market approve` continua sendo o caminho dela.
+enabled = false
+
+[selfapprove.pinned]
+# O exame que a auto-aprovação aceita, artefato -> "v{versão}:{bundle_sha256}".
+# `harness eval freeze` regenera o manifest a partir do que estiver no disco, e
+# `verify_frozen` só prova que bundle e manifest combinam entre si — então
+# reescrever cases.jsonl e recongelar passa limpo. O pin é a única coisa que o
+# loop não consegue mexer. VAZIO de propósito: sem pin nada auto-ativa, e é o
+# humano que olha o bundle uma vez e cola o par aqui
+# (`harness selfapprove status` imprime o valor corrente de cada artefato).

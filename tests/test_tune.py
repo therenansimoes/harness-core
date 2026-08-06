@@ -525,6 +525,105 @@ def test_probe_roda_uma_vez_no_primeiro_caso_de_treino(env, monkeypatch):
     assert vistos[0][1] == V1
 
 
+# --------------------------------------------------------------------------- proveniência real + teto de run
+
+
+def test_run_case_real_fallback_incrementa_contador(monkeypatch):
+    """`_run_case_real` que cai no extrativo por exceção marca `fallback`, nunca `ok`."""
+    tune.reset_real_counters()
+
+    def boom(text, case, *, model, max_usd, backend):
+        raise RuntimeError("modelo caiu no meio do caso")
+
+    monkeypatch.setattr(tune, "_rewrite_target", lambda model: (tune.REWRITE_BACKEND, "openai:m"))
+    monkeypatch.setattr(tune, "_call_case", boom)
+    case = EvalCase(id="s-1", kind="code_fix", prompt="p")
+
+    out = tune._run_case_real(V1, case, model=None, max_usd=1.0)
+
+    assert out == V1  # caiu no extrativo
+    assert tune.real_counters() == {"ok": 0, "fallback": 1}
+
+
+def test_measured_propaga_real_fallback_para_a_versao(env, monkeypatch):
+    """A cadeia carrega o carimbo `real_fallback` mesmo quando o carimbo geral
+    continua `runner=real` — é a fração PARCIAL que o self-approve precisa ver."""
+    _skill_tree(env)
+    tune.reset_real_counters()
+    chamadas: list[str] = []
+
+    def run_case_real_com_contador(text, case, *, model, max_usd):
+        # Metade dos trials cai no extrativo (fallback), metade vira "ok" — o
+        # mesmo par de ramos que o `_run_case_real` de produção incrementa.
+        if len(chamadas) % 2 == 0:
+            chamadas.append("ok")
+            tune._REAL["ok"] += 1
+            return "resposta com alfa e beta"
+        chamadas.append("fallback")
+        tune._REAL["fallback"] += 1
+        return tune._run_case(text, case, model=model, max_usd=max_usd)
+
+    monkeypatch.setattr(tune, "_run_case_real", run_case_real_com_contador)
+    monkeypatch.setattr(tune, "_probe_real", lambda *a, **k: "")
+
+    out = tune.run_tune(SKILL, rounds=0, trials=2, runner=tune.RUNNER_REAL)
+
+    v1 = out.chain[0]
+    assert v1.real_ok == 1
+    assert v1.real_fallback == 1
+
+
+def test_call_estoura_teto_de_chamadas(monkeypatch):
+    tune.reset_spend()
+    tune.RUN_MAX_CALLS = 0
+    try:
+        with pytest.raises(tune.TuneError, match="teto de chamadas"):
+            tune._call("x", model=None, max_usd=1.0, purpose="run")
+    finally:
+        tune.RUN_MAX_CALLS = None
+
+
+def test_call_estoura_teto_de_custo(monkeypatch):
+    tune.reset_spend()
+    tune._SPEND["usd"] = 1.0
+    tune.RUN_BUDGET_USD = 1.0
+    try:
+        with pytest.raises(tune.TuneError, match="teto de custo"):
+            tune._call("x", model=None, max_usd=1.0, purpose="run")
+    finally:
+        tune.RUN_BUDGET_USD = None
+        tune.reset_spend()
+
+
+def test_spend_conta_custo_desconhecido(monkeypatch):
+    """`cost_usd=None` (o caso local comum) some do `usd` e vira `unknown`."""
+    tune.reset_spend()
+
+    class _Backend:
+        def preflight(self):
+            return SimpleNamespace(ok=True, reason="fake")
+
+        def execute(self, req):
+            (req.workspace / "out.txt").write_text("ok", encoding="utf-8")
+            return ExecResult(
+                ok=True,
+                exit_reason="done",
+                turns=1,
+                cost_usd=None,
+                tokens_in=0,
+                tokens_out=0,
+                files_changed=("out.txt",),
+                session_id=None,
+                trace_path=req.trace_path,
+            )
+
+    monkeypatch.setattr(tune, "get_backend", lambda name: _Backend())
+
+    tune._call("x", model=None, max_usd=1.0, purpose="run", backend="mock")
+
+    assert tune.spend() == {"usd": 0.0, "calls": 1, "unknown": 1}
+
+
 def test_probe_nao_roda_no_runner_extrativo(env, monkeypatch):
     """Extrativo não depende de servidor: sondar seria gastar rede à toa."""
     _skill_tree(env)

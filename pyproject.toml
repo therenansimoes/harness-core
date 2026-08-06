@@ -71,6 +71,7 @@ packages = ["harness"]
 "config/mcp.toml" = "harness/_defaults/config/mcp.toml"
 "config/models.toml" = "harness/_defaults/config/models.toml"
 "config/ruler.toml" = "harness/_defaults/config/ruler.toml"
+"config/selfapprove.toml" = "harness/_defaults/config/selfapprove.toml"
 "config/skills_market.toml" = "harness/_defaults/config/skills_market.toml"
 "config/tools.toml" = "harness/_defaults/config/tools.toml"
 "config/topology.toml" = "harness/_defaults/config/topology.toml"

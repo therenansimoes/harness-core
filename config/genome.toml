@@ -28,6 +28,9 @@ immutable = [
     # pelo loop é canal de contrabando de instrução; aprovar skill já é humano,
     # a lista de fontes também é.
     "config/skills_market.toml",
+    # quem define o LIMIAR da própria auto-aprovação, e QUAL exame ela aceita,
+    # não se muda: gate que calibra o próprio corte se aprova sozinho.
+    "config/selfapprove.toml",
 ]
 
 mutable = [

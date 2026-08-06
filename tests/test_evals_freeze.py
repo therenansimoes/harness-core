@@ -189,7 +189,7 @@ def test_cli_eval_verify_exits_nonzero_on_tamper(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv(paths.EVALS_DIR_ENV, str(tmp_path / "evals"))
     monkeypatch.chdir(tmp_path)
 
-    assert cli.main(["eval", "freeze", ARTIFACT, "--note", "cli"]) == 0
+    assert cli.main(["eval", "freeze", ARTIFACT, "--note", "cli", "--yes"]) == 0
     assert cli.main(["eval", "verify", ARTIFACT]) == 0
 
     (d / "cases.jsonl").write_text('{"id":"a-1","kind":"k","prompt":"trivial"}\n', encoding="utf-8")

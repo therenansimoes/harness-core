@@ -155,6 +155,37 @@ HELD = "held"
 
 _EMPTY = Aggregate(per_axis={}, lower={}, overall=0.0, n=0)
 
+# Contador de proveniência do runner real. Existe porque `_run_case_real` cai no
+# extrativo em SILÊNCIO (LM Studio fora do ar, timeout, teto de custo) e o
+# `TuneOutcome` saía carimbado `runner=real probe=ok` com metade dos casos
+# medidos por substring. Quem auto-aprova precisa saber a diferença.
+# Single-thread por construção: a cadeia é sequencial.
+_REAL = {"ok": 0, "fallback": 0}
+
+
+def real_counters() -> dict[str, int]:
+    return dict(_REAL)
+
+
+def reset_real_counters() -> None:
+    _REAL.update(ok=0, fallback=0)
+
+
+# Teto de RUN, não de chamada. O `max_usd` do `_call` confere DEPOIS da chamada
+# (o dinheiro já saiu) e vale por chamada; backend local devolve cost_usd=None e
+# então não havia teto nenhum. O teto de CHAMADAS é o que segura o caso None.
+RUN_BUDGET_USD: float | None = None
+RUN_MAX_CALLS: int | None = None
+_SPEND = {"usd": 0.0, "calls": 0, "unknown": 0}
+
+
+def spend() -> dict[str, float]:
+    return dict(_SPEND)
+
+
+def reset_spend() -> None:
+    _SPEND.update(usd=0.0, calls=0, unknown=0)
+
 
 class TuneAborted(Exception):
     """Exame adulterado: nada foi medido e nada será gravado."""
@@ -188,6 +219,11 @@ class TuneVersion:
     retained: bool = True
     holdout: Aggregate = _EMPTY
     train: Aggregate = _EMPTY
+    # Deltas de `_REAL` durante a medição desta versão — quantos casos saíram
+    # do modelo de verdade e quantos caíram no extrativo em silêncio. Zero nos
+    # dois pelo default do runner extrativo (nunca toca `_REAL`).
+    real_ok: int = 0
+    real_fallback: int = 0
     trials: tuple[TrialResult, ...] = field(default=(), repr=False)
     outputs: tuple[str, ...] = field(default=(), repr=False)
 
@@ -497,11 +533,15 @@ def _run_case_real(text: str, case: EvalCase, *, model: str | None, max_usd: flo
     """
     backend, m = _rewrite_target(model)
     if backend == TUNE_BACKEND:
+        _REAL["fallback"] += 1
         return _run_case(text, case, model=model, max_usd=max_usd)
     try:
-        return _call_case(text, case, model=m, max_usd=max_usd, backend=backend)
+        out = _call_case(text, case, model=m, max_usd=max_usd, backend=backend)
     except Exception:
+        _REAL["fallback"] += 1
         return _run_case(text, case, model=model, max_usd=max_usd)
+    _REAL["ok"] += 1
+    return out
 
 
 def _call_case(
@@ -672,6 +712,11 @@ def _call(
     # arquivo num diretório inexistente falha na primeira tool call.
     (ws / "out").mkdir(parents=True, exist_ok=True)
     try:
+        if RUN_MAX_CALLS is not None and _SPEND["calls"] >= RUN_MAX_CALLS:
+            raise TuneError(f"teto de chamadas do run atingido ({RUN_MAX_CALLS}) — cadeia parada")
+        if RUN_BUDGET_USD is not None and _SPEND["usd"] >= RUN_BUDGET_USD:
+            raise TuneError(f"teto de custo do run atingido (${RUN_BUDGET_USD:.2f}) — cadeia parada")
+        _SPEND["calls"] += 1
         result = b.execute(
             ExecRequest(
                 prompt=prompt,
@@ -683,6 +728,10 @@ def _call(
                 trace_path=trace,
             )
         )
+        if result.cost_usd is not None:
+            _SPEND["usd"] += result.cost_usd
+        else:
+            _SPEND["unknown"] += 1
         if not result.ok:
             raise TuneError(f"chamada de {purpose} falhou: exit_reason={result.exit_reason}")
         if result.cost_usd is not None and result.cost_usd > max_usd:
@@ -814,7 +863,9 @@ def _measured(
     Três agregados sobre a MESMA medição: ninguém roda o exame duas vezes para
     ter as duas visões — elas são recortes da mesma lista de trials.
     """
+    before = real_counters()
     agg, results, outputs = _score(adapter, cases, text, trials, weights)
+    after = real_counters()
     hold_agg = (
         aggregate([r for r in results if r.case_id in hold_ids], weights) if hold_ids else _EMPTY
     )
@@ -828,6 +879,8 @@ def _measured(
         retained=False,
         holdout=hold_agg,
         train=train_agg,
+        real_ok=after["ok"] - before["ok"],
+        real_fallback=after["fallback"] - before["fallback"],
         trials=tuple(results),
         outputs=tuple(outputs),
     )

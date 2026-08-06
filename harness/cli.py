@@ -1691,9 +1691,10 @@ def cmd_eval(args: argparse.Namespace) -> int:
     """Exame congelado de um artefato: congela, confere, relata, minera e sela.
 
     `verify` é o gate — violação imprime cada linha e sai != 0, porque medir
-    contra um exame adulterado é pior que não medir. `seal-case` é o oposto do
-    resto: o único subcomando que ESCREVE no bundle, e por isso o único que
-    exige `--yes` (mesmo guard do `harness seal`).
+    contra um exame adulterado é pior que não medir. `seal-case` e `freeze` são
+    os que ESCREVEM no bundle, e por isso os que exigem `--yes` (mesmo guard do
+    `harness seal`): recongelar sem revisar invalida a comparação com toda
+    nota anterior, e ninguém deveria fazer isso sem querer.
     """
     from harness.evals import bundle_dir, freeze, verify_frozen
     from harness.evals.mining import mine, seal_case, write_pending
@@ -1721,6 +1722,13 @@ def cmd_eval(args: argparse.Namespace) -> int:
             print(f"sealed {args.extra} -> manifest v{m.version}")
             return 0
         if args.action == "freeze":
+            if not args.yes:
+                print(
+                    "eval freeze: recusado — recongelar o exame invalida a comparação com "
+                    "toda nota anterior e exige --yes.",
+                    file=sys.stderr,
+                )
+                return 2
             m = freeze(args.artifact, note=args.note)
             print(f"congelado: {bundle_dir(args.artifact)} v{m.version} {m.bundle_sha256[:12]}")
             return 0
@@ -1768,6 +1776,138 @@ def cmd_tune(args: argparse.Namespace) -> int:
     # `outcome.runner` e não `args.runner`: quem carimbou a cadeia foi o run.
     print(f"vencedor: v{outcome.winner} (runner={outcome.runner})")
     return 0
+
+
+def cmd_selfapprove(args: argparse.Namespace) -> int:
+    """Gate de auto-aprovação: liga a proposta do tune sozinho quando o bundle
+    está pinado e o comportamento foi medido de verdade; senão, fila humana.
+
+    `run` sempre sai 0 quando algo foi decidido (ativar, enfileirar, bloquear
+    ou não mudar nada) — uma proposta na fila é sucesso, não falha; só erro de
+    máquina (id duplicado, I/O) sai != 0. `approve`/`undo` exigem `--yes` (rc 2
+    sem ele) e recusam com rc 1 quando a proposta não bate mais com o disco.
+    """
+    from harness.evals.freeze import load_manifest
+    from harness.improve import selfapprove as sa
+    from harness.ruler import selfapprove as ruler_sa
+
+    if args.sa_cmd == "status":
+        th = ruler_sa.load_thresholds()
+        if args.artifact:
+            m = load_manifest(args.artifact, args.root)
+            if m is None:
+                print(f"{args.artifact}: sem exame congelado (harness eval freeze)")
+                return 0
+            pin = th.pin_for(args.artifact)
+            atual = f"v{m.version}:{m.bundle_sha256}"
+            print(f"{args.artifact}: exame atual {atual}  pin: {pin or '(nenhum — nada auto-ativa)'}")
+            return 0
+        if th.enabled:
+            print("auto-aprovação interna: LIGADA")
+        else:
+            print(
+                "auto-aprovação interna: DESLIGADA (config ausente, inválida ou fora da "
+                "árvore protegida — tudo vai para a fila humana)"
+            )
+        print(f"auto-aprovação externa (market): {'LIGADA' if th.external_enabled else 'DESLIGADA'}")
+        print(
+            "exige comportamento medido (runner=real, 100% dos casos): "
+            f"{'sim' if th.require_measured_behavior else 'não'}"
+        )
+        print(
+            f"limiares: delta>={th.min_delta:.3f}  vs-none>{th.min_delta_vs_none:.3f}  "
+            f"casos>={th.min_cases}/{th.min_holdout_cases}  "
+            f"trials>={th.min_trials}/{th.min_holdout_trials}  tol={th.holdout_tolerance:.3f}"
+        )
+        print(f"bundles pinados: {len(th.pinned)}")
+        print(f"kill switch: {ruler_sa.ENV_FLAG}=0")
+        print(f"config: {paths.config_file(ruler_sa.CONFIG_NAME)}")
+        return 0
+
+    try:
+        if args.sa_cmd == "run":
+            out = sa.run_and_judge(
+                args.artifact,
+                rounds=args.rounds,
+                model=args.model,
+                max_usd=args.max_usd,
+                runner=args.runner,
+                root=args.root,
+            )
+            if out.verdict == sa.AUTO_PROMOTED:
+                print(f"auto-aprovada: {out.artifact} v{out.version} — {out.reason}")
+                print(f"evidência: {out.stamp}")
+                print(f"gravado: {out.written_path}")
+                print(f"desfazer: harness rollback {out.rollback_id}")
+            elif out.verdict == sa.BLOCKED:
+                print(f"bloqueado: {out.artifact} — {out.reason}")
+                print(f"evidência: {out.stamp}")
+                print("nada foi medido e nada foi gravado; não há proposta para aprovar.")
+            elif out.verdict == sa.QUEUED:
+                print(f"fila humana: {out.artifact} v{out.version} — {out.reason}")
+                print(f"evidência: {out.stamp}")
+                print(f"nada foi gravado no artefato. proposta em {out.queue_dir}")
+                print(f"aprove com: harness selfapprove approve {out.mutation_id} --yes")
+            else:
+                print(f"sem candidata: o que está no disco continua sendo o melhor ({out.artifact} v1)")
+            return 0
+
+        if args.sa_cmd == "queue":
+            entries = sa.queue_entries(limit=args.limit)
+            for e in entries:
+                print(
+                    f"{e.get('id')}  {e.get('artifact')}  v{e.get('version')}  "
+                    f"delta={float(e.get('delta') or 0.0):+.3f}  {e.get('reason')}  {e.get('created_at')}"
+                )
+            print(f"fila: {len(entries)} proposta(s) aguardando humano" if entries else "fila: vazia")
+            return 0
+
+        if args.sa_cmd == "approve":
+            if not args.yes:
+                print(
+                    "selfapprove approve: recusado — aplicar proposta enfileirada é ato humano "
+                    "e exige --yes. Leia a proposta (o caminho sai em `harness selfapprove "
+                    "queue`) antes; nada foi gravado.",
+                    file=sys.stderr,
+                )
+                return 2
+            r = sa.approve_queued(args.entry_id, root=args.root)
+            if r["status"] != "ok":
+                print(f"selfapprove approve: '{args.entry_id}' recusada — {r['reason']}", file=sys.stderr)
+                return 1
+            print(f"aplicada por humano: {r['artifact']} v{r['version']} -> {r['path']}")
+            print(f"evento: {r['mutation_id']}")
+            return 0
+
+        if args.sa_cmd == "undo":
+            if not args.yes:
+                print(
+                    "selfapprove undo: recusado — reverter é ato humano e exige --yes; "
+                    "nada foi gravado.",
+                    file=sys.stderr,
+                )
+                return 2
+            r = sa.undo_queued(args.entry_id, root=args.root)
+            if r["status"] != "ok":
+                print(f"selfapprove undo: '{args.entry_id}' recusada — {r['reason']}", file=sys.stderr)
+                return 1
+            print(
+                f"revertida: {r['artifact']} -> {r['path']} "
+                "(incumbente restaurado da própria entrada da fila)"
+            )
+            print(f"evento: {r['mutation_id']}")
+            return 0
+
+        # history
+        rows = sa.history(limit=args.limit)
+        for m in rows:
+            artifact = m.rule_id.removeprefix(f"{sa.ACTION}:")
+            print(f"{m.applied_at}  {m.verdict:<14} {artifact}  {m.arm_a}->{m.arm_b}  {m.note or ''}")
+        print(f"histórico: {len(rows)} decisão(ões)" if rows else "histórico: vazio")
+        return 0
+    except (sa.SelfApproveError, OSError) as exc:
+        print(f"selfapprove {args.sa_cmd} falhou: {exc}", file=sys.stderr)
+        return 1
 
 
 def cmd_rollback(args: argparse.Namespace) -> int:
@@ -2697,7 +2837,9 @@ def build_parser() -> argparse.ArgumentParser:
     ev.add_argument("--limit", type=int, default=20, help="teto de propostas do mine")
     ev.add_argument("--kind", default="", help="filtra a mineração por kind")
     ev.add_argument(
-        "--yes", action="store_true", help="confirmação humana do seal-case; sem isto ele recusa"
+        "--yes",
+        action="store_true",
+        help="confirmação humana de seal-case/freeze; sem isto os dois recusam",
     )
     ev.set_defaults(func=cmd_eval)
 
@@ -2712,6 +2854,65 @@ def build_parser() -> argparse.ArgumentParser:
         help="quem produz a saída julgada: extractive (o artefato, default) ou real (o modelo)",
     )
     tune.set_defaults(func=cmd_tune)
+
+    sa = sub.add_parser(
+        "selfapprove",
+        help="gate de auto-aprovação: liga a proposta do tune sozinho, ou enfileira para humano",
+    )
+    sub_selfapprove = sa.add_subparsers(dest="sa_cmd", required=True)
+
+    sa_run = sub_selfapprove.add_parser(
+        "run", help="roda o tune e decide: ativa, enfileira ou bloqueia"
+    )
+    sa_run.add_argument("artifact", help="artefato tunável, ex.: skills/python-fixes.md")
+    sa_run.add_argument("--rounds", type=int, default=2, help="rodadas de rewrite (default 2)")
+    sa_run.add_argument("--model", default="openai:qwen/qwen3.5-9b", help="modelo do rewriter/runner")
+    sa_run.add_argument(
+        "--runner",
+        choices=("extractive", "real"),
+        default="extractive",
+        help="quem produz a saída julgada; auto-ativação exige real em todos os casos",
+    )
+    sa_run.add_argument(
+        "--max-usd", type=float, default=0.25, dest="max_usd", help="teto de custo do rewriter/runner"
+    )
+    sa_run.add_argument("--root", default=None, help="raiz dos artefatos (default: $HARNESS_ROOT ou .)")
+    sa_run.set_defaults(func=cmd_selfapprove)
+
+    sa_queue = sub_selfapprove.add_parser("queue", help="propostas aguardando humano")
+    sa_queue.add_argument("--limit", type=int, default=100)
+    sa_queue.set_defaults(func=cmd_selfapprove)
+
+    sa_approve = sub_selfapprove.add_parser(
+        "approve", help="aplica uma proposta enfileirada — ato humano, exige --yes"
+    )
+    sa_approve.add_argument("entry_id", help="id da entrada (harness selfapprove queue lista)")
+    sa_approve.add_argument(
+        "--yes", action="store_true", help="confirmação humana; sem isto o comando recusa"
+    )
+    sa_approve.add_argument("--root", default=None)
+    sa_approve.set_defaults(func=cmd_selfapprove)
+
+    sa_undo = sub_selfapprove.add_parser(
+        "undo", help="reverte uma proposta aplicada por humano — ato humano, exige --yes"
+    )
+    sa_undo.add_argument("entry_id", help="id da entrada (harness selfapprove queue lista)")
+    sa_undo.add_argument(
+        "--yes", action="store_true", help="confirmação humana; sem isto o comando recusa"
+    )
+    sa_undo.add_argument("--root", default=None)
+    sa_undo.set_defaults(func=cmd_selfapprove)
+
+    sa_history = sub_selfapprove.add_parser("history", help="decisões já tomadas pelo gate")
+    sa_history.add_argument("--limit", type=int, default=50)
+    sa_history.set_defaults(func=cmd_selfapprove)
+
+    sa_status = sub_selfapprove.add_parser(
+        "status", help="limiares vigentes; com <artifact>, o pin corrente dele"
+    )
+    sa_status.add_argument("artifact", nargs="?", default=None)
+    sa_status.add_argument("--root", default=None)
+    sa_status.set_defaults(func=cmd_selfapprove)
 
     rb = sub.add_parser(
         "rollback", help="desfaz uma promoção de tune: restaura v(N-1) e grava o evento no ledger"

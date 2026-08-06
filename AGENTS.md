@@ -43,6 +43,12 @@ and demands a green sealed exam **plus** an explicit human ack. The autopilot
 alone never applies a change to either. Sealing an exam (quarantine → sealed) is
 also a human act: `harness seal <name> --yes`.
 
+`config/selfapprove.toml` is immutable — thresholds a loop can lower are not
+thresholds. It only grants permission when read from `$HARNESS_ROOT/config/`
+with the genome naming it; a copy elsewhere grants nothing. Activation
+additionally requires a **pinned bundle** and a `real`-runner measurement with
+zero per-case fallbacks.
+
 ## Fail-open vs fail-closed
 
 The rule is not stylistic, it is about who pays for the mistake:
@@ -75,6 +81,7 @@ so a rollback needs no restart and no data migration. Set to `0`:
 | `HARNESS_DECISIONS` | recall of past human decisions (`memory/decisions.py`) | escalation gets no prior-decision block |
 | `HARNESS_EPISODIC` | FTS5 recall of past failures | no recall; the sealed exam and frontier screening already run with it off |
 | `HARNESS_PLUGIN_NODES` | plugin nodes as graph nodes | the built-in topology only |
+| `HARNESS_SELFAPPROVE` | auto-approval of an internal proposal | every proposal goes to the human queue (`harness selfapprove queue`) |
 
 `HARNESS_NODE_ACK=1` is the opposite kind of switch — an explicit human ack, so
 it defaults to off and setting it to `1` is a decision, not a rollback.
@@ -160,6 +167,10 @@ worktree, so it cannot deliver a branch.
   `config/graph.toml` plus the governor. The CLI warns on stderr instead of
   half-obeying — keep that habit: say it out loud rather than silently ignoring
   a flag.
+- **`harness rollback` covers auto-activations** (they are `tune` rows) **but
+  not** human-approved queue entries — those undo with `harness selfapprove
+  undo <id>`, which restores the entry's own `incumbent.txt`, not the chain
+  dir.
 
 ## Before saying "done"
 

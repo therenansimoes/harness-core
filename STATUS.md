@@ -291,6 +291,29 @@ command and output pasted next to it.
   out-of-the-box smoke test in the repo.
 - **Legacy history is not usable as a prior.** `legacy/results.tsv` has no
   backend/kind columns; feeding it into the new Wilson prior would poison it.
+- **Self-approve auto-activation is narrow by design.** It needs all of: a pin
+  in `[selfapprove.pinned]`, `--runner real` with LM Studio up for *every*
+  case (a single fallback queues instead of activating), and a bundle with
+  >= 4 cases / >= 1 holdout case. Today only `skills/python-fixes` (4 cases)
+  can reach it; `config/workflows/hotfix` (3 cases) always queues. Nothing is
+  pinned out of the box, so a fresh install auto-activates nothing until a
+  human pins.
+- **External skills are refused by both self-approve branches, not waived.**
+  `SkillTunable.write` re-renders through `research.render_skill` and drops
+  unknown frontmatter (`origin`, `origin_sha256`, `approved`), so
+  `frontmatter-loss` queues the auto path and refuses the human path. Skills
+  already laundered by a previous `SkillTunable.write` classify as internal —
+  pre-existing state this change does not repair. `kinds` narrowing
+  (`kinds[0]` kept, the rest dropped) is the same pre-existing bug, now
+  surfaced as `kinds-narrowed`.
+- **Self-approve measures only the frozen-eval delta.** `task_value_usd` and
+  real-effect R2/R3 evidence are still absent; every stamp says so
+  (`before=`/`after=` against the frozen bundle, nothing about downstream
+  impact).
+- **`min_holdout_cases = 1` is weak generalization evidence.** Raise it to 2
+  once any bundle has >= 8 cases. `evals/**` sits outside the genome and
+  `smart_fs` enforces no genome rule over it — the bundle pin in
+  `[selfapprove.pinned]` is what compensates, not the genome.
 
 ## Rules that do not change
 
