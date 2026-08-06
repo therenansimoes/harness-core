@@ -1,7 +1,7 @@
 """CLI do harness. `harness run` / `ab` / `backends` / `improve` / `replay` /
 `lineage` / `export` / `import` / `doctor` / `skills` / `actions` / `seal` /
 `frontier` / `evolve` / `ui-verify` / `vision-judge` / `bench` / `queue` /
-`webhook`."""
+`webhook` / `serve`."""
 
 from __future__ import annotations
 
@@ -50,6 +50,7 @@ SCRATCH_DIR = ".harness"  # log do verify; não conta como sujeira do repo-alvo
 DEFAULT_MAX_TURNS = 30
 HELD_IN = Path("benchmarks/held_in")  # unidades default do `harness improve`
 WEBHOOK_PORT = 8787  # porta default do `harness webhook` (loopback)
+SERVE_PORT = 8765  # porta default do 'harness serve' (loopback)
 # Resposta default do `--resume`: abortar. Retomar um loop sem dizer o que
 # fazer não pode significar "continua sozinho" — quem foi chamado tem que
 # escolher explicitamente continuar.
@@ -2137,6 +2138,35 @@ def cmd_webhook(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    """`harness serve`: endpoint OpenAI-compatível local — Cursor conecta
+    como se este repo fosse um modelo chamado `harness`.
+
+    Loopback por default; outro `--host` expõe na rede e sai avisando no
+    stderr, porque isso é decisão de quem sobe o processo, não default.
+    """
+    from harness.serve import DEFAULT_HOST
+    from harness.serve import serve as serve_openai
+
+    if args.host != DEFAULT_HOST and args.host != "localhost":
+        print(
+            f"AVISO: --host {args.host} expõe o harness fora do loopback — qualquer um na "
+            "rede vira dono da fila e do /do. Use proxy reverso com auth se for isso mesmo.",
+            file=sys.stderr,
+        )
+    cwd = Path.cwd()
+    try:
+        serve_openai(
+            args.port,
+            args.host,
+            cwd=cwd,
+            on_bind=lambda p: print(f"[serve] http://{args.host}:{p}/v1 · modelo 'harness' · repo {cwd}"),
+        )
+    except KeyboardInterrupt:
+        print("[serve] parado", file=sys.stderr)
+    return 0
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     """Auto-relatório do loop em markdown. Fail-open: sempre exit 0."""
     from harness import report as report_mod
@@ -2159,7 +2189,7 @@ EPILOG = """\
 BÁSICO      quickstart · do · status · report
 AVANÇADO    run · queue · add · decompose · replan · ab · improve · evolve ·
             frontier · seal · eval · tune · replay · whatif · lineage · skills ·
-            actions · procs · cache-gc · webhook · bench · ui-verify ·
+            actions · procs · cache-gc · webhook · serve · bench · ui-verify ·
             vision-judge · init · export · import · doctor · backends
 
 Detalhe de qualquer um: harness <comando> --help
@@ -3012,6 +3042,17 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"porta em 127.0.0.1 (default {WEBHOOK_PORT}; 0 = efêmera, o bind é impresso)",
     )
     webhook.set_defaults(func=cmd_webhook)
+
+    srv = sub.add_parser(
+        "serve", help="endpoint OpenAI-compatível local (Cursor conecta como modelo)"
+    )
+    srv.add_argument("--port", type=int, default=SERVE_PORT)
+    srv.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="loopback por default; outro valor expõe na rede e sai com aviso no stderr",
+    )
+    srv.set_defaults(func=cmd_serve)
 
     bench = sub.add_parser("bench", help="mede o custo de uma operação do harness")
     bench.add_argument("what", choices=["provision"])
