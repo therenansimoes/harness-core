@@ -68,6 +68,10 @@ LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 UNAUTHORIZED = 401
 FORBIDDEN = 403  # fail-closed: fora do loopback e sem key, mesmo 403 do webhook
 MODEL_ID = "harness"
+EXECUTOR_PREFIX = "harness:"
+STRICT_MODEL_ENV = "HARNESS_SERVE_STRICT_MODEL"  # "0" => id desconhecido vira auto
+MODEL_NOT_FOUND = 404
+MAX_MODEL_ID_CHARS = 120
 MAX_USD_CAP = 5.0
 MAX_RUNNING_JOBS = 1
 CHUNK_CHARS = 120  # tamanho da fatia de cada frame SSE
@@ -129,7 +133,13 @@ class ServeContext:
     para o workspace detectado no payload do Cursor: `home` guarda o cwd de
     boot original nesse caso, `project` o nome registrado (se houver) e
     `detection` o veredito bruto — aceito ou não, sempre presente depois de
-    `ctx_for_request` rodar."""
+    `ctx_for_request` rodar.
+
+    `executor`/`requested_model` são resolvidos por request pelo `do_POST`
+    (campo `model` do corpo OpenAI-like): `executor` é o registro já
+    resolvido (`None` = comportamento de hoje, auto), `requested_model` é a
+    string CRUA que o cliente mandou — só existe pra `/where` mostrar o que
+    foi pedido de verdade, mesmo quando a resolução degrada pra auto."""
 
     cwd: Path
     now: Callable[[], float] = field(default=time.time)
@@ -137,6 +147,111 @@ class ServeContext:
     project: str | None = None
     detection: Detection | None = None
     workspace_roots: tuple[Path, ...] = ()
+    executor: Executor | None = None
+    requested_model: str | None = None
+
+
+# --------------------------------------------------------------------------- executores: registro por trás do campo "model"
+
+
+@dataclass(frozen=True)
+class Executor:
+    """Um id oferecido no campo `model` do protocolo OpenAI. `auto` é o único
+    que fala pelo router de verdade — os demais são um PIN: `backend`/
+    `run_model` vêm só do registro (`executors()`), nunca do payload do
+    cliente, e `local` decide se este turno de CHAT pode responder (chat é
+    estruturalmente local; executor pago só roda via `/do`)."""
+
+    id: str  # "harness", "harness:local", ...
+    tier: str  # "" no auto
+    backend: str  # "" no auto (nunca vem do payload)
+    run_model: str  # modelo pro argv do `harness do`; "" = o backend escolhe
+    local: bool  # roda no runtime desta máquina => responde chat, custo $0
+    label: str  # 1 linha descritiva
+
+
+def auto_executor() -> Executor:
+    return Executor(MODEL_ID, "", "", "", True, "auto do harness — o router escolhe o executor no /do")
+
+
+def _runs_local(backend: str, model: str) -> bool:
+    """Mesma regra de `harness.routing.adapters.runs_local` (import lazy: o
+    caminho de chat não depende de routing pra responder). Fallback embutido
+    é a regra real (adapters.py:243-245), não uma aproximação."""
+    try:
+        from harness.routing.adapters import runs_local
+
+        return runs_local(backend, model)
+    except Exception:
+        return backend == "deepagents" and model.startswith(OPENAI_PREFIX)
+
+
+def _tier_alias(t: Any, taken: set[str]) -> str:
+    """Nome curto e determinístico pro executor deste tier: "local" quando o
+    tier roda no runtime da máquina, senão o miolo do nome de modelo (sem o
+    prefixo do provedor) ou, na falta de modelo (tier "o CLI escolhe"), o
+    backend. Colisão (dois tiers com o mesmo miolo) desempata com o nome do
+    tier — chamado em ordem de `cost_rank`, então o resultado é estável."""
+    if _runs_local(t.backend, t.model):
+        alias = "local"
+    else:
+        alias = t.model.rsplit("/", 1)[-1].removeprefix(OPENAI_PREFIX).strip() or t.backend
+    if alias in taken:
+        alias = f"{alias}-{t.name}"
+    return alias
+
+
+def executors() -> list[Executor]:
+    """`auto` primeiro, depois um `Executor` por `[[tier]]` de
+    `config/models.toml`, na ordem de `cost_rank`. NUNCA levanta: um
+    `models.toml` ilegível não pode derrubar `/v1/models` (o Cursor faz
+    polling nele) — degrada pro auto sozinho, com uma linha no stderr. SEM
+    cache: config é zona mutável do genoma, uma leitura por chamada."""
+    try:
+        from harness.routing.router import load_config, tiers
+
+        cfg = load_config()
+        taken: set[str] = set()
+        execs = [auto_executor()]
+        for t in tiers(cfg):
+            alias = _tier_alias(t, taken)
+            taken.add(alias)
+            execs.append(
+                Executor(
+                    id=f"{EXECUTOR_PREFIX}{alias}",
+                    tier=t.name,
+                    backend=t.backend,
+                    run_model=t.model,
+                    local=_runs_local(t.backend, t.model),
+                    label=f"{t.name} · {t.backend}" + (f" · {t.model}" if t.model else ""),
+                )
+            )
+        return execs
+    except Exception as exc:
+        print(f"[serve] models.toml ilegível — só o executor auto: {exc}", file=sys.stderr)
+        return [auto_executor()]
+
+
+def resolve_executor(raw: str | None) -> Executor | None:
+    """Única porta de entrada do campo `model` pro resto do módulo: devolve
+    um `Executor` do REGISTRO (nunca um construído com a string do cliente) ou
+    `None` (id desconhecido — quem chama decide 404 ou degradar pro auto).
+    None/vazio/só espaço => auto (comportamento de hoje, sem campo `model`).
+    Comparação case-insensitive contra o id primário e contra o alias oculto
+    `harness:<tier>` — mas só quando o tier existe (o auto tem `tier == ""` e
+    não pode casar contra `harness:` vazio)."""
+    if raw is None or not raw.strip():
+        return auto_executor()
+    key = raw.strip()
+    if len(key) > MAX_MODEL_ID_CHARS:
+        return None
+    key_lower = key.lower()
+    for e in executors():
+        if key_lower == e.id.lower():
+            return e
+        if e.tier and key_lower == f"{EXECUTOR_PREFIX}{e.tier}".lower():
+            return e
+    return None
 
 
 # --------------------------------------------------------------------------- workspace detection: leitura + validação
@@ -523,6 +638,19 @@ def job_running(job: dict) -> bool:
     return True
 
 
+def executor_argv(ex: Executor) -> list[str]:
+    """Flags de rota pro `harness do`. Só lê do registro (`ex.backend`/
+    `ex.run_model`) — texto de cliente nunca chega aqui, `resolve_executor` já
+    é a única porta. Sem `--route`: `cmd_do` infere `manual` sozinho quando vê
+    `--backend`/`--model` (harness/cli.py). Auto (`ex.backend == ""`) => []."""
+    if not ex.backend:
+        return []
+    argv = ["--backend", ex.backend]
+    if ex.run_model:
+        argv += ["--model", ex.run_model]
+    return argv
+
+
 def dispatch_do(task: str, max_usd: float, ctx: ServeContext) -> dict:
     """Sobe `harness do <task> --no-apply --max-usd <max_usd>` em segundo plano e
     grava o registro do job. O teto viaja no argv — é o `cmd_do` (fail-closed,
@@ -530,11 +658,18 @@ def dispatch_do(task: str, max_usd: float, ctx: ServeContext) -> dict:
     do governor (ambiente, fail-open). Não checa teto/concorrência — quem chama
     (`handle_message`) já decidiu que pode disparar.
 
+    `ctx.executor` (pin do campo `model`) vira flags de rota via
+    `executor_argv` — pin FORÇA `--backend`/`--model` e por isso DESLIGA a
+    escalada automática de tier do `cmd_do` (`_proximo_tier` só entra sem
+    pin): pinar local nunca escala pra pago, mas LM Studio caído + pin local
+    é run que falha em vez de subir.
+
     O filho pina `CONFIG_DIR_ENV`/`DATA_DIR_ENV` absolutos no próprio env: sem
     isso, `paths.config_dir()` (relativo "config" do checkout) resolveria
     contra `cwd=ctx.cwd` (o workspace, não o checkout) e `pin_home_paths()`
     acabaria escrevendo em `~/.harness/config/projects.toml` — registro
     diferente do que o servidor está usando, re-registro silencioso."""
+    ex = ctx.executor or auto_executor()
     jid = uuid.uuid4().hex[:8]
     d = jobs_dir()
     d.mkdir(parents=True, exist_ok=True)
@@ -548,6 +683,7 @@ def dispatch_do(task: str, max_usd: float, ctx: ServeContext) -> dict:
         "--no-apply",
         "--max-usd",
         f"{max_usd:.2f}",
+        *executor_argv(ex),
     ]
     env = {
         **os.environ,
@@ -565,6 +701,7 @@ def dispatch_do(task: str, max_usd: float, ctx: ServeContext) -> dict:
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ctx.now())),
         "max_usd": max_usd,
         "argv": argv,
+        "executor": ex.id,
     }
     (d / f"{jid}.json").write_text(json.dumps(record), encoding="utf-8")
     return record
@@ -818,31 +955,106 @@ def _clip(text: str, limit: int = STATE_MAX_CHARS) -> str:
     return text[:limit] + "\n… (cortado)"
 
 
-def llm_reply(text: str, ctx: ServeContext) -> str | None:
-    model = str(_chat_model()).removeprefix(OPENAI_PREFIX)
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt(ctx.cwd, ctx.detection)},
-            {"role": "user", "content": text},
-        ],
-        "temperature": 0.2,
-        "max_tokens": 700,
-    }
-    status, body = _http_post(f"{llm_base_url()}/chat/completions", payload, LLM_TIMEOUT_S)
-    if status != 200:
-        return None
+def chat_model_candidates() -> list[str]:
+    """Nomes a tentar no endpoint OpenAI local, em ordem, sem duplicata.
+    [0] = `_chat_model()` (comportamento de HOJE, byte-idêntico — inclui o
+    `removeprefix(OPENAI_PREFIX)` que `llm_reply` já fazia); [1], se houver, é
+    o `run_model` do primeiro executor LOCAL do registro que tiver um.
+
+    Bug conhecido, não feature: `harness.queue.DEFAULT_MODEL` ==
+    "openai:qwen3.5-9b-mlx" enquanto `config/models.toml` t0 ==
+    "openai:qwen/qwen3.5-9b" — os dois nomes vivem no repo. `_chat_model()`
+    continua primário (comportamento de hoje intocado); o segundo candidato é
+    só o retry que cobre esse desalinhamento sem esperar ele ser corrigido."""
+    candidates = [str(_chat_model()).removeprefix(OPENAI_PREFIX)]
     try:
-        data = json.loads(body)
-        content = data["choices"][0]["message"]["content"]
-    except (json.JSONDecodeError, KeyError, IndexError, TypeError):
-        return None
-    if not isinstance(content, str) or not content.strip():
-        return None
-    return content
+        local = next((e for e in executors() if e.local and e.run_model), None)
+    except Exception:
+        local = None
+    if local is not None:
+        model = local.run_model.removeprefix(OPENAI_PREFIX)
+        if model not in candidates:
+            candidates.append(model)
+    return candidates
+
+
+def llm_reply(text: str, ctx: ServeContext) -> str | None:
+    for model in chat_model_candidates():
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt(ctx.cwd, ctx.detection)},
+                {"role": "user", "content": text},
+            ],
+            "temperature": 0.2,
+            "max_tokens": 700,
+        }
+        status, body = _http_post(f"{llm_base_url()}/chat/completions", payload, LLM_TIMEOUT_S)
+        if status == 200:
+            try:
+                data = json.loads(body)
+                content = data["choices"][0]["message"]["content"]
+            except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                return None
+            if not isinstance(content, str) or not content.strip():
+                return None
+            return content
+        if 400 <= status < 500:
+            continue  # nome de modelo errado: tenta o próximo candidato
+        return None  # 0/5xx/timeout: falha de infra, retry dobraria os 120s
 
 
 # --------------------------------------------------------------------------- router
+
+
+def route_hint(text: str, ctx: ServeContext) -> str:
+    """1 linha determinística, ou "" — sem LLM, sem histórico, sem I/O de DB.
+    Recebe o texto JÁ desembrulhado (saída de `user_query_text`): o bloco
+    `<user_info>` polui `_FILE_RE` e as keywords do classificador.
+
+    Só a HIPÓTESE DE PARTIDA (`[router.kind]` ou `default_tier`) — nunca o
+    prior nem a escalada por tentativa, que dependem do ledger e isto aqui
+    roda em todo turno de chat sem tocar banco. Guarda-corpo LOAD-BEARING:
+    `[precedence].fallback = "code"` e `[router.kind].code = "t1"` (pago) —
+    sem checar se a classificação caiu no fallback, todo papo solto ganharia
+    aviso de tier pago."""
+    try:
+        from harness.routing.kinds import classify_kind
+        from harness.routing.router import load_config, tier_by_name
+        from harness.types import UnitSpec
+
+        unit = UnitSpec(id="chat", path=ctx.cwd, prompt=text, verify_cmd="")
+        kind, reasons = classify_kind(unit)
+        if any(r.startswith("fallback:") for r in reasons):
+            return ""
+        cfg = load_config()
+        tier_name = cfg["router"]["kind"].get(kind, cfg["router"]["default_tier"])
+        tier = tier_by_name(cfg, tier_name)
+        if _runs_local(tier.backend, tier.model):
+            return ""
+        alias = _tier_alias(tier, set())
+        return (
+            f"router: isso parece {kind} → o /do começaria em {alias} "
+            f"({tier.backend}); o router pode subir de tier."
+        )
+    except Exception:
+        return ""
+
+
+def chat_notes(ex: Executor, text: str, ctx: ServeContext) -> list[str]:
+    """Linhas extras antes da resposta do modelo local. Pin pago: avisa que
+    quem respondeu foi o local mesmo, $0 (nunca gasta o executor pago num
+    turno de chat). Auto: só o `route_hint`, e só quando ele tiver algo a
+    dizer. Pin local: silêncio — o usuário escolheu, nada a acrescentar."""
+    if ex.local is False:
+        return [
+            f"[{ex.id} é executor de /do — este turno foi respondido pelo modelo local, $0. "
+            "Para usá-lo de verdade: /do <pedido>]"
+        ]
+    if ex.id == MODEL_ID:
+        hint = route_hint(text, ctx)
+        return [hint] if hint else []
+    return []
 
 
 HELP = """\
@@ -856,8 +1068,9 @@ comandos do harness:
   /close <id>                  — fecha tarefa (bd close)
   /do <pedido> [--max-usd N]   — roda `harness do` em segundo plano (teto 5.00)
   /where                        — workspace detectado no payload do Cursor (raw + veredito)
+  /models                       — executores disponíveis (id pro campo "model" do cliente)
   /help                         — esta lista
-texto sem barra vai para o modelo local (LM Studio, porta 1234).
+texto sem barra vai para o modelo local (LM Studio, porta 1234) — chat é sempre local e $0.
 """
 
 
@@ -969,13 +1182,23 @@ def _cmd_do(arg: str, ctx: ServeContext) -> str:
     cap = load_gov().cost_cap_usd
     extra = f" · teto ambiente do governor: ${cap:.2f}" if cap > 0 else ""
     teto_linha = f"teto deste run: ${max_usd:.2f} (--max-usd, vale para todas as tentativas){extra}"
-    resp = (
-        f"job {record['id']} iniciado em {ctx.cwd}\n"
-        f"pedido: {task}\n"
-        f"{teto_linha}\n"
-        "--no-apply: o resultado fica na branch de entrega; nada é mergeado sozinho\n"
-        f"acompanhe com /status · log: {record['log']}"
-    )
+    linhas = [
+        f"job {record['id']} iniciado em {ctx.cwd}",
+        f"pedido: {task}",
+        teto_linha,
+        "--no-apply: o resultado fica na branch de entrega; nada é mergeado sozinho",
+    ]
+    ex = ctx.executor or auto_executor()
+    if ex.id != MODEL_ID:
+        pin_linha = (
+            f"executor pinado: {ex.id} ({ex.backend} · {ex.run_model or 'modelo do backend'}) "
+            "— sem escalada automática de tier"
+        )
+        if not ex.local:
+            pin_linha += f" · PAGO, teto ${max_usd:.2f}"
+        linhas.append(pin_linha)
+    linhas.append(f"acompanhe com /status · log: {record['log']}")
+    resp = "\n".join(linhas)
     det = ctx.detection
     if det is not None and det.path is not None:
         projeto_linha = (
@@ -1004,8 +1227,23 @@ def _cmd_where(_arg: str, ctx: ServeContext) -> str:
             f"roots permitidas: {roots_txt}",
             f"projeto: {nome}",
             f"o /do rodaria em: {ctx.cwd}",
+            f"executor pedido: {ctx.requested_model or '(nenhum)'} → "
+            f"{ctx.executor.id if ctx.executor else MODEL_ID}",
         ]
     )
+
+
+def _cmd_models(_arg: str, ctx: ServeContext) -> str:
+    """Lista os executores do registro (mesmos ids aceitos no campo `model`)
+    — inclusive quando um deles está pinado nesta conversa, marcado com "→"."""
+    pin = ctx.executor.id if ctx.executor else None
+    linhas = [
+        f"{'→ ' if e.id == pin else '  '}{e.id:<22} "
+        f"{'chat + /do' if e.local else 'só /do (pago)'}  {e.backend or 'router'} · {e.run_model or '—'}"
+        for e in executors()
+    ]
+    linhas.append("chat é sempre local ($0); executor pago só executa via /do (teto $5.00).")
+    return "\n".join(linhas)
 
 
 _COMMANDS: dict[str, Callable[[str, ServeContext], str]] = {
@@ -1019,6 +1257,7 @@ _COMMANDS: dict[str, Callable[[str, ServeContext], str]] = {
     "close": _cmd_close,
     "do": _cmd_do,
     "where": _cmd_where,
+    "models": _cmd_models,
 }
 
 
@@ -1032,13 +1271,16 @@ def handle_message(text: str, ctx: ServeContext) -> str:
         if handler is None:
             return f"comando desconhecido: /{name}\n\n{HELP}"
         return handler(arg, ctx)
+    ex = ctx.executor or auto_executor()
+    notes = chat_notes(ex, text, ctx)
     reply = llm_reply(text, ctx)
     if reply is None:
-        return (
+        msg = (
             f"LM Studio não respondeu em {llm_base_url()} — sem modelo local eu só "
             f"respondo comando:\n\n{HELP}"
         )
-    return reply
+        return "\n".join([*notes, msg])
+    return "\n".join([*notes, reply])
 
 
 def last_user_text(messages: list[dict]) -> str:
@@ -1064,16 +1306,36 @@ def new_id(rng: Callable[[], uuid.UUID] = uuid.uuid4) -> str:
 def models_payload() -> dict:
     return {
         "object": "list",
-        "data": [{"id": MODEL_ID, "object": "model", "created": 0, "owned_by": "harness"}],
+        "data": [
+            {"id": e.id, "object": "model", "created": 0, "owned_by": "harness"} for e in executors()
+        ],
     }
 
 
-def completion_payload(text: str, *, cid: str, created: int) -> dict:
+def model_error_payload(requested: str | None) -> dict:
+    """Shape de erro OpenAI pro `model` desconhecido — `param`/`code` são o
+    que o Cursor (e qualquer cliente decente) usa pra distinguir isto de
+    qualquer outro 4xx. `requested` sanitizado (sem control chars, clip em
+    `MAX_MODEL_ID_CHARS`): é texto de cliente indo pra uma mensagem de erro,
+    mesma cautela de `_safe_for_log`."""
+    safe = re.sub(r"[\x00-\x1f\x7f]", "?", requested or "")[:MAX_MODEL_ID_CHARS]
+    ids = [e.id for e in executors()]
+    return {
+        "error": {
+            "message": f"modelo desconhecido: {safe!r}. Disponíveis: {', '.join(ids)}",
+            "type": "invalid_request_error",
+            "param": "model",
+            "code": "model_not_found",
+        }
+    }
+
+
+def completion_payload(text: str, *, cid: str, created: int, model: str = MODEL_ID) -> dict:
     return {
         "id": cid,
         "object": "chat.completion",
         "created": created,
-        "model": MODEL_ID,
+        "model": model,
         "choices": [
             {
                 "index": 0,
@@ -1089,8 +1351,8 @@ def _chunk_frame(payload: dict) -> bytes:
     return b"data: " + json.dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n\n"
 
 
-def stream_chunks(text: str, *, cid: str, created: int) -> Iterator[bytes]:
-    base = {"id": cid, "object": "chat.completion.chunk", "created": created, "model": MODEL_ID}
+def stream_chunks(text: str, *, cid: str, created: int, model: str = MODEL_ID) -> Iterator[bytes]:
+    base = {"id": cid, "object": "chat.completion.chunk", "created": created, "model": model}
     yield _chunk_frame(
         {**base, "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None}]}
     )
@@ -1188,7 +1450,15 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(200, models_payload())
             return
         if path in ("", "/health", "/v1/health"):
-            self._json(200, {"status": "ok", "model": MODEL_ID, "cwd": str(self.ctx.cwd)})
+            self._json(
+                200,
+                {
+                    "status": "ok",
+                    "model": MODEL_ID,
+                    "cwd": str(self.ctx.cwd),
+                    "models": [e.id for e in executors()],
+                },
+            )
             return
         self._error(404, f"rota desconhecida: {self.path}")
 
@@ -1216,27 +1486,55 @@ class _Handler(BaseHTTPRequestHandler):
         if not isinstance(body, dict):
             self._error(400, "corpo precisa ser um objeto JSON")
             return
-        # `model`, `tools`, `stream_options` seguem ignorados — non-goals:
-        # nunca emitimos tool_calls nem usage chunk, e o Cursor aceita numa
-        # boa (não é gramática que ele exige para funcionar).
+        # `tools`/`stream_options` seguem ignorados — non-goals: nunca
+        # emitimos tool_calls nem usage chunk, e o Cursor aceita numa boa
+        # (não é gramática que ele exige para funcionar). `model` agora
+        # escolhe o executor — resolvido ANTES do stream: 404 é
+        # irrepresentável no meio de um SSE, e o Cursor manda `stream=True`.
+        requested = body.get("model") if isinstance(body.get("model"), str) else None
+        ex = resolve_executor(requested)
+        degradado = False
+        if ex is None:
+            if os.environ.get(STRICT_MODEL_ENV) == "0":
+                ex = auto_executor()
+                degradado = True
+                print(
+                    f"[serve] modelo desconhecido ({_safe_for_log(requested or '')}) — "
+                    f"degradando pra auto ({STRICT_MODEL_ENV}=0)",
+                    file=sys.stderr,
+                )
+            else:
+                self._json(MODEL_NOT_FOUND, model_error_payload(requested))
+                return
         messages = body.get("messages") or []
-        req_ctx = ctx_for_request(messages, self.ctx)
+        req_ctx = replace(ctx_for_request(messages, self.ctx), executor=ex, requested_model=requested)
         text = handle_message(last_user_text(messages), req_ctx)
         cid = new_id()
         created = int(time.time())
+        # Eco o que o cliente pediu, não sempre o id canônico — mas só quando
+        # bate EXATO com o que resolveu (id primário ou alias oculto): a
+        # resolução é case-insensitive (`resolve_executor`), e ecoar de volta
+        # uma grafia torta ("HARNESS:LOCAL") devolveria um `model` que não
+        # está em `models_payload()` nem bate nenhum `e.id` de verdade —
+        # nesse caso o eco cai pro id canônico do que resolveu, não pro auto.
+        echo = ex.id
+        if not degradado and requested:
+            key = requested.strip()
+            if key == ex.id or (ex.tier and key == f"{EXECUTOR_PREFIX}{ex.tier}"):
+                echo = key
         if bool(body.get("stream")):
-            self._stream(cid, created, text)
+            self._stream(cid, created, text, model=echo)
         else:
-            self._json(200, completion_payload(text, cid=cid, created=created))
+            self._json(200, completion_payload(text, cid=cid, created=created, model=echo))
 
-    def _stream(self, cid: str, created: int, text: str) -> None:
+    def _stream(self, cid: str, created: int, text: str, *, model: str = MODEL_ID) -> None:
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Transfer-Encoding", "chunked")
         self.end_headers()
         try:
-            for frame in stream_chunks(text, cid=cid, created=created):
+            for frame in stream_chunks(text, cid=cid, created=created, model=model):
                 self.wfile.write(b"%x\r\n%s\r\n" % (len(frame), frame))
                 self.wfile.flush()
             self.wfile.write(b"0\r\n\r\n")

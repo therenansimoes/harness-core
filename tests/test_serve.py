@@ -24,6 +24,24 @@ def _ctx(cwd: Path) -> serve.ServeContext:
     return serve.ServeContext(cwd=cwd)
 
 
+def _fake_tiers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """3 tiers determinísticos pro `executors()` — mesmo shape de
+    `config/models.toml` (t0 local, t1 haiku, t2 placeholder), mas
+    independente do arquivo real: `harness.routing.router.executors()` faz o
+    `from harness.routing.router import load_config` DENTRO da função (import
+    lazy), então trocar o atributo do módulo aqui é resolvido de novo a cada
+    chamada — não precisa de env var nem de arquivo em disco."""
+    cfg = {
+        "tier": [
+            {"name": "t0", "backend": "deepagents", "model": "openai:qwen/qwen3.5-9b", "max_turns": 40, "cost_rank": 0},
+            {"name": "t1", "backend": "claude_code", "model": "haiku", "max_turns": 24, "cost_rank": 1},
+            {"name": "t2", "backend": "claude_code", "model": "", "max_turns": 40, "cost_rank": 2},
+        ],
+        "router": {"default_tier": "t0", "kind": {"code": "t1", "refactor": "t2"}},
+    }
+    monkeypatch.setattr("harness.routing.router.load_config", lambda *a, **kw: cfg)
+
+
 def _serve(
     cwd: Path,
     max_requests: int,
@@ -136,7 +154,7 @@ def _post(port: int, body: dict, headers: dict[str, str] | None = None) -> tuple
 def test_models_payload_um_modelo_harness() -> None:
     payload = serve.models_payload()
     assert payload["object"] == "list"
-    assert len(payload["data"]) == 1
+    assert len(payload["data"]) == len(serve.executors())
     assert payload["data"][0]["id"] == "harness"
 
 
@@ -175,6 +193,7 @@ def test_get_v1_models_200(tmp_path: Path) -> None:
     status, body = _get(port, "/v1/models")
     t.join(5)
     assert status == 200
+    assert len(body["data"]) == len(serve.executors())
     assert body["data"][0]["id"] == "harness"
 
 
@@ -447,6 +466,7 @@ def test_fonte_nao_tem_caminho_de_escrita_perigosa() -> None:
         "close",
         "do",
         "where",
+        "models",
     }
 
 
@@ -839,3 +859,310 @@ def test_corpo_gigante_413(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
         conn.close()
     t.join(5)
     assert status == 413
+
+
+# --------------------------------------------------------------------------- executores no campo "model"
+
+
+def test_executores_saem_do_models_toml(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_tiers(monkeypatch)
+    execs = serve.executors()
+    assert [e.id for e in execs] == ["harness", "harness:local", "harness:haiku", "harness:claude_code"]
+    assert [e.local for e in execs] == [True, True, False, False]
+
+
+def test_models_toml_quebrado_degrada_pro_auto(monkeypatch: pytest.MonkeyPatch) -> None:
+    from harness.routing.router import RouterError
+
+    def boom(*a, **kw):
+        raise RouterError("models.toml sumiu")
+
+    monkeypatch.setattr("harness.routing.router.load_config", boom)
+    execs = serve.executors()
+    assert [e.id for e in execs] == ["harness"]
+    assert len(serve.models_payload()["data"]) == 1
+
+
+def test_models_payload_so_chaves_padrao(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_tiers(monkeypatch)
+    payload = serve.models_payload()
+    ids = [item["id"] for item in payload["data"]]
+    assert ids[0] == "harness"
+    assert len(ids) == len(set(ids))
+    for item in payload["data"]:
+        assert set(item) == {"id", "object", "created", "owned_by"}
+
+
+def test_modelo_desconhecido_404(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+
+    def fail_popen(*a, **kw):
+        pytest.fail("`_popen` não deveria ser chamado com model desconhecido")
+
+    def fail_http_post(*a, **kw):
+        pytest.fail("`_http_post` não deveria ser chamado com model desconhecido")
+
+    monkeypatch.setattr(serve, "_popen", fail_popen)
+    monkeypatch.setattr(serve, "_http_post", fail_http_post)
+    port, t = _serve(tmp_path, max_requests=2)
+
+    status, raw, _ = _post(port, {"model": "gpt-4o", "messages": [{"role": "user", "content": "oi"}]})
+    body = json.loads(raw)
+    assert status == 404
+    assert body["error"]["code"] == "model_not_found"
+    assert body["error"]["param"] == "model"
+    assert body["error"]["type"] == "invalid_request_error"
+
+    status_stream, raw_stream, ctype_stream = _post(
+        port, {"model": "gpt-4o", "stream": True, "messages": [{"role": "user", "content": "oi"}]}
+    )
+    t.join(5)
+    assert status_stream == 404
+    assert ctype_stream != "text/event-stream"
+    assert json.loads(raw_stream)["error"]["code"] == "model_not_found"
+
+
+def test_strict_model_off_degrada_pro_auto(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv(serve.STRICT_MODEL_ENV, "0")
+    monkeypatch.setattr(serve, "_bd", lambda *a, **kw: (0, ""))
+    port, t = _serve(tmp_path, max_requests=1)
+
+    status, raw, _ = _post(port, {"model": "gpt-4o", "messages": [{"role": "user", "content": "/help"}]})
+    t.join(5)
+    assert status == 200
+    assert json.loads(raw)["model"] == "harness"
+
+
+def test_echo_do_modelo_pedido(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(serve, "_bd", lambda *a, **kw: (0, ""))
+
+    port, t = _serve(tmp_path, max_requests=1)
+    status, raw, _ = _post(port, {"model": "harness:local", "messages": [{"role": "user", "content": "/help"}]})
+    t.join(5)
+    assert status == 200
+    assert json.loads(raw)["model"] == "harness:local"
+
+    port2, t2 = _serve(tmp_path, max_requests=1)
+    data = json.dumps(
+        {"model": "harness:local", "stream": True, "messages": [{"role": "user", "content": "/help"}]}
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port2}/v1/chat/completions",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        body = resp.read().decode("utf-8")
+    t2.join(5)
+    frames = [
+        json.loads(line[len("data: ") :])
+        for line in body.splitlines()
+        if line.startswith("data: ") and line != "data: [DONE]"
+    ]
+    assert frames
+    assert all(frame["model"] == "harness:local" for frame in frames)
+
+
+def test_echo_nao_ecoa_grafia_torta_de_id_valido(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # `resolve_executor` casa case-insensitive — o eco não pode devolver uma
+    # grafia que não bate nenhum `id` de `models_payload()`.
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(serve, "_bd", lambda *a, **kw: (0, ""))
+    port, t = _serve(tmp_path, max_requests=1)
+    status, raw, _ = _post(port, {"model": "HARNESS:LOCAL", "messages": [{"role": "user", "content": "/help"}]})
+    t.join(5)
+    assert status == 200
+    assert json.loads(raw)["model"] == "harness:local"
+
+
+def test_pin_local_recebe_a_chamada_de_chat(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(serve, "_bd", lambda *a, **kw: (0, ""))
+    chamadas: list[tuple[str, dict]] = []
+
+    def fake_http_post(url: str, payload: dict, timeout_s: float) -> tuple[int, str]:
+        chamadas.append((url, payload))
+        return 200, json.dumps({"choices": [{"message": {"content": "resposta do modelo"}}]})
+
+    monkeypatch.setattr(serve, "_http_post", fake_http_post)
+
+    ex = serve.Executor(
+        id="harness:local", tier="t0", backend="deepagents", run_model="openai:qwen/qwen3.5-9b",
+        local=True, label="",
+    )
+    ctx = serve.ServeContext(cwd=tmp_path, executor=ex)
+
+    resp = serve.handle_message("oi, tudo bem?", ctx)
+    assert resp == "resposta do modelo"
+    assert len(chamadas) == 1
+    url, payload = chamadas[0]
+    assert url == f"{serve.llm_base_url()}/chat/completions"
+    assert payload["model"] == serve.chat_model_candidates()[0]
+
+
+def test_chat_com_executor_pago_responde_local_e_avisa(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(serve, "_bd", lambda *a, **kw: (0, ""))
+    chamadas: list[dict] = []
+
+    def fake_http_post(url: str, payload: dict, timeout_s: float) -> tuple[int, str]:
+        chamadas.append(payload)
+        return 200, json.dumps({"choices": [{"message": {"content": "resposta do modelo"}}]})
+
+    monkeypatch.setattr(serve, "_http_post", fake_http_post)
+
+    def fail_popen(*a, **kw):
+        pytest.fail("`_popen` não deveria ser chamado num turno de chat")
+
+    monkeypatch.setattr(serve, "_popen", fail_popen)
+
+    ex = serve.Executor(
+        id="harness:haiku", tier="t1", backend="claude_code", run_model="haiku", local=False, label="",
+    )
+    ctx = serve.ServeContext(cwd=tmp_path, executor=ex)
+
+    resp = serve.handle_message("oi, tudo bem?", ctx)
+    assert "resposta do modelo" in resp
+    assert "harness:haiku" in resp
+    assert len(chamadas) == 1
+    assert chamadas[0]["model"] in serve.chat_model_candidates()
+
+
+def test_auto_avisa_tier_pago_so_com_sinal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(serve, "_bd", lambda *a, **kw: (0, ""))
+    monkeypatch.setattr(
+        serve,
+        "_http_post",
+        lambda url, payload, timeout_s: (
+            200,
+            json.dumps({"choices": [{"message": {"content": "resposta do modelo"}}]}),
+        ),
+    )
+    ctx = _ctx(tmp_path)
+
+    resp_kw = serve.handle_message("preciso refatorar este módulo", ctx)
+    assert "router:" in resp_kw
+
+    resp_neutro = serve.handle_message("oi, como vai a fila?", ctx)
+    assert resp_neutro == "resposta do modelo"
+
+
+def test_route_hint_nunca_levanta(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*a, **kw):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("harness.routing.kinds.classify_kind", boom)
+    assert serve.route_hint("qualquer coisa", _ctx(tmp_path)) == ""
+
+    monkeypatch.setattr(serve, "_bd", lambda *a, **kw: (0, ""))
+    monkeypatch.setattr(
+        serve, "_http_post", lambda url, payload, timeout_s: (200, json.dumps({"choices": [{"message": {"content": "ok"}}]}))
+    )
+    assert serve.handle_message("oi", _ctx(tmp_path)) == "ok"
+
+
+def test_chat_tenta_segundo_nome_de_modelo_em_4xx(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = _ctx(tmp_path)
+    # Bug conhecido documentado em `chat_model_candidates`: `DEFAULT_MODEL` do
+    # queue diverge do modelo do t0 em `config/models.toml` — os dois vivos
+    # no repo real garantem >= 2 candidatos aqui, sem fake nenhum.
+    candidatos = serve.chat_model_candidates()
+    assert len(candidatos) >= 2
+
+    respostas = iter(
+        [(404, ""), (200, json.dumps({"choices": [{"message": {"content": "resposta do modelo"}}]}))]
+    )
+    chamados: list[str] = []
+
+    def fake_http_post(url: str, payload: dict, timeout_s: float) -> tuple[int, str]:
+        chamados.append(payload["model"])
+        return next(respostas)
+
+    monkeypatch.setattr(serve, "_http_post", fake_http_post)
+    assert serve.llm_reply("oi", ctx) == "resposta do modelo"
+    assert len(chamados) == 2
+    assert chamados[0] != chamados[1]
+
+    chamados_timeout: list[str] = []
+
+    def fake_http_post_timeout(url: str, payload: dict, timeout_s: float) -> tuple[int, str]:
+        chamados_timeout.append(payload["model"])
+        return 0, ""
+
+    monkeypatch.setattr(serve, "_http_post", fake_http_post_timeout)
+    assert serve.llm_reply("oi", ctx) is None
+    assert len(chamados_timeout) == 1
+
+
+def test_do_pinado_forca_backend_no_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    capturados: list[list[str]] = []
+
+    def fake_popen(argv: list[str], *, cwd: Path, log: Path, env: dict[str, str] | None = None) -> int:
+        capturados.append(argv)
+        return 424242
+
+    monkeypatch.setattr(serve, "_popen", fake_popen)
+
+    ex = serve.Executor(
+        id="harness:haiku", tier="t1", backend="claude_code", run_model="haiku", local=False, label="",
+    )
+    ctx = serve.ServeContext(cwd=tmp_path, executor=ex)
+
+    resp = serve.handle_message("/do conserta o bug", ctx)
+    assert len(capturados) == 1
+    argv = capturados[0]
+    assert "--route" not in argv
+    assert argv[argv.index("--backend") + 1] == "claude_code"
+    assert argv[argv.index("--model") + 1] == "haiku"
+    assert "PAGO" in resp
+    assert "5.00" in resp
+    jobs = serve.list_jobs()
+    assert len(jobs) == 1
+    assert jobs[0]["executor"] == "harness:haiku"
+
+
+def test_do_auto_nao_pina_nada(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    capturados: list[list[str]] = []
+    monkeypatch.setattr(serve, "_popen", lambda argv, **kw: capturados.append(argv) or 424242)
+
+    ctx = _ctx(tmp_path)  # sem executor pinado => auto
+    serve.handle_message("/do conserta o bug", ctx)
+    assert len(capturados) == 1
+    argv = capturados[0]
+    assert "--backend" not in argv
+    assert "--model" not in argv
+    jobs = serve.list_jobs()
+    assert len(jobs) == 1
+    assert jobs[0]["executor"] == "harness"
+
+
+def test_argv_nunca_recebe_texto_do_cliente() -> None:
+    assert serve.resolve_executor("harness:local; rm -rf /") is None
+    assert serve.resolve_executor("../../etc") is None
+    # Acima do teto de tamanho: nem chega a comparar contra o registro.
+    assert serve.resolve_executor("harness:" + "x" * 200) is None
+
+
+def test_comando_models_lista(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_tiers(monkeypatch)
+    ctx = serve.ServeContext(cwd=tmp_path, executor=serve.resolve_executor("harness:local"))
+    resp = serve.handle_message("/models", ctx)
+    assert "harness" in resp
+    assert "→ harness:local" in resp
+    assert "chat + /do" in resp
+
+
+def test_where_mostra_alias_pedido_vs_id_resolvido(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # `requested_model` existe pra isto: o cliente pode pedir o alias oculto
+    # (`harness:t0`), e o que resolve é o id primário (`harness:local`) — se
+    # `/where` colapsasse os dois no mesmo valor essa distinção morreria.
+    _fake_tiers(monkeypatch)
+    ex = serve.resolve_executor("harness:t0")
+    assert ex is not None
+    assert ex.id == "harness:local"
+    ctx = serve.ServeContext(cwd=tmp_path, executor=ex, requested_model="harness:t0")
+    resp = serve.handle_message("/where", ctx)
+    assert "executor pedido: harness:t0 → harness:local" in resp
