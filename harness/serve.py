@@ -24,11 +24,21 @@ destrancada.
 
 A segurança do módulo é estrutural, não é uma checagem: `_COMMANDS` é um
 dict FECHADO de comandos de leitura e de baixo risco (status, ready, queue,
-history, market, new, close, do). Não existe caminho, daqui, para
+history, market, new, close, do, where). Não existe caminho, daqui, para
 `market approve`, `selfapprove approve/undo`, `seal` ou qualquer escrita em
 `config/genome.toml` — quem quer aprovar algo continua tendo de usar a CLI
 na mão. `/do` dispara em segundo plano com `--no-apply`: uma mensagem de
 chat não merge sozinha na branch default.
+
+Workspace do Cursor: o corpo da request injeta um bloco `<user_info>` com o
+path do projeto aberto no editor (`Workspace Path: ...`, às vezes só `Is
+directory a git repo: Yes, at ...`). `extract_workspace`/`validate_workspace`
+puxam esse path de forma determinística — sem MCP, sem "model por projeto"
+(o modelo continua sendo só `harness`) — e só o aceitam contra uma allowlist
+(`~/projects` + repos registrados via `harness init`). Qualquer coisa que não
+bata a allowlist degrada para o comportamento de hoje (canal de controle só
+do harness-core); `/where` mostra exatamente o que foi lido e o veredito,
+porque o formato do prompt do Cursor pode driftar em qualquer update deles.
 """
 
 from __future__ import annotations
@@ -41,13 +51,13 @@ import subprocess
 import sys
 import time
 import uuid
-from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterator, Sequence
+from dataclasses import dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from harness import trust_boundary
+from harness import paths, trust_boundary
 from harness.governor.governor import load_gov
 from harness.ledger import store
 
@@ -72,26 +82,214 @@ BD_TIMEOUT_S = 15.0
 
 JOBS_SUBDIR = ("serve", "jobs")
 
+# --------------------------------------------------------------------------- workspace detection: constantes
+
+USER_INFO_RE = re.compile(r"<user_info>(.*?)</user_info>", re.DOTALL | re.IGNORECASE)
+WORKSPACE_RE = re.compile(r"^\s*Workspace Paths?:\s*(?P<path>[^\n]+?)\s*$", re.MULTILINE | re.IGNORECASE)
+GIT_REPO_RE = re.compile(
+    r"^\s*Is directory a git repo:\s*Yes,?\s*at\s+(?P<path>[^\n]+?)\s*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+USER_QUERY_RE = re.compile(r"<user_query>(.*?)</user_query>", re.DOTALL | re.IGNORECASE)
+SCAN_CHARS_PER_MSG = 20_000  # o bloco user_info é pequeno; teto por mensagem, não por índice
+MAX_BODY_BYTES = 8 * 1024 * 1024  # 100+ mensagens com tool results é entrada de cliente sem teto
+PAYLOAD_TOO_LARGE = 413
+MAX_PATH_CHARS = 4096
+WORKSPACE_ROOTS_ENV = "HARNESS_SERVE_WORKSPACE_ROOTS"
+GIT_TIMEOUT_S = 5.0
+README_NAMES = ("README.md", "README.rst", "README.txt", "AGENTS.md")
+README_MAX_BYTES, README_MAX_LINES, README_MAX_CHARS = 8192, 30, 1200
+TREE_MAX_ENTRIES = 40
+
+
+def default_workspace_roots() -> tuple[Path, ...]:
+    return (Path.home() / "projects",)  # call-time: o teste monkeypatcha HOME
+
+
+@dataclass(frozen=True)
+class Detection:
+    """Resultado de uma tentativa de extrair/validar o workspace do payload
+    do Cursor. `raw` é exatamente o que veio (para o `/where` mostrar o que
+    foi lido, sem reinterpretar); `path`/`project` só existem quando
+    `verdict == "ok"`."""
+
+    raw: str | None
+    path: Path | None
+    verdict: str  # "ok" | "ausente" | "inválido" | "relativo" | "não é diretório" | "fora dos roots"
+    project: str | None
+
 
 @dataclass(frozen=True)
 class ServeContext:
     """Estado pinado no boot do servidor. `cwd` nunca é `Path.cwd()` do
     request — o repo que o `/do` usa é o que estava aberto quando o processo
-    subiu, não o que estiver no ambiente da thread que atende a conexão."""
+    subiu, não o que estiver no ambiente da thread que atende a conexão.
+
+    Por request, `ctx_for_request` pode devolver uma cópia com `cwd` trocado
+    para o workspace detectado no payload do Cursor: `home` guarda o cwd de
+    boot original nesse caso, `project` o nome registrado (se houver) e
+    `detection` o veredito bruto — aceito ou não, sempre presente depois de
+    `ctx_for_request` rodar."""
 
     cwd: Path
     now: Callable[[], float] = field(default=time.time)
+    home: Path | None = None
+    project: str | None = None
+    detection: Detection | None = None
+    workspace_roots: tuple[Path, ...] = ()
+
+
+# --------------------------------------------------------------------------- workspace detection: leitura + validação
+
+
+def message_text(msg: dict) -> str:
+    """Lugar único do shape `content` str-ou-partes do payload OpenAI-like:
+    string vai direto, lista concatena o texto das partes `{"type": "text"}`,
+    qualquer outra coisa vira "" (mensagem sem texto, ex. só tool_calls)."""
+    if not isinstance(msg, dict):
+        return ""
+    content = msg.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"
+        )
+    return ""
+
+
+def user_query_text(raw: str) -> str:
+    """O Cursor embrulha o texto digitado em `<user_query>...</user_query>`
+    (às vezes precedido de `<timestamp>`); sem desembrulhar, `/status` chega
+    aqui como `"<timestamp>...</timestamp>\\n<user_query>\\n/status\\n</user_query>"`
+    e o `startswith("/")` do router nunca bate — bug real, visível pro
+    usuário (todo slash command digitado no Cursor ia parar no LM). Último
+    bloco ganha quando há mais de um; sem tag, passthrough intacto (corpo
+    puro de teste ou cliente não-Cursor)."""
+    matches = USER_QUERY_RE.findall(raw)
+    return matches[-1].strip() if matches else raw
+
+
+def extract_workspace(messages: list[dict]) -> str | None:
+    """Varre TODAS as mensagens em ordem (sem teto de índice — o bloco pode
+    se mover em update do Cursor) atrás de um `<user_info>` com o path do
+    workspace. Primeiro match ganha: só o que está DENTRO do wrapper conta
+    (um "Workspace Path:" solto ou ecoado depois na conversa não é sinal), e
+    a decisão para no primeiro bloco que resolve — isso tira da mesa um path
+    colado/ecoado mais tarde por outra mensagem."""
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        text = message_text(msg)[:SCAN_CHARS_PER_MSG]
+        if "<user_info" not in text.lower():
+            continue
+        for block in USER_INFO_RE.findall(text):
+            m = WORKSPACE_RE.search(block) or GIT_REPO_RE.search(block)
+            if m:
+                return m.group("path")
+    return None
+
+
+def _safe_for_log(raw: str) -> str:
+    """Sem control chars, clipado — o que vai pro stderr não pode carregar
+    escape sequence nem virar log gigante."""
+    cleaned = re.sub(r"[\x00-\x1f\x7f]", "?", raw)
+    return cleaned[:200]
+
+
+def _project_name_for(repo: Path) -> str | None:
+    """Nome registrado em `harness init` cujo repo resolve pro mesmo path, ou
+    None (não registrado, ou registro ilegível — fail-open, isto só
+    enriquece a resposta, nunca decide se o path é aceito)."""
+    try:
+        from harness import projects as harness_projects
+
+        for name, proj in harness_projects.load_projects().items():
+            try:
+                if proj.repo.resolve() == repo:
+                    return name
+            except OSError:
+                continue
+    except Exception:
+        return None
+    return None
+
+
+def allowed_roots(ctx: ServeContext) -> tuple[Path, ...]:
+    """Roots do boot (`ctx.workspace_roots`) mais os repos que o usuário já
+    registrou em `harness init` — um repo registrado explicitamente é
+    confiável mesmo fora de `~/projects`. Registro ausente/ilegível: skip,
+    não derruba a detecção."""
+    roots = list(ctx.workspace_roots)
+    try:
+        from harness import projects as harness_projects
+
+        for proj in harness_projects.load_projects().values():
+            try:
+                roots.append(proj.repo.resolve())
+            except OSError:
+                continue
+    except Exception:
+        pass
+    return tuple(roots)
+
+
+def validate_workspace(raw: str | None, roots: tuple[Path, ...]) -> Detection:
+    """Allowlist, nunca inspeção de string: todo veredito != "ok" devolve
+    `path=None` e a chamada degrada pro comportamento sem workspace. Falha
+    "acionável" (alguém mandou um path e ele não bateu) vira 1 linha no
+    stderr; "ausente" (nenhum `<user_info>` no payload) é o caso normal de
+    qualquer cliente que não é o Cursor e fica calado — `/where` já cobre a
+    visibilidade desse caso sob pedido."""
+    if raw is None:
+        return Detection(raw, None, "ausente", None)
+    if len(raw.strip()) > MAX_PATH_CHARS or "\x00" in raw:
+        print(f"[serve] workspace ignorado (inválido): {_safe_for_log(raw)}", file=sys.stderr)
+        return Detection(raw, None, "inválido", None)
+    p = Path(raw.strip()).expanduser()
+    if not p.is_absolute():
+        print(f"[serve] workspace ignorado (relativo): {_safe_for_log(raw)}", file=sys.stderr)
+        return Detection(raw, None, "relativo", None)
+    # resolve() ANTES do teste de root: colapsa ".." e segue symlink — é isto
+    # que fecha traversal (`{root}/../../etc` ou um symlink pra `/etc` dentro
+    # do root nunca sobrevive ao teste de allowlist abaixo).
+    p = p.resolve()
+    if not p.is_dir():
+        print(f"[serve] workspace ignorado (não é diretório): {_safe_for_log(raw)}", file=sys.stderr)
+        return Detection(raw, None, "não é diretório", None)
+    if not any(p == r or p.is_relative_to(r) for r in roots):
+        print(f"[serve] workspace ignorado (fora dos roots): {_safe_for_log(raw)}", file=sys.stderr)
+        return Detection(raw, None, "fora dos roots", None)
+    return Detection(raw, p, "ok", _project_name_for(p))
+
+
+def ctx_for_request(messages: list[dict], ctx: ServeContext) -> ServeContext:
+    """Detecção por request: `ctx.cwd` de boot nunca muda por conta própria —
+    só uma detecção aceita ("ok") troca `cwd` pro workspace, guardando o cwd
+    de boot em `home`. Qualquer outro veredito só anexa `detection` (pro
+    `/where` e pro roteamento saberem o que aconteceu) e mantém `cwd` como
+    estava."""
+    det = validate_workspace(extract_workspace(messages), allowed_roots(ctx))
+    if det.verdict == "ok" and det.path is not None:
+        return replace(ctx, cwd=det.path, home=ctx.cwd, project=det.project, detection=det)
+    return replace(ctx, detection=det)
 
 
 # --------------------------------------------------------------------------- seams
 
 
-def _bd(*args: str, timeout_s: float = BD_TIMEOUT_S) -> tuple[int, str]:
+def _bd(*args: str, cwd: Path | None = None, timeout_s: float = BD_TIMEOUT_S) -> tuple[int, str]:
     """`bd <args>` → (rc, stdout+stderr). Indireção para o teste trocar por
-    um fake, mesma convenção de `_http_post`/`_http_get` abaixo."""
+    um fake, mesma convenção de `_http_post`/`_http_get` abaixo. `cwd` roda o
+    `bd` no repo do workspace (detectado ou o de boot); `None` herda o cwd do
+    processo do servidor."""
     try:
         proc = subprocess.run(
-            ["bd", *args], capture_output=True, text=True, timeout=timeout_s
+            ["bd", *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            cwd=str(cwd) if cwd else None,
         )
     except FileNotFoundError:
         return 127, ""
@@ -135,10 +333,12 @@ def _http_get(url: str, timeout_s: float) -> tuple[int, str]:
         return 0, ""
 
 
-def _popen(argv: list[str], *, cwd: Path, log: Path) -> int:
+def _popen(argv: list[str], *, cwd: Path, log: Path, env: dict[str, str] | None = None) -> int:
     """Sobe `argv` em segundo plano e devolve o pid. Segue
     `harness/backends/procs.py:191-214`: sessão nova para não deixar filho
-    órfão, log aberto fora do `with` porque vive além desta função."""
+    órfão, log aberto fora do `with` porque vive além desta função. `env`
+    None herda o ambiente do servidor; `dispatch_do` pina config/data
+    absolutos porque o filho roda com `cwd=workspace`, não o checkout."""
     fh = open(log, "w")  # noqa: SIM115
     try:
         proc = subprocess.Popen(
@@ -147,6 +347,7 @@ def _popen(argv: list[str], *, cwd: Path, log: Path) -> int:
             stdout=fh,
             stderr=fh,
             start_new_session=True,
+            env=env,
         )
     finally:
         fh.close()
@@ -194,11 +395,39 @@ def status_text() -> str:
     return "\n".join(linhas)
 
 
-def ready_text(limit: int = 10) -> str:
-    rc, out = _bd("ready")
+def _queue_counts_for(project: str) -> tuple[int, int, int] | None:
+    """`(fila, done, stuck)` do projeto registrado, ou None (não registrado
+    ou registro ilegível) — fail-open, quem chama decide o texto sem
+    contagem."""
+    try:
+        from harness import projects as harness_projects
+
+        proj = harness_projects.load_projects().get(project)
+        if proj is None:
+            return None
+        return harness_projects.queue_counts(proj)
+    except Exception:
+        return None
+
+
+def ready_text(cwd: Path | None = None, *, limit: int = 10, project: str | None = None) -> str:
+    rc, out = _bd("ready", cwd=cwd)
     if rc == 127:
         return "bd não instalado — não dá para listar tarefas"
     if rc != 0:
+        if cwd is not None:
+            # cwd explícito = repo de verdade (workspace detectado ou o
+            # próprio boot do servidor via /ready): "sem beads aqui" é o caso
+            # normal de um repo qualquer sem `.beads/`, não uma falha do
+            # harness-core — nunca "bd ready falhou" pra esse canal.
+            counts = _queue_counts_for(project) if project else None
+            if counts is not None:
+                fila, done, stuck = counts
+                return (
+                    f"sem beads em {cwd} — fila do harness: {fila} pendente(s), "
+                    f"{done} done, {stuck} stuck"
+                )
+            return f"sem beads em {cwd} — fila do harness"
         first = (out.splitlines() or [""])[0]
         return f"bd ready falhou (rc={rc}): {first}"
     return "\n".join(out.splitlines()[:40])
@@ -252,7 +481,8 @@ def jobs_text(limit: int = 5) -> str:
     linhas = [f"jobs: {running} rodando, {len(jobs) - running} terminado(s)"]
     for j in jobs[:limit]:
         estado = "rodando" if job_running(j) else "terminado"
-        linhas.append(f'  {j.get("id")}  {estado}     "{j.get("task")}"  log: {j.get("log")}')
+        projeto = j.get("project") or "harness"
+        linhas.append(f'  [{projeto}] {j.get("id")}  {estado}     "{j.get("task")}"  log: {j.get("log")}')
     return "\n".join(linhas)
 
 
@@ -298,7 +528,13 @@ def dispatch_do(task: str, max_usd: float, ctx: ServeContext) -> dict:
     grava o registro do job. O teto viaja no argv — é o `cmd_do` (fail-closed,
     pré-dispatch) quem o aplica de verdade agora, não só o `pressure.cost_cap_usd`
     do governor (ambiente, fail-open). Não checa teto/concorrência — quem chama
-    (`handle_message`) já decidiu que pode disparar."""
+    (`handle_message`) já decidiu que pode disparar.
+
+    O filho pina `CONFIG_DIR_ENV`/`DATA_DIR_ENV` absolutos no próprio env: sem
+    isso, `paths.config_dir()` (relativo "config" do checkout) resolveria
+    contra `cwd=ctx.cwd` (o workspace, não o checkout) e `pin_home_paths()`
+    acabaria escrevendo em `~/.harness/config/projects.toml` — registro
+    diferente do que o servidor está usando, re-registro silencioso."""
     jid = uuid.uuid4().hex[:8]
     d = jobs_dir()
     d.mkdir(parents=True, exist_ok=True)
@@ -313,12 +549,18 @@ def dispatch_do(task: str, max_usd: float, ctx: ServeContext) -> dict:
         "--max-usd",
         f"{max_usd:.2f}",
     ]
-    pid = _popen(argv, cwd=ctx.cwd, log=log)
+    env = {
+        **os.environ,
+        paths.CONFIG_DIR_ENV: str(paths.config_dir().resolve()),
+        paths.DATA_DIR_ENV: str(store.data_dir().resolve()),
+    }
+    pid = _popen(argv, cwd=ctx.cwd, log=log, env=env)
     record = {
         "id": jid,
         "pid": pid,
         "task": task,
         "cwd": str(ctx.cwd),
+        "project": ctx.project,
         "log": str(log),
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ctx.now())),
         "max_usd": max_usd,
@@ -326,6 +568,159 @@ def dispatch_do(task: str, max_usd: float, ctx: ServeContext) -> dict:
     }
     (d / f"{jid}.json").write_text(json.dumps(record), encoding="utf-8")
     return record
+
+
+# --------------------------------------------------------------------------- leitores de repo arbitrário
+
+
+def _git(repo: Path, *args: str, timeout_s: float = GIT_TIMEOUT_S) -> tuple[int, str]:
+    """`git -C <repo> <args>` → (rc, stdout+stderr). Argv fixo, nunca shell —
+    mesma convenção de `_bd` acima, mas para um repo qualquer (o workspace
+    detectado), não o cwd do servidor."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+    except FileNotFoundError:
+        return 127, ""
+    except subprocess.TimeoutExpired:
+        return 124, ""
+    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+
+
+def git_state_text(repo: Path) -> str:
+    """Blocos independentes, cada um fail-open (doutrina de `status_text`):
+    branch, HEAD, sujeira, últimos commits, entregas do harness. Repo
+    não-git vira uma linha só — isto é o que o Cursor NÃO vê, não um `git
+    status` completo."""
+    rc, _ = _git(repo, "rev-parse", "--is-inside-work-tree")
+    if rc != 0:
+        return "não é repo git"
+    linhas: list[str] = []
+    rc, out = _git(repo, "branch", "--show-current")
+    linhas.append(f"branch: {out.strip() or '(detached)'}" if rc == 0 else "branch: (indisponível)")
+    rc, out = _git(repo, "log", "-1", "--date=short", "--pretty=%h %ad %s")
+    linhas.append(f"HEAD: {out.strip()}" if rc == 0 and out.strip() else "HEAD: (indisponível)")
+    rc, out = _git(repo, "status", "--porcelain")
+    if rc == 0:
+        arquivos = out.splitlines()
+        linhas.append(f"sujo: {len(arquivos)} arquivo(s)")
+        linhas.extend(arquivos[:15])
+    else:
+        linhas.append("sujo: (indisponível)")
+    rc, out = _git(repo, "log", "-5", "--oneline", "--no-decorate")
+    linhas.append("últimos commits:")
+    linhas.extend(out.splitlines() if rc == 0 else ["(indisponível)"])
+    rc, out = _git(repo, "branch", "--list", "harness/*")
+    entregas = [b.strip().lstrip("* ").strip() for b in out.splitlines() if b.strip()] if rc == 0 else []
+    linhas.append("entregas do harness:")
+    linhas.extend(entregas[-5:] if entregas else ["(nenhuma)"])
+    return "\n".join(linhas)
+
+
+def readme_head(repo: Path) -> str:
+    """Primeiro README que existir, bytes-bounded: 8KiB lidos, decode
+    tolerante, 30 primeiras linhas, clipado em 1200 chars. `is_relative_to`
+    depois do `resolve()` fecha escape por symlink (`repo` já chega
+    resolvido, é o `det.path` da validação)."""
+    for name in README_NAMES:
+        p = repo / name
+        try:
+            if not p.is_file() or not p.resolve().is_relative_to(repo):
+                continue
+            texto = p.read_bytes()[:README_MAX_BYTES].decode("utf-8", "replace")
+            linhas = texto.splitlines()[:README_MAX_LINES]
+            return _clip("\n".join(linhas), README_MAX_CHARS)
+        except OSError:
+            return ""
+    return ""
+
+
+def tree_head(repo: Path) -> str:
+    """Só `repo.iterdir()`, sem recursão — o modelo do Cursor já enxerga os
+    arquivos do workspace; isto é um resumo raso do que ele NÃO vê, não uma
+    busca de arquivo."""
+    try:
+        entradas = sorted(repo.iterdir(), key=lambda p: p.name)
+    except OSError:
+        return "(indisponível)"
+    nomes = [
+        f"{p.name}/" if p.is_dir() else p.name
+        for p in entradas
+        if not p.name.startswith(".") or p.name in (".beads", ".harness")
+    ]
+    if len(nomes) > TREE_MAX_ENTRIES:
+        nomes = [*nomes[:TREE_MAX_ENTRIES], "…"]
+    return ", ".join(nomes)
+
+
+def _project_section(det: Detection) -> str:
+    """Fila, marcos e custo acumulado do projeto registrado — só chamado
+    quando `det.project` está setado; sem registro não há nada aqui pra
+    somar."""
+    linhas: list[str] = []
+    try:
+        from harness import projects as harness_projects
+
+        proj = harness_projects.load_projects().get(det.project)
+        if proj is None:
+            linhas.append("fila do projeto: (não registrado)")
+        else:
+            fila, done, stuck = harness_projects.queue_counts(proj)
+            linhas.append(f"fila do projeto: {fila} pendente(s), {done} done, {stuck} stuck")
+            for nome, feitas, total in harness_projects.milestone_progress(proj)[:8]:
+                linhas.append(f"  marco {nome}: {feitas}/{total}")
+    except Exception:
+        linhas.append("fila do projeto: (indisponível)")
+    try:
+        if store.db_path().is_file():
+            hist = store.history(project=det.project, limit=100_000)
+            usd = sum(r.cost_usd or 0.0 for r in hist)
+            linhas.append(f"runs={len(hist)} usd={usd:.2f}")
+    except Exception:
+        linhas.append("runs: (indisponível)")
+    return "\n".join(linhas)
+
+
+def _jobs_for_workspace(det: Detection) -> str:
+    """Jobs disparados NESTE workspace (cwd do record == repo detectado), até
+    3 — `jobs_text()` já cobre o panorama global de todos os workspaces."""
+    jobs = [j for j in list_jobs() if j.get("cwd") == str(det.path)][:3]
+    if not jobs:
+        return "jobs neste workspace: nenhum"
+    linhas = ["jobs neste workspace:"]
+    for j in jobs:
+        estado = "rodando" if job_running(j) else "terminado"
+        linhas.append(f'  {j.get("id")}  {estado}  "{j.get("task")}"')
+    return "\n".join(linhas)
+
+
+def workspace_state_text(det: Detection) -> str:
+    """O que o modelo do Cursor NÃO vê: git/README/árvore do repo detectado,
+    fila do harness se registrado, jobs disparados nele. Sem árvore
+    recursiva, sem trecho de fonte, sem busca de arquivo — isso o editor já
+    mostra. Seções independentes, cada uma em try/except (doutrina de
+    `status_text`): uma falhando não derruba as outras."""
+    assert det.path is not None
+    secoes: list[Callable[[], str]] = [
+        lambda: f"projeto: {det.project or '(não registrado no harness)'} · repo: {det.path}",
+        lambda: git_state_text(det.path),  # type: ignore[arg-type]
+        lambda: f"arquivos na raiz: {tree_head(det.path)}",  # type: ignore[arg-type]
+        lambda: "README:\n" + readme_head(det.path),  # type: ignore[arg-type]
+    ]
+    if det.project:
+        secoes.append(lambda: _project_section(det))
+    secoes.append(lambda: _jobs_for_workspace(det))
+    partes = []
+    for fn in secoes:
+        try:
+            partes.append(_clip(fn()))
+        except Exception:
+            partes.append("(indisponível)")
+    return "\n\n".join(partes)
 
 
 # --------------------------------------------------------------------------- LLM path
@@ -349,28 +744,68 @@ def llm_available() -> bool:
     return status == 200
 
 
-def system_prompt(cwd: Path) -> str:
+def system_prompt(cwd: Path, detection: Detection | None = None) -> str:
+    if detection is None or detection.path is None:
+        # texto de hoje, byte-idêntico: nenhum workspace do Cursor foi
+        # aceito nesta request (inclui quem ainda chama `system_prompt(cwd)`
+        # com um argumento só).
+        base = (
+            "Você é o harness, o agente de engenharia que roda na máquina do Renan.\n"
+            f"Plugado em {cwd} — você é o canal de controle SÓ deste repo (harness-core);\n"
+            "não enxerga o projeto/workspace aberto no editor do usuário. Se perguntarem\n"
+            'sobre "este projeto"/"meu projeto"/o código aberto e o contexto sugerir que\n'
+            "não é este repo, diga que não vê o workspace do editor e aponte os comandos\n"
+            "com barra abaixo ou os modelos nativos do Cursor — nunca chute sobre outro\n"
+            "projeto.\n"
+            "Responda em português, curto (no máximo 8 linhas). Nesta conversa você NÃO\n"
+            "executa nada: para agir, o usuário usa os comandos com barra listados abaixo.\n\n"
+            f"{HELP}"
+        )
+        state = _clip(status_text())
+        ready = _clip(ready_text())
+        block = trust_boundary.build_untrusted_block({"estado": state, "tarefas": ready})
+        if block is not None:
+            return f"{base}\n\n{block}"
+        if not trust_boundary.enabled():
+            extra = "\n\n".join(
+                f"## {nome}\n{trust_boundary.sanitize(txt)}"
+                for nome, txt in (("estado", state), ("tarefas", ready))
+                if txt.strip()
+            )
+            return f"{base}\n\n{extra}" if extra else base
+        return base
+
+    # Workspace detectado: persona trocada — o modelo sabe que está falando
+    # do projeto aberto no Cursor, não do harness-core. `status_text()`
+    # (doctor, auto-aprovação, fila de aprovação — tudo estado do
+    # harness-core) fica de fora deste ramo de propósito.
+    det = detection
+    frase = (
+        f"Você está falando do projeto aberto no Cursor: {det.path} "
+        f"({det.project or 'ainda não registrado no harness'}). /do, /ready, /new e "
+        "/close valem NESTE repo; /queue, /history e /market são globais do harness."
+    )
+    try:
+        n_rodando = sum(1 for j in list_jobs() if job_running(j))
+        jobs_linha = f"\nharness: {n_rodando} job(s) rodando"
+    except Exception:
+        jobs_linha = ""
     base = (
-        "Você é o harness, o agente de engenharia que roda na máquina do Renan.\n"
-        f"Plugado em {cwd} — você é o canal de controle SÓ deste repo (harness-core);\n"
-        "não enxerga o projeto/workspace aberto no editor do usuário. Se perguntarem\n"
-        'sobre "este projeto"/"meu projeto"/o código aberto e o contexto sugerir que\n'
-        "não é este repo, diga que não vê o workspace do editor e aponte os comandos\n"
-        "com barra abaixo ou os modelos nativos do Cursor — nunca chute sobre outro\n"
-        "projeto.\n"
+        "Você é o harness, mas nesta conversa o contexto é outro projeto —\n"
+        f"{frase}\n"
         "Responda em português, curto (no máximo 8 linhas). Nesta conversa você NÃO\n"
         "executa nada: para agir, o usuário usa os comandos com barra listados abaixo.\n\n"
-        f"{HELP}"
+        f"{HELP}{jobs_linha}"
     )
-    state = _clip(status_text())
-    ready = _clip(ready_text())
-    block = trust_boundary.build_untrusted_block({"estado": state, "tarefas": ready})
+    state = _clip(workspace_state_text(det))
+    ready = _clip(ready_text(det.path, project=det.project))
+    block = trust_boundary.build_untrusted_block({"projeto": state, "tarefas": ready})
     if block is not None:
         return f"{base}\n\n{block}"
     if not trust_boundary.enabled():
         extra = "\n\n".join(
             f"## {nome}\n{trust_boundary.sanitize(txt)}"
-            for nome, txt in (("estado", state), ("tarefas", ready))
+            for nome, txt in (("projeto", state), ("tarefas", ready))
             if txt.strip()
         )
         return f"{base}\n\n{extra}" if extra else base
@@ -383,12 +818,12 @@ def _clip(text: str, limit: int = STATE_MAX_CHARS) -> str:
     return text[:limit] + "\n… (cortado)"
 
 
-def llm_reply(text: str, cwd: Path) -> str | None:
+def llm_reply(text: str, ctx: ServeContext) -> str | None:
     model = str(_chat_model()).removeprefix(OPENAI_PREFIX)
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": system_prompt(cwd)},
+            {"role": "system", "content": system_prompt(ctx.cwd, ctx.detection)},
             {"role": "user", "content": text},
         ],
         "temperature": 0.2,
@@ -420,7 +855,8 @@ comandos do harness:
   /new <título>                — cria tarefa (bd create)
   /close <id>                  — fecha tarefa (bd close)
   /do <pedido> [--max-usd N]   — roda `harness do` em segundo plano (teto 5.00)
-  /help                        — esta lista
+  /where                        — workspace detectado no payload do Cursor (raw + veredito)
+  /help                         — esta lista
 texto sem barra vai para o modelo local (LM Studio, porta 1234).
 """
 
@@ -429,53 +865,74 @@ def _cmd_help(_arg: str, _ctx: ServeContext) -> str:
     return HELP
 
 
-def _cmd_status(_arg: str, _ctx: ServeContext) -> str:
+def _cmd_status(_arg: str, ctx: ServeContext) -> str:
+    det = ctx.detection
+    if det is not None and det.path is not None:
+        return f"{workspace_state_text(det)}\n\n{jobs_text()}"
     return status_text()
 
 
-def _cmd_ready(_arg: str, _ctx: ServeContext) -> str:
-    return ready_text()
+def _cmd_ready(_arg: str, ctx: ServeContext) -> str:
+    return ready_text(ctx.cwd, project=ctx.project)
 
 
-def _cmd_queue(_arg: str, _ctx: ServeContext) -> str:
-    return sa_queue_text()
+def _global_prefix(ctx: ServeContext, text: str) -> str:
+    """/queue, /history e /market são globais do harness-core mesmo com um
+    workspace detectado — o prefixo deixa isso explícito pra não parecer que
+    a fila é a do projeto aberto no Cursor."""
+    det = ctx.detection
+    if det is not None and det.path is not None:
+        return f"(harness-core — global)\n{text}"
+    return text
 
 
-def _cmd_history(_arg: str, _ctx: ServeContext) -> str:
-    return sa_history_text()
+def _cmd_queue(_arg: str, ctx: ServeContext) -> str:
+    return _global_prefix(ctx, sa_queue_text())
 
 
-def _cmd_market(arg: str, _ctx: ServeContext) -> str:
+def _cmd_history(_arg: str, ctx: ServeContext) -> str:
+    return _global_prefix(ctx, sa_history_text())
+
+
+def _cmd_market(arg: str, ctx: ServeContext) -> str:
     term = arg.strip()
     if not term:
         return "uso: /market <termo>"
-    return market_text(term)
+    return _global_prefix(ctx, market_text(term))
 
 
-def _cmd_new(arg: str, _ctx: ServeContext) -> str:
+def _workspace_prefix(ctx: ServeContext, text: str) -> str:
+    det = ctx.detection
+    if det is not None and det.path is not None:
+        nome = det.project or det.path.name
+        return f"[{nome}] {text}"
+    return text
+
+
+def _cmd_new(arg: str, ctx: ServeContext) -> str:
     title = arg.strip()
     if not title:
         return "uso: /new <título>"
-    rc, out = _bd("create", title)
+    rc, out = _bd("create", title, cwd=ctx.cwd)
     if rc == 127:
         return "bd não instalado — não dá para criar tarefa"
     first = (out.splitlines() or [""])[0]
     if rc != 0:
         return f"bd create falhou (rc={rc}): {first}"
-    return f"criada: {first}"
+    return _workspace_prefix(ctx, f"criada: {first}")
 
 
-def _cmd_close(arg: str, _ctx: ServeContext) -> str:
+def _cmd_close(arg: str, ctx: ServeContext) -> str:
     jid = arg.strip()
     if not jid:
         return "uso: /close <id>"
-    rc, out = _bd("close", jid)
+    rc, out = _bd("close", jid, cwd=ctx.cwd)
     if rc == 127:
         return "bd não instalado — não dá para fechar tarefa"
     first = (out.splitlines() or [""])[0]
     if rc != 0:
         return f"bd close falhou (rc={rc}): {first}"
-    return f"fechada: {first}"
+    return _workspace_prefix(ctx, f"fechada: {first}")
 
 
 _MAX_USD_RE = re.compile(r"--max-usd\s+(\S+)")
@@ -512,12 +969,42 @@ def _cmd_do(arg: str, ctx: ServeContext) -> str:
     cap = load_gov().cost_cap_usd
     extra = f" · teto ambiente do governor: ${cap:.2f}" if cap > 0 else ""
     teto_linha = f"teto deste run: ${max_usd:.2f} (--max-usd, vale para todas as tentativas){extra}"
-    return (
+    resp = (
         f"job {record['id']} iniciado em {ctx.cwd}\n"
         f"pedido: {task}\n"
         f"{teto_linha}\n"
         "--no-apply: o resultado fica na branch de entrega; nada é mergeado sozinho\n"
         f"acompanhe com /status · log: {record['log']}"
+    )
+    det = ctx.detection
+    if det is not None and det.path is not None:
+        projeto_linha = (
+            f"projeto: {det.project}"
+            if det.project
+            else "projeto: não registrado — o harness registra na primeira entrega"
+        )
+        resp = f"{resp}\n{projeto_linha}"
+    return resp
+
+
+def _cmd_where(_arg: str, ctx: ServeContext) -> str:
+    """Superfície de aceite da detecção inteira: mostra exatamente o que foi
+    lido do payload, o veredito, as roots ativas e onde o `/do` rodaria —
+    para o drift do formato do Cursor ficar visível em vez de silencioso."""
+    det = ctx.detection
+    raw = det.raw if det is not None else None
+    veredito = det.verdict if det is not None else "ausente"
+    roots = allowed_roots(ctx)
+    roots_txt = ", ".join(str(r) for r in roots) if roots else "(nenhuma)"
+    nome = det.project if det is not None and det.project else "não registrado"
+    return "\n".join(
+        [
+            f"payload extraído: {raw if raw is not None else 'nenhum <user_info> no payload'}",
+            f"veredito: {veredito}",
+            f"roots permitidas: {roots_txt}",
+            f"projeto: {nome}",
+            f"o /do rodaria em: {ctx.cwd}",
+        ]
     )
 
 
@@ -531,6 +1018,7 @@ _COMMANDS: dict[str, Callable[[str, ServeContext], str]] = {
     "new": _cmd_new,
     "close": _cmd_close,
     "do": _cmd_do,
+    "where": _cmd_where,
 }
 
 
@@ -544,7 +1032,7 @@ def handle_message(text: str, ctx: ServeContext) -> str:
         if handler is None:
             return f"comando desconhecido: /{name}\n\n{HELP}"
         return handler(arg, ctx)
-    reply = llm_reply(text, ctx.cwd)
+    reply = llm_reply(text, ctx)
     if reply is None:
         return (
             f"LM Studio não respondeu em {llm_base_url()} — sem modelo local eu só "
@@ -554,20 +1042,15 @@ def handle_message(text: str, ctx: ServeContext) -> str:
 
 
 def last_user_text(messages: list[dict]) -> str:
+    """Última mensagem `role=="user"`, com o shape str-ou-partes resolvido
+    por `message_text` e o `<user_query>` do Cursor desembrulhado por
+    `user_query_text` — sem isso todo slash command digitado no Cursor chega
+    embrulhado em `<timestamp>...</timestamp>\\n<user_query>\\n/status\\n</user_query>`
+    e o `startswith("/")` do router nunca bate."""
     for msg in reversed(messages):
         if not isinstance(msg, dict) or msg.get("role") != "user":
             continue
-        content = msg.get("content")
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            parts = [
-                p.get("text", "")
-                for p in content
-                if isinstance(p, dict) and p.get("type") == "text"
-            ]
-            return "".join(parts)
-        return ""
+        return user_query_text(message_text(msg))
     return ""
 
 
@@ -716,8 +1199,16 @@ class _Handler(BaseHTTPRequestHandler):
         if path not in ("/v1/chat/completions", "/chat/completions"):
             self._error(404, f"rota desconhecida: {self.path}")
             return
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > MAX_BODY_BYTES:
+            # corpo nunca é lido: 100+ mensagens com tool result é entrada de
+            # cliente sem teto, e keep-alive não pode herdar o framing de
+            # quem mandou um corpo gigante.
+            self.close_connection = True
+            self._error(PAYLOAD_TOO_LARGE, f"corpo maior que {MAX_BODY_BYTES} bytes")
+            return
         try:
-            raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            raw = self.rfile.read(length)
             body = json.loads(raw or b"{}")
         except (ValueError, OSError) as exc:
             self._error(400, f"corpo inválido: {exc}")
@@ -725,7 +1216,12 @@ class _Handler(BaseHTTPRequestHandler):
         if not isinstance(body, dict):
             self._error(400, "corpo precisa ser um objeto JSON")
             return
-        text = handle_message(last_user_text(body.get("messages") or []), self.ctx)
+        # `model`, `tools`, `stream_options` seguem ignorados — non-goals:
+        # nunca emitimos tool_calls nem usage chunk, e o Cursor aceita numa
+        # boa (não é gramática que ele exige para funcionar).
+        messages = body.get("messages") or []
+        req_ctx = ctx_for_request(messages, self.ctx)
+        text = handle_message(last_user_text(messages), req_ctx)
         cid = new_id()
         created = int(time.time())
         if bool(body.get("stream")):
@@ -765,6 +1261,28 @@ class _Handler(BaseHTTPRequestHandler):
         pass  # silêncio: quem quer log é quem sobe o processo, não o handler
 
 
+def _boot_workspace_roots(raw: Sequence[str | Path] | None) -> tuple[Path, ...]:
+    """Precedência param CLI (`--workspace-root`, repetível) > env
+    `HARNESS_SERVE_WORKSPACE_ROOTS` (split `os.pathsep`) > `default_workspace_roots()`.
+    Cada candidato `expanduser().resolve()`, só quem sobrevive `is_dir()`
+    entra na tupla — uma root que não existe não trava o boot, só fica fora
+    da allowlist."""
+    if raw:
+        candidatos: list[str | Path] = list(raw)
+    else:
+        env = os.environ.get(WORKSPACE_ROOTS_ENV)
+        candidatos = env.split(os.pathsep) if env else list(default_workspace_roots())
+    roots: list[Path] = []
+    for c in candidatos:
+        try:
+            p = Path(c).expanduser().resolve()
+        except OSError:
+            continue
+        if p.is_dir():
+            roots.append(p)
+    return tuple(roots)
+
+
 def serve(
     port: int = DEFAULT_PORT,
     host: str = DEFAULT_HOST,
@@ -773,14 +1291,22 @@ def serve(
     on_bind: Callable[[int], None] | None = None,
     max_requests: int | None = None,
     api_key: str | None = None,
+    workspace_roots: Sequence[str | Path] | None = None,
 ) -> None:
     # Fail-closed do webhook: fora do loopback, key é obrigatória. Loopback
     # sem key segue exatamente como hoje — sem auth nenhuma.
     require_auth = bool(api_key) or not is_loopback(host)
     if require_auth and not api_key:
         print(NO_KEY_HELP, file=sys.stderr)
+    roots = _boot_workspace_roots(workspace_roots)
+    print(
+        f"[serve] workspace roots: {', '.join(str(r) for r in roots) or '(nenhuma)'}",
+        file=sys.stderr,
+    )
     server = ThreadingHTTPServer((host, port), _Handler)
-    server.ctx = ServeContext(cwd=Path(cwd or Path.cwd()).resolve())  # type: ignore[attr-defined]
+    server.ctx = ServeContext(  # type: ignore[attr-defined]
+        cwd=Path(cwd or Path.cwd()).resolve(), workspace_roots=roots
+    )
     server.api_key = api_key  # type: ignore[attr-defined]
     server.require_auth = require_auth  # type: ignore[attr-defined]
     try:

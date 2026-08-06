@@ -2192,13 +2192,18 @@ def cmd_serve(args: argparse.Namespace) -> int:
         )
     api_key = args.api_key or (os.environ.get(API_KEY_ENV) or "").strip() or None
     cwd = Path.cwd()
+    roots = args.workspace_root
     try:
         serve_openai(
             args.port,
             args.host,
             cwd=cwd,
             api_key=api_key,
-            on_bind=lambda p: print(f"[serve] http://{args.host}:{p}/v1 · modelo 'harness' · repo {cwd}"),
+            workspace_roots=roots,
+            on_bind=lambda p: print(
+                f"[serve] http://{args.host}:{p}/v1 · modelo 'harness' · repo {cwd} · "
+                f"roots: {roots or 'default'}"
+            ),
         )
     except KeyboardInterrupt:
         print("[serve] parado", file=sys.stderr)
@@ -3105,6 +3110,14 @@ def build_parser() -> argparse.ArgumentParser:
         dest="api_key",
         help="exige Authorization: Bearer <key> em toda request (fallback: env HARNESS_SERVE_KEY; "
         "obrigatória fora do loopback — sem key aí o servidor sobe recusando tudo com 403)",
+    )
+    srv.add_argument(
+        "--workspace-root",
+        action="append",
+        default=None,
+        dest="workspace_root",
+        help="raiz permitida para o workspace detectado no payload (repetível; default ~/projects + "
+        "repos registrados)",
     )
     srv.set_defaults(func=cmd_serve)
 

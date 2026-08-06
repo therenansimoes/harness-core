@@ -7,6 +7,7 @@ mesma convenção do webhook (`tests/test_triggers.py`).
 from __future__ import annotations
 
 import json
+import subprocess
 import threading
 import urllib.error
 import urllib.request
@@ -23,7 +24,12 @@ def _ctx(cwd: Path) -> serve.ServeContext:
     return serve.ServeContext(cwd=cwd)
 
 
-def _serve(cwd: Path, max_requests: int, api_key: str | None = None) -> tuple[int, threading.Thread]:
+def _serve(
+    cwd: Path,
+    max_requests: int,
+    api_key: str | None = None,
+    workspace_roots: tuple[Path, ...] | None = None,
+) -> tuple[int, threading.Thread]:
     bound: list[int] = []
     ready = threading.Event()
 
@@ -40,12 +46,63 @@ def _serve(cwd: Path, max_requests: int, api_key: str | None = None) -> tuple[in
             "on_bind": on_bind,
             "max_requests": max_requests,
             "api_key": api_key,
+            "workspace_roots": workspace_roots,
         },
         daemon=True,
     )
     t.start()
     assert ready.wait(5)
     return bound[0], t
+
+
+def _git(repo: Path, *args: str) -> str:
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout
+
+
+def _git_repo(tmp_path: Path, name: str, *, marker: str | None = None) -> Path:
+    """Repo git de verdade: init + 1 commit + README.md com marcador único —
+    o marcador é o que os testes de `system_prompt` procuram no bloco
+    untrusted para provar que o texto do repo detectado chegou lá."""
+    marker = marker or f"MARCADOR_UNICO_{name.upper()}"
+    repo = tmp_path / name
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "README.md").write_text(f"# {name}\n\n{marker}\n", encoding="utf-8")
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-q", "-m", "seed")
+    return repo.resolve()
+
+
+def _cursor_body(
+    ws: Path,
+    query: str,
+    *,
+    pos: int = 1,
+    parts: bool = False,
+    extra: list[dict] | None = None,
+) -> dict:
+    """Shape capturado de verdade: `messages[0]` é o system do Cursor, o
+    bloco `<user_info>` (Workspace Path + Is directory a git repo) entra no
+    índice `pos` atrás de fillers, e a última mensagem `user` é o que o
+    usuário digitou, embrulhado em `<timestamp>...</timestamp>\\n<user_query>`
+    — como string ou como partes, conforme `parts`."""
+    messages: list[dict] = [{"role": "system", "content": "system prompt do Cursor"}]
+    while len(messages) < pos:
+        messages.append({"role": "assistant", "content": f"filler {len(messages)}"})
+    user_info = f"<user_info>\nWorkspace Path: {ws}\nIs directory a git repo: Yes, at {ws}\n</user_info>"
+    messages.insert(pos, {"role": "user", "content": user_info})
+    if extra:
+        messages.extend(extra)
+    tail = f"<timestamp>x</timestamp>\n<user_query>\n{query}\n</user_query>"
+    content = [{"type": "text", "text": tail}] if parts else tail
+    messages.append({"role": "user", "content": content})
+    return {"model": "harness", "messages": messages}
 
 
 def _get(port: int, path: str, headers: dict[str, str] | None = None) -> tuple[int, dict]:
@@ -227,9 +284,16 @@ def test_ready_rc_variantes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(serve, "_bd", lambda *a, **kw: (127, ""))
     assert "bd não instalado" in serve.handle_message("/ready", ctx)
 
+    # rc!=0 com cwd explícito (é o que /ready sempre passa agora, detectado ou
+    # não — `cwd is not None` é o sinal que diferencia esse canal do
+    # `system_prompt()` sem detecção, que continua chamando `ready_text()`
+    # sem cwd e preserva a mensagem "bd ready falhou" de hoje) nunca mais cai
+    # em "bd ready falhou": vira o texto amigável de fila do harness.
     monkeypatch.setattr(serve, "_bd", lambda *a, **kw: (1, "boom\nmais"))
     resp = serve.handle_message("/ready", ctx)
-    assert "bd ready falhou (rc=1)" in resp
+    assert "sem beads em" in resp
+    assert "fila do harness" in resp
+    assert "rc=1" not in resp
 
 
 def test_new_e_close_argv_exato(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -270,7 +334,7 @@ def test_do_ok_dispara_um_job(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     ctx = _ctx(tmp_path)
     capturados: list[list[str]] = []
 
-    def fake_popen(argv: list[str], *, cwd: Path, log: Path) -> int:
+    def fake_popen(argv: list[str], *, cwd: Path, log: Path, env: dict[str, str] | None = None) -> int:
         capturados.append(argv)
         return 424242
 
@@ -382,6 +446,7 @@ def test_fonte_nao_tem_caminho_de_escrita_perigosa() -> None:
         "new",
         "close",
         "do",
+        "where",
     }
 
 
@@ -399,3 +464,378 @@ def test_parser_wiring() -> None:
 
     nsk = p.parse_args(["serve", "--api-key", "segredo"])
     assert nsk.api_key == "segredo"
+
+    nsw = p.parse_args(["serve", "--workspace-root", "/a", "--workspace-root", "/b"])
+    assert nsw.workspace_root == ["/a", "/b"]
+
+    nswd = p.parse_args(["serve"])
+    assert nswd.workspace_root is None
+
+
+# --------------------------------------------------------------------------- workspace do Cursor: extração
+
+
+def test_extrai_workspace_content_string(tmp_path: Path) -> None:
+    ws = tmp_path / "meurepo"
+    ws.mkdir()
+    msg = {"role": "user", "content": f"<user_info>\nWorkspace Path: {ws}\n</user_info>"}
+    assert serve.extract_workspace([msg]) == str(ws)
+
+
+def test_extrai_workspace_content_em_partes(tmp_path: Path) -> None:
+    ws = tmp_path / "meurepo"
+    ws.mkdir()
+    msg = {
+        "role": "user",
+        "content": [{"type": "text", "text": f"<user_info>\nWorkspace Path: {ws}\n</user_info>"}],
+    }
+    assert serve.extract_workspace([msg]) == str(ws)
+
+
+def test_user_info_em_posicao_tardia_ainda_detecta(tmp_path: Path) -> None:
+    ws = tmp_path / "meurepo"
+    ws.mkdir()
+    fillers = [{"role": "assistant", "content": f"filler {i}"} for i in range(9)]
+    msg = {"role": "user", "content": f"<user_info>\nWorkspace Path: {ws}\n</user_info>"}
+    messages = [*fillers, msg]
+    assert len(messages) == 10  # bloco no índice 9, atrás de 9 fillers
+    assert serve.extract_workspace(messages) == str(ws)
+
+
+def test_extrai_workspace_fallback_is_git_repo(tmp_path: Path) -> None:
+    ws = tmp_path / "meurepo"
+    ws.mkdir()
+    msg = {
+        "role": "user",
+        "content": f"<user_info>\nIs directory a git repo: Yes, at {ws}\n</user_info>",
+    }
+    assert serve.extract_workspace([msg]) == str(ws)
+
+
+def test_sem_user_info_detection_ausente() -> None:
+    assert serve.extract_workspace([{"role": "user", "content": "oi, tudo bem?"}]) is None
+    det = serve.validate_workspace(None, ())
+    assert det.verdict == "ausente"
+    assert det.path is None
+
+
+def test_user_info_falso_em_tool_result_nao_e_aceito(tmp_path: Path) -> None:
+    ws = tmp_path / "real"
+    ws.mkdir()
+    # "Workspace Path: /etc" solto num tool result, sem o wrapper <user_info>
+    # — nunca é lido, mesmo com uma mensagem real (com wrapper) na lista.
+    messages = [
+        {"role": "user", "content": f"<user_info>\nWorkspace Path: {ws}\n</user_info>"},
+        {"role": "user", "content": "tool result: Workspace Path: /etc"},
+    ]
+    assert serve.extract_workspace(messages) == str(ws)
+
+    # Com o wrapper, mas fora da allowlist: extraído, porém rejeitado.
+    fora = tmp_path / "fora"
+    fora.mkdir()
+    embrulhado = {"role": "user", "content": f"<user_info>\nWorkspace Path: {fora}\n</user_info>"}
+    raw = serve.extract_workspace([embrulhado])
+    assert raw == str(fora)
+    det = serve.validate_workspace(raw, roots=())
+    assert det.verdict == "fora dos roots"
+    assert det.path is None
+
+
+# --------------------------------------------------------------------------- workspace do Cursor: validação
+
+
+def test_validacao_rejeita_traversal_e_symlink(tmp_path: Path) -> None:
+    root = tmp_path / "roots"
+    root.mkdir()
+    inside = root / "ws"
+    inside.mkdir()
+    roots = (root.resolve(),)
+
+    traversal = f"{root}/../../etc"
+    assert serve.validate_workspace(traversal, roots).verdict != "ok"
+
+    link = inside / "escape"
+    try:
+        link.symlink_to("/etc")
+    except OSError:
+        pytest.skip("symlink não suportado neste ambiente")
+    assert serve.validate_workspace(str(link), roots).verdict != "ok"
+
+
+def test_validacao_rejeita_relativo_inexistente_e_nul(tmp_path: Path) -> None:
+    roots = (tmp_path.resolve(),)
+    assert serve.validate_workspace("projetos/x", roots).verdict == "relativo"
+    assert serve.validate_workspace(str(tmp_path / "nao-existe"), roots).verdict == "não é diretório"
+    assert serve.validate_workspace("\x00", roots).verdict == "inválido"
+
+
+def test_validacao_aceita_repo_registrado_fora_dos_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    from harness.projects import init_project
+
+    repo = _git_repo(tmp_path, "fora")
+    init_project(repo, "fora-proj", queue_dir=tmp_path / "fila")
+
+    outra_root = tmp_path / "nada-a-ver"
+    outra_root.mkdir()
+    ctx = serve.ServeContext(cwd=tmp_path, workspace_roots=(outra_root.resolve(),))
+    roots = serve.allowed_roots(ctx)
+    assert repo in roots
+
+    det = serve.validate_workspace(str(repo), roots)
+    assert det.verdict == "ok"
+    assert det.project == "fora-proj"
+
+
+def test_user_query_desembrulha_ultimo() -> None:
+    embrulhado = "<timestamp>x</timestamp>\n<user_query>\n/status\n</user_query>"
+    assert serve.user_query_text(embrulhado) == "/status"
+
+    dois_blocos = "<user_query>\nprimeiro\n</user_query>\nlixo\n<user_query>\nsegundo\n</user_query>"
+    assert serve.user_query_text(dois_blocos) == "segundo"
+
+    assert serve.user_query_text("/help") == "/help"
+
+
+def test_readme_symlink_fora_do_repo_nao_e_lido(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    ws = tmp_path / "semreadme"
+    ws.mkdir()
+    fora = tmp_path / "segredo.md"
+    fora.write_text("SEGREDO_FORA_DO_REPO\n", encoding="utf-8")
+    try:
+        (ws / "README.md").symlink_to(fora)
+    except OSError:
+        pytest.skip("symlink não suportado neste ambiente")
+    assert "SEGREDO_FORA_DO_REPO" not in serve.readme_head(ws.resolve())
+
+
+# --------------------------------------------------------------------------- workspace do Cursor: roteamento
+
+
+def test_slash_command_do_cursor_roteia(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    ws = _git_repo(tmp_path, "cursorws")
+    port, t = _serve(tmp_path, max_requests=1, workspace_roots=(ws.parent,))
+    status, raw, _ = _post(port, _cursor_body(ws, "/where"))
+    t.join(5)
+    assert status == 200
+    content = json.loads(raw)["choices"][0]["message"]["content"]
+    # este é o bug que este pacote corrige: sem desembrulhar <user_query>, o
+    # "/where" digitado no Cursor nunca batia startswith("/") e caía no LM.
+    assert "LM Studio não respondeu" not in content
+    assert str(ws) in content
+
+
+def test_prompt_detectado_traz_projeto_e_nao_estado_do_harness_core(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.delenv("HARNESS_TRUST_BOUNDARY", raising=False)
+    monkeypatch.setattr(serve, "_bd", lambda *a, **kw: (0, "hc-1 tarefa"))
+    ws = _git_repo(tmp_path, "detectado", marker="MARCADOR_TEST_12")
+
+    det = serve.validate_workspace(str(ws), (ws.parent.resolve(),))
+    assert det.verdict == "ok"
+
+    prompt = serve.system_prompt(tmp_path, det)
+    assert "MARCADOR_TEST_12" in prompt
+    assert str(ws) in prompt
+    # "fila de aprovação" só existe no texto que `status_text()` produz — e
+    # `status_text()` (doctor, auto-aprovação, fila de aprovação do
+    # harness-core) fica de fora do ramo com workspace detectado.
+    assert "fila de aprovação" not in prompt
+
+    base_len = len(serve.HELP) + 300
+    assert len(prompt) <= 2 * serve.STATE_MAX_CHARS + base_len + 500
+
+
+def test_prompt_detectado_em_ambos_os_ramos_do_trust_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(serve, "_bd", lambda *a, **kw: (0, "hc-1 tarefa"))
+    ws = _git_repo(tmp_path, "boundary", marker="MARCADOR_TEST_13")
+    det = serve.validate_workspace(str(ws), (ws.parent.resolve(),))
+    assert det.verdict == "ok"
+
+    monkeypatch.delenv("HARNESS_TRUST_BOUNDARY", raising=False)
+    prompt = serve.system_prompt(tmp_path, det)
+    assert "untrusted_reference_data" in prompt
+    bloco = prompt.split("<untrusted_reference_data>", 1)[1]
+    assert "MARCADOR_TEST_13" in bloco
+
+    monkeypatch.setenv("HARNESS_TRUST_BOUNDARY", "0")
+    prompt0 = serve.system_prompt(tmp_path, det)
+    assert "MARCADOR_TEST_13" in prompt0
+
+
+def test_sem_deteccao_prompt_identico_ao_de_hoje(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(serve, "_bd", lambda *a, **kw: (0, "hc-1 tarefa"))
+    ausente = serve.Detection(None, None, "ausente", None)
+    assert serve.system_prompt(tmp_path) == serve.system_prompt(tmp_path, ausente)
+
+
+def test_do_roda_no_workspace_detectado(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    ws = _git_repo(tmp_path, "do-ws")
+    det = serve.validate_workspace(str(ws), (ws.parent.resolve(),))
+    assert det.verdict == "ok"
+    ctx = serve.ServeContext(cwd=ws, home=tmp_path, project=det.project, detection=det)
+
+    capturados: list[dict] = []
+
+    def fake_popen(argv: list[str], *, cwd: Path, log: Path, env: dict[str, str] | None = None) -> int:
+        capturados.append({"argv": argv, "cwd": cwd})
+        return 999
+
+    monkeypatch.setattr(serve, "_popen", fake_popen)
+
+    resp = serve.handle_message("/do conserta algo", ctx)
+    assert len(capturados) == 1
+    assert capturados[0]["cwd"] == ws
+    assert str(ws) in resp
+    assert "não registrado" in resp  # repo não foi passado por `harness init`
+
+    jobs = list((tmp_path / "data" / "serve" / "jobs").glob("*.json"))
+    assert len(jobs) == 1
+    record = json.loads(jobs[0].read_text())
+    assert record["cwd"] == str(ws)
+    assert record["project"] is None
+
+
+def test_do_sem_deteccao_continua_no_cwd_do_servidor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    ctx = _ctx(tmp_path)
+    capturados: list[Path] = []
+    monkeypatch.setattr(
+        serve,
+        "_popen",
+        lambda argv, *, cwd, log, env=None: capturados.append(cwd) or 1,
+    )
+    resp = serve.handle_message("/do tarefa qualquer", ctx)
+    assert capturados == [tmp_path]
+    assert "projeto:" not in resp
+
+
+def test_dispatch_do_pina_config_e_data_no_filho(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    ctx = _ctx(tmp_path)
+    capturado: dict = {}
+
+    def fake_popen(argv: list[str], *, cwd: Path, log: Path, env: dict[str, str] | None = None) -> int:
+        capturado["env"] = env
+        return 1
+
+    monkeypatch.setattr(serve, "_popen", fake_popen)
+    serve.dispatch_do("tarefa", 1.0, ctx)
+
+    from harness import paths
+    from harness.ledger import store as ledger_store
+
+    assert capturado["env"][paths.CONFIG_DIR_ENV] == str(paths.config_dir().resolve())
+    assert capturado["env"][paths.DATA_DIR_ENV] == str(ledger_store.data_dir().resolve())
+    assert Path(capturado["env"][paths.CONFIG_DIR_ENV]).is_absolute()
+
+
+def test_bd_usa_cwd_do_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    ws = _git_repo(tmp_path, "bd-ws")
+    det = serve.validate_workspace(str(ws), (ws.parent.resolve(),))
+    ctx_ws = serve.ServeContext(cwd=ws, home=tmp_path, project=det.project, detection=det)
+
+    chamadas: list[Path | None] = []
+    monkeypatch.setattr(serve, "_bd", lambda *a, **kw: chamadas.append(kw.get("cwd")) or (0, "ok"))
+
+    serve.handle_message("/ready", ctx_ws)
+    serve.handle_message("/new x", ctx_ws)
+    serve.handle_message("/close id", ctx_ws)
+    assert chamadas == [ws, ws, ws]
+
+    chamadas.clear()
+    serve.handle_message("/ready", _ctx(tmp_path))
+    assert chamadas == [tmp_path]
+
+
+def test_ready_sem_beads_cai_na_fila_do_harness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    ctx = _ctx(tmp_path)
+    monkeypatch.setattr(serve, "_bd", lambda *a, **kw: (1, "no such database"))
+    resp = serve.handle_message("/ready", ctx)
+    assert "fila do harness" in resp
+    assert "rc=1" not in resp
+
+
+def test_globais_seguem_globais(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    ws = _git_repo(tmp_path, "globais-ws")
+    det = serve.validate_workspace(str(ws), (ws.parent.resolve(),))
+    ctx_ws = serve.ServeContext(cwd=ws, home=tmp_path, project=det.project, detection=det)
+
+    resp = serve.handle_message("/queue", ctx_ws)
+    assert resp.startswith("(harness-core — global)")
+    assert str(ws) not in resp
+
+
+def test_where_reporta_verdito_e_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    ws = _git_repo(tmp_path, "where-ws")
+    # Root = só o próprio `ws` (não o pai): um vizinho debaixo do mesmo pai
+    # não pode ficar "dentro" por acidente de fixture.
+    roots = (ws,)
+
+    det_ok = serve.validate_workspace(str(ws), roots)
+    ctx_ok = serve.ServeContext(
+        cwd=ws, home=tmp_path, project=det_ok.project, workspace_roots=roots, detection=det_ok
+    )
+    resp_ok = serve.handle_message("/where", ctx_ok)
+    assert str(ws) in resp_ok
+    assert "veredito: ok" in resp_ok
+
+    fora = tmp_path / "fora-de-tudo"
+    fora.mkdir()
+    det_no = serve.validate_workspace(str(fora), roots)
+    ctx_no = serve.ServeContext(cwd=tmp_path, workspace_roots=roots, detection=det_no)
+    resp_no = serve.handle_message("/where", ctx_no)
+    assert "veredito: fora dos roots" in resp_no
+
+
+def test_corpo_gigante_413(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import http.client
+
+    monkeypatch.setenv("HARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    port, t = _serve(tmp_path, max_requests=1)
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    try:
+        conn.putrequest("POST", "/v1/chat/completions")
+        conn.putheader("Content-Type", "application/json")
+        conn.putheader("Content-Length", str(serve.MAX_BODY_BYTES + 1))
+        conn.endheaders()
+        conn.send(b'{"messages": []}')  # bem menor que o Content-Length anunciado
+        resp = conn.getresponse()
+        status = resp.status
+        resp.read()
+    finally:
+        conn.close()
+    t.join(5)
+    assert status == 413
