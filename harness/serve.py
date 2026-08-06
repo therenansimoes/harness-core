@@ -1410,6 +1410,37 @@ def auth_status(api_key: str | None, require_auth: bool, authorization_header: s
     return None if key_ok(api_key, _bearer(authorization_header)) else UNAUTHORIZED
 
 
+# --------------------------------------------------------------------------- inspeção de requests: --verbose/--debug-dump
+
+DEBUG_DUMP_BODY_MAX_BYTES = 512 * 1024  # teto do corpo gravado no dump — MAX_BODY_BYTES (8MB) é o teto de
+# ACEITAR a request, isto aqui é só pra não deixar o .jsonl de debug crescer sem fim.
+
+
+def _ws_field(ctx: ServeContext) -> str:
+    """Campo `ws=` da linha verbose: nome do diretório quando a detecção deu
+    "ok" — nunca o path inteiro, que vazaria estrutura de disco num log — e o
+    veredito bruto (`ausente`, `fora dos roots`, ...) nos outros casos. Sem
+    `ctx.detection` (rota que não passa por `ctx_for_request`): "-"."""
+    det = ctx.detection
+    if det is None:
+        return "-"
+    if det.verdict == "ok" and det.path is not None:
+        return det.path.name or str(det.path)
+    return det.verdict
+
+
+def _redact_headers(headers: Any) -> dict[str, str]:
+    """Cópia dos headers da request com `Authorization` mascarado — é isto,
+    não o header cru, que vai pro `--debug-dump`."""
+    return {k: ("***" if k.lower() == "authorization" else v) for k, v in headers.items()}
+
+
+def _dump_truncated_raw(raw: bytes) -> str:
+    """Corpo cru decodificado e cortado em `DEBUG_DUMP_BODY_MAX_BYTES` chars —
+    usado quando o corpo não parseou como JSON ou passou do teto do dump."""
+    return raw.decode("utf-8", errors="replace")[:DEBUG_DUMP_BODY_MAX_BYTES]
+
+
 # --------------------------------------------------------------------------- handler + server
 
 
@@ -1420,6 +1451,80 @@ class _Handler(BaseHTTPRequestHandler):
     @property
     def ctx(self) -> ServeContext:
         return self.server.ctx  # type: ignore[attr-defined]
+
+    @property
+    def verbose(self) -> bool:
+        return bool(getattr(self.server, "verbose", False))
+
+    @property
+    def debug_dump(self) -> Path | None:
+        return getattr(self.server, "debug_dump", None)  # type: ignore[attr-defined]
+
+    def _begin_request(self) -> None:
+        """Reseta o estado de inspeção no início de CADA `do_GET`/`do_POST` —
+        keep-alive reusa a mesma instância de handler pra várias requests na
+        mesma conexão, então isto não pode sobreviver de uma pra outra."""
+        self._log_state: dict[str, Any] = {
+            "method": self.command,
+            "path": self.path.split("?", 1)[0].rstrip("/") or "/",
+            "model_req": None,
+            "model_res": None,
+            "msgs": 0,
+            "ws": None,
+            "rota": None,
+            "status": None,
+            "resp_len": 0,
+        }
+        self._dump_state: dict[str, Any] = {
+            "ts": int(time.time()),
+            "method": self.command,
+            "path": self.path,
+            "headers": _redact_headers(self.headers),
+            "body": None,
+            "status": None,
+        }
+
+    def _finish_request(self) -> None:
+        """Chamado no `finally` de `do_GET`/`do_POST` — roda depois que a
+        resposta já foi escrita, então nunca atrasa nem quebra a request em
+        si (o dump falhando é só um aviso, ver `_write_debug_dump`)."""
+        if self.verbose:
+            self._print_verbose_line()
+        if self.debug_dump is not None:
+            self._write_debug_dump()
+
+    def _print_verbose_line(self) -> None:
+        s = self._log_state
+        print(
+            f"[serve] {s['method']} {s['path']} · "
+            f"model={s['model_req'] or '-'}→{s['model_res'] or '-'} · "
+            f"msgs={s['msgs']} · ws={s['ws'] or '-'} · rota={s['rota'] or '-'} · "
+            f"resp={s['resp_len']}c status={s['status'] if s['status'] is not None else '-'}",
+            file=sys.stderr,
+        )
+
+    def _write_debug_dump(self) -> None:
+        assert self.debug_dump is not None
+        try:
+            line = json.dumps(self._dump_state, default=str) + "\n"
+            with open(self.debug_dump, "a", encoding="utf-8") as fh:
+                fh.write(line)
+        except (OSError, TypeError, ValueError) as exc:
+            if not getattr(self.server, "_debug_dump_warned", False):
+                print(f"[serve] --debug-dump {self.debug_dump} ilegível: {exc}", file=sys.stderr)
+                self.server._debug_dump_warned = True  # type: ignore[attr-defined]
+
+    def _record_response(self, status: int, resp_len: int) -> None:
+        """Único ponto de gravação de status/tamanho pra `_raw` — rotas que
+        respondem via `_stream` sobrescrevem `resp_len` depois com
+        `len(text)` de verdade (ver `do_POST`)."""
+        state = getattr(self, "_log_state", None)
+        if state is not None:
+            state["status"] = status
+            state["resp_len"] = resp_len
+        dump = getattr(self, "_dump_state", None)
+        if dump is not None:
+            dump["status"] = status
 
     def _authorized(self) -> bool:
         """Porta de entrada de toda rota — chamada antes de olhar o path ou
@@ -1443,6 +1548,13 @@ class _Handler(BaseHTTPRequestHandler):
         return False
 
     def do_GET(self) -> None:
+        self._begin_request()
+        try:
+            self._do_GET_inner()
+        finally:
+            self._finish_request()
+
+    def _do_GET_inner(self) -> None:
         if not self._authorized():
             return
         path = self.path.split("?", 1)[0].rstrip("/")
@@ -1463,6 +1575,13 @@ class _Handler(BaseHTTPRequestHandler):
         self._error(404, f"rota desconhecida: {self.path}")
 
     def do_POST(self) -> None:
+        self._begin_request()
+        try:
+            self._do_POST_inner()
+        finally:
+            self._finish_request()
+
+    def _do_POST_inner(self) -> None:
         if not self._authorized():
             return
         path = self.path.split("?", 1)[0].rstrip("/")
@@ -1473,25 +1592,35 @@ class _Handler(BaseHTTPRequestHandler):
         if length > MAX_BODY_BYTES:
             # corpo nunca é lido: 100+ mensagens com tool result é entrada de
             # cliente sem teto, e keep-alive não pode herdar o framing de
-            # quem mandou um corpo gigante.
+            # quem mandou um corpo gigante. Dump reflete isto: `body` fica
+            # None, não é violação do teto de --debug-dump forçar a leitura.
             self.close_connection = True
             self._error(PAYLOAD_TOO_LARGE, f"corpo maior que {MAX_BODY_BYTES} bytes")
             return
+        raw = b""
         try:
             raw = self.rfile.read(length)
             body = json.loads(raw or b"{}")
         except (ValueError, OSError) as exc:
+            self._dump_state["body"] = _dump_truncated_raw(raw)
             self._error(400, f"corpo inválido: {exc}")
             return
+        # corpo grande porém válido: no dump o JSON parseado passa inteiro só
+        # até o teto de `DEBUG_DUMP_BODY_MAX_BYTES` — acima disso vira bruto
+        # truncado, senão o .jsonl de debug cresce sem fim junto do corpo.
+        self._dump_state["body"] = body if len(raw) <= DEBUG_DUMP_BODY_MAX_BYTES else _dump_truncated_raw(raw)
         if not isinstance(body, dict):
             self._error(400, "corpo precisa ser um objeto JSON")
             return
+        messages = body.get("messages") or []
+        self._log_state["msgs"] = len(messages) if isinstance(messages, list) else 0
         # `tools`/`stream_options` seguem ignorados — non-goals: nunca
         # emitimos tool_calls nem usage chunk, e o Cursor aceita numa boa
         # (não é gramática que ele exige para funcionar). `model` agora
         # escolhe o executor — resolvido ANTES do stream: 404 é
         # irrepresentável no meio de um SSE, e o Cursor manda `stream=True`.
         requested = body.get("model") if isinstance(body.get("model"), str) else None
+        self._log_state["model_req"] = requested
         ex = resolve_executor(requested)
         degradado = False
         if ex is None:
@@ -1506,9 +1635,13 @@ class _Handler(BaseHTTPRequestHandler):
             else:
                 self._json(MODEL_NOT_FOUND, model_error_payload(requested))
                 return
-        messages = body.get("messages") or []
+        self._log_state["model_res"] = ex.id
         req_ctx = replace(ctx_for_request(messages, self.ctx), executor=ex, requested_model=requested)
-        text = handle_message(last_user_text(messages), req_ctx)
+        self._log_state["ws"] = _ws_field(req_ctx)
+        user_text = last_user_text(messages)
+        stripped = user_text.strip()
+        self._log_state["rota"] = "/comando" if stripped.startswith("/") else ("texto" if stripped else "-")
+        text = handle_message(user_text, req_ctx)
         cid = new_id()
         created = int(time.time())
         # Eco o que o cliente pediu, não sempre o id canônico — mas só quando
@@ -1526,6 +1659,12 @@ class _Handler(BaseHTTPRequestHandler):
             self._stream(cid, created, text, model=echo)
         else:
             self._json(200, completion_payload(text, cid=cid, created=created, model=echo))
+        # resp= no verbose é o texto de resposta de verdade (o que o modelo
+        # respondeu), não o envelope OpenAI inteiro que `_raw` mediu — vale
+        # pros dois formatos, stream e não-stream.
+        self._log_state["status"] = 200
+        self._log_state["resp_len"] = len(text)
+        self._dump_state["status"] = 200
 
     def _stream(self, cid: str, created: int, text: str, *, model: str = MODEL_ID) -> None:
         self.send_response(200)
@@ -1548,6 +1687,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+        self._record_response(status, len(body))
 
     def _json(self, status: int, payload: dict[str, Any]) -> None:
         self._raw(status, "application/json", json.dumps(payload).encode("utf-8"))
@@ -1590,6 +1730,8 @@ def serve(
     max_requests: int | None = None,
     api_key: str | None = None,
     workspace_roots: Sequence[str | Path] | None = None,
+    verbose: bool = False,
+    debug_dump: Path | None = None,
 ) -> None:
     # Fail-closed do webhook: fora do loopback, key é obrigatória. Loopback
     # sem key segue exatamente como hoje — sem auth nenhuma.
@@ -1607,6 +1749,12 @@ def serve(
     )
     server.api_key = api_key  # type: ignore[attr-defined]
     server.require_auth = require_auth  # type: ignore[attr-defined]
+    # `verbose`/`debug_dump` seguem o mesmo padrão de `api_key`/`require_auth`
+    # acima — atributo no `server`, não no `ServeContext` (é infra de
+    # inspeção da request, não estado de roteamento) — default off nos dois:
+    # zero print, zero arquivo, zero diferença de comportamento de hoje.
+    server.verbose = verbose  # type: ignore[attr-defined]
+    server.debug_dump = debug_dump  # type: ignore[attr-defined]
     try:
         if on_bind is not None:
             on_bind(server.server_address[1])

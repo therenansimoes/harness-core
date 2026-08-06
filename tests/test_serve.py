@@ -47,6 +47,8 @@ def _serve(
     max_requests: int,
     api_key: str | None = None,
     workspace_roots: tuple[Path, ...] | None = None,
+    verbose: bool = False,
+    debug_dump: Path | None = None,
 ) -> tuple[int, threading.Thread]:
     bound: list[int] = []
     ready = threading.Event()
@@ -65,6 +67,8 @@ def _serve(
             "max_requests": max_requests,
             "api_key": api_key,
             "workspace_roots": workspace_roots,
+            "verbose": verbose,
+            "debug_dump": debug_dump,
         },
         daemon=True,
     )
@@ -490,6 +494,12 @@ def test_parser_wiring() -> None:
 
     nswd = p.parse_args(["serve"])
     assert nswd.workspace_root is None
+    assert nswd.verbose is False
+    assert nswd.debug_dump is None
+
+    nsv = p.parse_args(["serve", "--verbose", "--debug-dump", "/tmp/dump.jsonl"])
+    assert nsv.verbose is True
+    assert nsv.debug_dump == Path("/tmp/dump.jsonl")
 
 
 # --------------------------------------------------------------------------- workspace do Cursor: extração
@@ -1166,3 +1176,92 @@ def test_where_mostra_alias_pedido_vs_id_resolvido(tmp_path: Path, monkeypatch: 
     ctx = serve.ServeContext(cwd=tmp_path, executor=ex, requested_model="harness:t0")
     resp = serve.handle_message("/where", ctx)
     assert "executor pedido: harness:t0 → harness:local" in resp
+
+
+# --------------------------------------------------------------------------- inspeção de requests: --verbose/--debug-dump
+
+
+def test_default_off_sem_dump_sem_linha_verbose(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # Nenhuma das duas flags: zero diferença do comportamento de hoje — nem
+    # arquivo de dump nem linha verbose (só o boot print de sempre no stderr,
+    # por isso o assert é num marcador da linha verbose, não `err == ""`).
+    dump_path = tmp_path / "dump.jsonl"
+    port, t = _serve(tmp_path, max_requests=1)
+    status, raw, _ = _post(port, {"model": "harness", "messages": [{"role": "user", "content": "/help"}]})
+    t.join(5)
+    assert status == 200
+    assert "/do" in json.loads(raw)["choices"][0]["message"]["content"]
+    err = capsys.readouterr().err
+    assert "msgs=" not in err
+    assert "· rota=" not in err
+    assert not dump_path.exists()
+
+
+def test_verbose_uma_linha_por_request_sem_vazar_a_key(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    port, t = _serve(tmp_path, max_requests=1, api_key="segredo-verboso", verbose=True)
+    status, _raw, _ = _post(
+        port,
+        {"model": "harness", "messages": [{"role": "user", "content": "/help"}]},
+        headers={"Authorization": "Bearer segredo-verboso"},
+    )
+    t.join(5)
+    assert status == 200
+    err = capsys.readouterr().err
+    assert "POST /v1/chat/completions" in err
+    assert "model=harness→harness" in err
+    assert "msgs=1" in err
+    assert "rota=/comando" in err
+    assert "status=200" in err
+    assert "segredo-verboso" not in err  # nem a key, nem "Bearer ..." — conteúdo nenhum de auth
+
+
+def test_verbose_cobre_401(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # Auth falha ANTES do corpo ser lido — a linha ainda sai, com os campos
+    # que dá pra saber nesse ponto (method/path/status), o resto em "-".
+    port, t = _serve(tmp_path, max_requests=1, api_key="segredo", verbose=True)
+    status, _ = _get(port, "/v1/models")
+    t.join(5)
+    assert status == 401
+    err = capsys.readouterr().err
+    assert "GET /v1/models" in err
+    assert "status=401" in err
+    assert "segredo" not in err
+
+
+def test_debug_dump_grava_jsonl_com_auth_mascarada(tmp_path: Path) -> None:
+    dump_path = tmp_path / "dump.jsonl"
+    port, t = _serve(tmp_path, max_requests=1, api_key="segredo-dump", debug_dump=dump_path)
+    status, _raw, _ = _post(
+        port,
+        {"model": "harness", "messages": [{"role": "user", "content": "/help"}]},
+        headers={"Authorization": "Bearer segredo-dump"},
+    )
+    t.join(5)
+    assert status == 200
+    lines = dump_path.read_text(encoding="utf-8").strip("\n").splitlines()
+    assert len(lines) == 1
+    entry = json.loads(lines[0])
+    assert entry["method"] == "POST"
+    assert entry["status"] == 200
+    assert isinstance(entry["ts"], int)
+    assert entry["headers"]["Authorization"] == "***"
+    assert entry["body"]["model"] == "harness"
+    assert entry["body"]["messages"][0]["content"] == "/help"
+
+
+def test_debug_dump_dir_ilegivel_nao_derruba_a_request(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # PATH é um diretório: `open(..., "a")` explode com OSError — a request
+    # segue 200 numa boa, só um aviso no stderr.
+    dump_dir = tmp_path / "dump_dir"
+    dump_dir.mkdir()
+    port, t = _serve(tmp_path, max_requests=1, debug_dump=dump_dir)
+    status, raw, _ = _post(port, {"model": "harness", "messages": [{"role": "user", "content": "/help"}]})
+    t.join(5)
+    assert status == 200
+    assert "/do" in json.loads(raw)["choices"][0]["message"]["content"]
+    err = capsys.readouterr().err
+    assert "ilegível" in err

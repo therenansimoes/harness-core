@@ -2193,6 +2193,12 @@ def cmd_serve(args: argparse.Namespace) -> int:
     api_key = args.api_key or (os.environ.get(API_KEY_ENV) or "").strip() or None
     cwd = Path.cwd()
     roots = args.workspace_root
+    modos = []
+    if args.verbose:
+        modos.append("verbose")
+    if args.debug_dump:
+        modos.append(f"debug-dump={args.debug_dump}")
+    modos_txt = f" · modos: {', '.join(modos)}" if modos else ""
     try:
         serve_openai(
             args.port,
@@ -2200,9 +2206,11 @@ def cmd_serve(args: argparse.Namespace) -> int:
             cwd=cwd,
             api_key=api_key,
             workspace_roots=roots,
+            verbose=args.verbose,
+            debug_dump=args.debug_dump,
             on_bind=lambda p: print(
                 f"[serve] http://{args.host}:{p}/v1 · modelo 'harness' · repo {cwd} · "
-                f"roots: {roots or 'default'}"
+                f"roots: {roots or 'default'}{modos_txt}"
             ),
         )
     except KeyboardInterrupt:
@@ -3118,6 +3126,20 @@ def build_parser() -> argparse.ArgumentParser:
         dest="workspace_root",
         help="raiz permitida para o workspace detectado no payload (repetível; default ~/projects + "
         "repos registrados)",
+    )
+    srv.add_argument(
+        "--verbose",
+        action="store_true",
+        help="1 linha no stderr por request atendida (método, rota, model pedido→resolvido, "
+        "workspace, resp) — nunca conteúdo de mensagem nem a api key",
+    )
+    srv.add_argument(
+        "--debug-dump",
+        type=Path,
+        default=None,
+        dest="debug_dump",
+        help="grava 1 linha JSON por request em PATH — headers com Authorization mascarado ('***') "
+        "e o corpo (Authorization nunca aparece); falha de escrita não derruba a request",
     )
     srv.set_defaults(func=cmd_serve)
 
