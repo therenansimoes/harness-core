@@ -348,11 +348,11 @@ def _executor(base: Path) -> Check:
 
 
 def _lmstudio(base: Path) -> Check:
-    """Runtime local: LM Studio é o único (Ollama cortado em 2026-08-04).
+    """Runtime local: mlx_lm.server (OpenAI-compat em OPENAI_BASE_URL).
 
-    Mesma sonda do preflight do backend, no modelo do tier local mais barato —
-    é o modelo que a maioria dos runs vai usar. Servidor desligado é AVISO: o
-    mundo lá fora não estar pronto não é defeito do harness."""
+    Mesma sonda do preflight do backend, no modelo do tier local mais barato.
+    Servidor desligado é AVISO: o mundo lá fora não estar pronto não é defeito
+    do harness."""
     # Import local: o backend puxa skills/roles e só é útil aqui.
     from harness.backends.deepagents_backend import OPENAI_PREFIX, _lmstudio_preflight
 

@@ -30,20 +30,21 @@ try:
 except Exception:  # módulo chega em PR paralelo; sem ele, sem tools extras
     load_mcp_tools = lambda *a, **k: []  # noqa: E731
 
-# LM Studio é o ÚNICO runtime local (Ollama cortado em 2026-08-04): MLX na porta
-# 1234 atrás de um endpoint OpenAI-compatível, por isso o prefixo `openai:`.
+# Runtime local default: mlx_lm.server na porta 1235 (OpenAI-compatível).
+# Prefixo `openai:` = endpoint OpenAI-shaped em loopback, NÃO a nuvem.
+# LM Studio (:1234) só via OPENAI_BASE_URL explícito.
 OPENAI_PREFIX = "openai:"
-LMSTUDIO_BASE_URL = "http://localhost:1234/v1"
+LMSTUDIO_BASE_URL = "http://127.0.0.1:1235/v1"  # nome legado; default = mlx
 LMSTUDIO_BASE_URL_ENV = "OPENAI_BASE_URL"
 LMSTUDIO_KEY_ENV = "OPENAI_API_KEY"
 LMSTUDIO_TIMEOUT_S = 3.0
 
-# Servidor da frota LoRA (`mlx_lm.server`): OUTRO processo, outra porta. É o
-# único que aceita `adapters` no corpo do request — o LM Studio carrega o peso
-# do lado dele. Sobe fora do harness (Makefile/humano), como o LM Studio.
+# Mesmo host default que OPENAI_BASE_URL — frota LoRA e t0 compartilham :1235.
+# Override separado: HARNESS_MLX_BASE_URL (adapters runtime=mlx).
 MLX_BASE_URL = "http://127.0.0.1:1235/v1"
 MLX_BASE_URL_ENV = "HARNESS_MLX_BASE_URL"
 RUNTIME_MLX = "mlx"
+DEFAULT_LOCAL_MODEL = "bonsai"
 
 CONFIG_DIR_ENV = "HARNESS_CONFIG_DIR"
 MODELS_FILE = "models.toml"
@@ -250,14 +251,11 @@ def _bootstrap_env() -> None:
     os.environ.setdefault("LANGGRAPH_STRICT_MSGPACK", "true")
     os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
     os.environ.setdefault("LANGSMITH_TRACING", "false")
-    # `openai:*` aqui é LM Studio, não a nuvem: sem estes defaults o
-    # langchain-openai aponta para api.openai.com e o run morre em 401 DEPOIS do
-    # preflight passar (o preflight sonda loopback). Os dois têm que concordar
-    # por construção. `setdefault`: env explícito continua ganhando, e é assim
-    # que se aponta para a nuvem de propósito (OPENAI_BASE_URL + chave real).
+    # `openai:*` aqui é mlx_lm.server (loopback), não a nuvem: sem estes
+    # defaults o langchain-openai aponta para api.openai.com e o run morre em
+    # 401 DEPOIS do preflight. `setdefault`: env explícito ganha.
     os.environ.setdefault(LMSTUDIO_BASE_URL_ENV, LMSTUDIO_BASE_URL)
-    # O LM Studio ignora o valor, mas o cliente exige que exista.
-    os.environ.setdefault(LMSTUDIO_KEY_ENV, "lm-studio")
+    os.environ.setdefault(LMSTUDIO_KEY_ENV, "mlx-local")
 
 
 def _import_deepagents():
@@ -285,8 +283,21 @@ def _lmstudio_models(url: str) -> set[str]:
     return {str(m.get("id", "")) for m in payload.get("data", [])}
 
 
+def _model_listed(wanted: str, served: set[str]) -> bool:
+    """mlx_lm.server costuma listar o path do peso ou `default`, não o alias
+    estável `bonsai` que o harness/Cursor usam."""
+    if not served:
+        return True
+    if wanted in served or "default" in served:
+        return True
+    w = wanted.lower()
+    return any(w in s.lower() or s.lower().rstrip("/").endswith(w) for s in served)
+
+
 def _lmstudio_preflight(model: str) -> Preflight:
-    """Servidor vivo E modelo servido. Sonda `GET /v1/models`, zero token gasto."""
+    """Servidor OpenAI-local vivo. Sonda `GET /v1/models`, zero token gasto.
+
+    Nome legado `_lmstudio_*`; o default aponta pro mlx_lm.server (:1235)."""
     wanted = model[len(OPENAI_PREFIX) :]
     url = f"{_lmstudio_base_url()}/models"
     try:
@@ -295,20 +306,20 @@ def _lmstudio_preflight(model: str) -> Preflight:
         return Preflight(
             ok=False,
             reason=(
-                f"LM Studio não respondeu em {url} após {LMSTUDIO_TIMEOUT_S}s ({exc}) — "
-                "abra o app e rode `lms server start`"
+                f"mlx_lm.server não respondeu em {url} após {LMSTUDIO_TIMEOUT_S}s ({exc}) — "
+                "suba com `scripts/mlx_bonsai.sh` (ou defina OPENAI_BASE_URL)"
             ),
         )
-    if wanted not in served:
+    if not _model_listed(wanted, served):
         listed = ", ".join(sorted(served)) or "nenhum"
         return Preflight(
             ok=False,
             reason=(
-                f"modelo {wanted!r} não está baixado/servido pelo LM Studio "
-                f"(tem: {listed}) — `lms load {wanted}`"
+                f"modelo {wanted!r} não aparece em {url} (tem: {listed}) — "
+                "confira o --model do mlx_lm.server / OPENAI_BASE_URL"
             ),
         )
-    return Preflight(ok=True, reason=f"LM Studio ok em {url}, modelo {wanted} servido")
+    return Preflight(ok=True, reason=f"mlx ok em {url}, modelo {wanted}")
 
 
 # --------------------------------------------------------------------------- frota LoRA
@@ -718,7 +729,11 @@ def _build_agent(req: ExecRequest):
 MODEL_TEMPERATURE = 0.2
 # `chat_template_kwargs` é o canal do vLLM/llama.cpp para ligar o modo de
 # raciocínio dos modelos que trazem dois templates (Qwen3 e afins).
-THINKING_EXTRA_BODY = {"chat_template_kwargs": {"enable_thinking": True}}
+THINKING_EXTRA_BODY = {"chat_template_kwargs": {"enable_thinking": False}}
+# False desde 2026-08-06: o build qwen3.5-9b-mlx IGNORAVA a flag (sondagem de
+# agosto) e escrevia; os builds novos (qwen/qwen3.5-9b, qwopus-coder) OBEDECEM —
+# com True o turno afoga em reasoning_content e o agente lê mas nunca escreve
+# (runs 7f71cce2457b, 1d9542428a9c e smoke-coder2: zero write_file em todos).
 
 
 def _thinking_kwargs(model: str) -> dict[str, Any]:

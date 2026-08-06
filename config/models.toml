@@ -13,18 +13,16 @@
 # Quem converte token em $ é o backend, via [pricing] no fim do arquivo — o
 # router nunca lê preço absoluto, só a ordem relativa de cost_rank.
 
-# TETO DE HARDWARE (M3 Pro, 18GB RAM): modelo local até ~7-8B. 30B trava a
-# máquina inteira — não entra em tier NUNCA nesta máquina.
+# TETO DE HARDWARE (M3 Pro, 18GB): preferir quant pequeno. bonsai-27b 1bit ~
+# 5.16 GB cabe; densidades maiores (fp16/4bit 27B+) travam a máquina.
 
 [[tier]]
 name = "t0"
 backend = "deepagents"
-# LM Studio local (MLX, porta 1234), $0 por run — o ÚNICO runtime local desde
-# 2026-08-04. Auditoria 2026-08-03: o 3B anterior falhou todas as unidades do dia
-# (não fecha ler+editar+verificar). O teto de turnos acompanha o modelo do t0.
-# 2026-08-06: trocado do qwen3.5-9b genérico (3 runs vazios no dia) pro coder-tuned
-# já carregado no LM Studio; candidato pesquisado pra upgrade: Ornith-1.0-9B Q6_K.
-model = "openai:qwopus3.5-4b-coder-mtp"
+# Upstream local: mlx_lm.server na porta 1235 (NÃO LM Studio). Id estável
+# `bonsai` — sem `/` nem `:` que o Cursor stripa no nome do modelo.
+# Pesos: …/prism-ml/Bonsai-27B-mlx-1bit. Override: OPENAI_BASE_URL.
+model = "openai:bonsai"
 max_turns = 40
 cost_rank = 0
 
@@ -71,11 +69,19 @@ tier = "t0"
 #
 # Chave = a string de modelo que o harness passa pro backend (`init_chat_model`).
 # Modelo AUSENTE da tabela vira `cost_usd = None` — melhor sem número que com
-# número falso. Local não é exceção: os modelos servidos pelo LM Studio estão
-# listados abaixo, explicitamente a 0.0 (custo marginal $0 em loopback).
+# número falso. Local não é exceção: os modelos servidos em loopback estão
+# listados abaixo, explicitamente a 0.0 (custo marginal $0).
 
-# Locais em loopback (LM Studio 1234 / mlx_lm.server 1235) — custo marginal $0.
-# bonsai/gemma/optiq removidos na limpeza de 2026-08-04.
+# Locais em loopback (mlx_lm.server 1235; OPENAI_BASE_URL pode apontar outro).
+[pricing."openai:bonsai"]
+input_per_mtok = 0.0
+output_per_mtok = 0.0
+
+# Aliases legados (ainda referidos em testes/fixtures) — $0 se alguém piná-los.
+[pricing."openai:qwen3.5-9b-mlx"]
+input_per_mtok = 0.0
+output_per_mtok = 0.0
+
 [pricing."openai:qwen/qwen3.5-9b"]
 input_per_mtok = 0.0
 output_per_mtok = 0.0
@@ -91,24 +97,9 @@ output_per_mtok = 0.0
 # Olho do harness (`judge_image`). Bloco AUSENTE = sem visão, e sem visão o
 # caminho normal é `unavailable` — nunca nota inventada.
 #
-# É o MESMO modelo do executor local: multimodal nativo, já carregado no LM
-# Studio, custo marginal $0. Verificado empiricamente (OCR + controle negativo):
-# aceita `image_url` com data-URI base64 e responde sobre a imagem. O gemma-4
-# local NÃO serve — descarta a imagem em silêncio e responde como se tivesse
-# visto, que é o pior modo de falhar. E `prompt_tokens` do LM Studio não conta
-# token de imagem, então não dá para usar a contagem como prova de que a imagem
-# chegou.
-#
-# ORÇAMENTO: este modelo pensa SEMPRE e o thinking não desliga (medido contra o
-# servidor vivo: `chat_template_kwargs enable_thinking=false`,
-# `reasoning_effort=none` e `/no_think` no prompt são aceitos e IGNORADOS pelo LM
-# Studio). O `reasoning_content` come o orçamento inteiro antes do `content`: um
-# juízo de tela real gastou 1943 tokens só de reasoning, então com max_tokens
-# 1600 a resposta voltava com `content` vazio e `finish_reason: length` — juiz
-# sumido, não juiz negativo. 3000 fecha com folga (2096 completion medidos) e
-# leva ~78s na M3 Pro, por isso o timeout tem que ser MAIOR que isso: em 60s o
-# request morria por timeout mesmo com orçamento sobrando.
+# Mesmo endpoint do executor local (mlx :1235). bonsai declara visão no card;
+# se o servidor/modelo recusar imagem, judge_image degrada pra unavailable.
 [vision]
-model = "openai:qwen/qwen3.5-9b"
+model = "openai:bonsai"
 timeout_s = 240
 max_tokens = 3000

@@ -179,8 +179,9 @@ def _post(port: int, body: dict, headers: dict[str, str] | None = None) -> tuple
 def test_models_payload_um_modelo_harness() -> None:
     payload = serve.models_payload()
     assert payload["object"] == "list"
-    assert len(payload["data"]) == len(serve.executors())
-    assert payload["data"][0]["id"] == "harness"
+    assert len(payload["data"]) == 1 + len(serve.executors())
+    assert payload["data"][0]["id"] == "bonsai"
+    assert payload["data"][1]["id"] == "harness"
 
 
 def test_completion_payload_shape() -> None:
@@ -235,8 +236,8 @@ def test_get_v1_models_200(tmp_path: Path) -> None:
     status, body = _get(port, "/v1/models")
     t.join(5)
     assert status == 200
-    assert len(body["data"]) == len(serve.executors())
-    assert body["data"][0]["id"] == "harness"
+    assert len(body["data"]) == 1 + len(serve.executors())
+    assert body["data"][0]["id"] == "bonsai"
 
 
 def test_post_chat_completions_help(tmp_path: Path) -> None:
@@ -281,7 +282,7 @@ def test_api_key_bearer_correto_200_em_todas_rotas(tmp_path: Path) -> None:
     )
     t.join(5)
     assert status_get == 200
-    assert body_get["data"][0]["id"] == "harness"
+    assert body_get["data"][0]["id"] == "bonsai"
     assert status_post == 200
     assert "/do" in json.loads(raw_post)["choices"][0]["message"]["content"]
 
@@ -307,7 +308,7 @@ def test_sem_key_loopback_continua_sem_auth(tmp_path: Path) -> None:
     status, body = _get(port, "/v1/models")
     t.join(5)
     assert status == 200
-    assert body["data"][0]["id"] == "harness"
+    assert body["data"][0]["id"] == "bonsai"
 
 
 def test_auth_status_fail_closed_sem_key_fora_do_loopback() -> None:
@@ -471,7 +472,7 @@ def test_texto_livre_sem_llm_cai_no_help(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.setattr(serve, "_http_post", lambda url, payload, timeout_s: (0, ""))
 
     resp = serve.handle_message("oi", ctx)
-    assert "LM Studio não respondeu" in resp
+    assert "mlx_lm.server não respondeu" in resp
     assert "/do" in resp
 
 
@@ -699,7 +700,7 @@ def test_slash_command_do_cursor_roteia(tmp_path: Path, monkeypatch: pytest.Monk
     content = json.loads(raw)["choices"][0]["message"]["content"]
     # este é o bug que este pacote corrige: sem desembrulhar <user_query>, o
     # "/where" digitado no Cursor nunca batia startswith("/") e caía no LM.
-    assert "LM Studio não respondeu" not in content
+    assert "mlx_lm.server não respondeu" not in content
     assert str(ws) in content
 
 
@@ -1002,14 +1003,15 @@ def test_models_toml_quebrado_degrada_pro_auto(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr("harness.routing.router.load_config", boom)
     execs = serve.executors()
     assert [e.id for e in execs] == ["harness"]
-    assert len(serve.models_payload()["data"]) == 1
+    assert [m["id"] for m in serve.models_payload()["data"]] == ["bonsai", "harness"]
 
 
 def test_models_payload_so_chaves_padrao(monkeypatch: pytest.MonkeyPatch) -> None:
     _fake_tiers(monkeypatch)
     payload = serve.models_payload()
     ids = [item["id"] for item in payload["data"]]
-    assert ids[0] == "harness"
+    assert ids[0] == "bonsai"
+    assert "harness" in ids
     assert len(ids) == len(set(ids))
     for item in payload["data"]:
         assert set(item) == {"id", "object", "created", "owned_by"}
@@ -1191,11 +1193,8 @@ def test_route_hint_nunca_levanta(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
 def test_chat_tenta_segundo_nome_de_modelo_em_4xx(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     ctx = _ctx(tmp_path)
-    # Bug conhecido documentado em `chat_model_candidates`: `DEFAULT_MODEL` do
-    # queue diverge do modelo do t0 em `config/models.toml` — os dois vivos
-    # no repo real garantem >= 2 candidatos aqui, sem fake nenhum.
-    candidatos = serve.chat_model_candidates()
-    assert len(candidatos) >= 2
+    # Candidatos forçados: t0 e DEFAULT_MODEL agora são o mesmo `bonsai`.
+    monkeypatch.setattr(serve, "chat_model_candidates", lambda: ["bonsai", "bonsai-alt"])
 
     respostas = iter(
         [(404, ""), (200, json.dumps({"choices": [{"message": {"content": "resposta do modelo"}}]}))]
@@ -2129,3 +2128,83 @@ def test_e2e_tools_dispara_tool_calls_pelo_handler(
 
     err = capsys.readouterr().err
     assert "rota=ação→tool_calls" in err
+
+
+# --------------------------------------------------------------------------- bonsai proxy (Cursor Agent)
+
+
+def test_bonsai_proxy_nonstream_remaps_reasoning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+
+    upstream = {
+        "id": "chatcmpl-up",
+        "object": "chat.completion",
+        "model": "default",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "feito",
+                    "reasoning": "pensei",
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+    def fake_proxy(payload, *, timeout_s):
+        assert payload.get("model") == "default"
+        assert "messages" in payload
+        assert "input" not in payload
+        return 200, json.dumps(upstream).encode("utf-8")
+
+    monkeypatch.setattr(serve, "_proxy_post_json", fake_proxy)
+    port, t = _serve(tmp_path, max_requests=1)
+    status, raw, _ = _post(
+        port,
+        {
+            "model": "bonsai",
+            "input": [{"role": "user", "content": "hi", "type": "message"}],
+            "tools": [{"type": "function", "name": "Shell", "parameters": {}}],
+        },
+    )
+    t.join(5)
+    assert status == 200
+    body = json.loads(raw)
+    assert body["model"] == "bonsai"
+    msg = body["choices"][0]["message"]
+    assert msg["content"] == "feito"
+    assert msg["reasoning_content"] == "pensei"
+    assert "reasoning" not in msg
+
+
+def test_bonsai_proxy_stream_remaps_reasoning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+
+    def fake_sse(payload, *, timeout_s):
+        assert payload.get("stream") is True
+        yield (
+            b'data: {"id":"c","object":"chat.completion.chunk","model":"default",'
+            b'"choices":[{"index":0,"delta":{"reasoning":"r1"},"finish_reason":null}]}'
+        )
+        yield (
+            b'data: {"id":"c","object":"chat.completion.chunk","model":"default",'
+            b'"choices":[{"index":0,"delta":{"content":"oi"},"finish_reason":null}]}'
+        )
+        yield b"data: [DONE]"
+
+    monkeypatch.setattr(serve, "_iter_upstream_sse", fake_sse)
+    port, thr = _serve(tmp_path, max_requests=1)
+    status, raw, ctype = _post(
+        port,
+        {"model": "bonsai", "stream": True, "messages": [{"role": "user", "content": "x"}]},
+    )
+    thr.join(5)
+    assert status == 200
+    assert "text/event-stream" in ctype
+    text = raw.decode("utf-8")
+    assert "reasoning_content" in text
+    assert "oi" in text
+    assert "[DONE]" in text

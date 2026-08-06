@@ -43,8 +43,8 @@ def test_preflight_reports_lmstudio_down(monkeypatch):
     monkeypatch.setenv("OPENAI_BASE_URL", "http://localhost:1/v1")
     pre = da.DeepagentsBackend(model="openai:qwen3.5-9b-mlx").preflight()
     assert pre.ok is False
-    assert "LM Studio não respondeu" in pre.reason
-    assert "lms server start" in pre.reason
+    assert "mlx_lm.server não respondeu" in pre.reason
+    assert "mlx_bonsai.sh" in pre.reason or "OPENAI_BASE_URL" in pre.reason
 
 
 def test_preflight_reports_model_not_served(monkeypatch):
@@ -53,7 +53,7 @@ def test_preflight_reports_model_not_served(monkeypatch):
     monkeypatch.setattr(da, "_lmstudio_models", lambda url: {"outro-mlx"})
     pre = da.DeepagentsBackend(model="openai:qwen3.5-9b-mlx").preflight()
     assert pre.ok is False
-    assert "não está baixado/servido" in pre.reason
+    assert "não aparece" in pre.reason
     assert "outro-mlx" in pre.reason
 
 
@@ -103,17 +103,12 @@ def test_capabilities_are_declared():
 def test_pricing_file_has_only_free_local_models():
     pricing = da.load_pricing(Path("config"))
     assert pricing, "config/models.toml sem [pricing]"
-    # locais grátis: só os modelos MLX servidos em loopback (LM Studio 1234 /
-    # mlx_lm.server 1235). Limpeza 2026-08-04 removeu bonsai/gemma/optiq.
-    local_openai = {
-        "openai:qwen/qwen3.5-9b",
-        "openai:mlx-community/Qwen3.5-4B-4bit",
-        "openai:mlx-community/Llama-3.2-3B-Instruct-4bit",
-    }
-    assert all(k in local_openai for k in pricing)
+    # Locais grátis em loopback (mlx :1235). Alias legados podem permanecer.
+    assert "openai:bonsai" in pricing
     assert all(
         v.get("input_per_mtok") == 0.0 and v.get("output_per_mtok") == 0.0 for v in pricing.values()
     )
+    assert all(k.startswith("openai:") for k in pricing)
 
 
 def test_cost_off_table_local_is_none():

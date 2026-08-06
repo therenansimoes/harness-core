@@ -67,7 +67,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from harness import cursor_tools, paths, trust_boundary
+from harness import cursor_openai, cursor_tools, paths, trust_boundary
 from harness.governor.governor import load_gov
 from harness.ledger import store
 
@@ -90,10 +90,13 @@ ACTION_MAX_CHARS = 2000  # acima disso é despejo de texto, não pedido
 CHUNK_CHARS = 120  # tamanho da fatia de cada frame SSE
 STATE_MAX_CHARS = 2000  # mesmo raciocínio de deepagents_backend.TARGET_CONSTITUTION_MAX_CHARS
 BASE_URL_ENV = "OPENAI_BASE_URL"  # mesma var de vision.py / deepagents_backend
-DEFAULT_BASE_URL = "http://127.0.0.1:1234/v1"
+DEFAULT_BASE_URL = "http://127.0.0.1:1235/v1"
 KEY_ENV = "OPENAI_API_KEY"
 OPENAI_PREFIX = "openai:"
+BONSAI_ID = cursor_openai.BONSAI_ID
 LLM_TIMEOUT_S = 120.0
+# bonsai 27B 1bit: thinking+tools pode passar de 2 min — proxy dedicado.
+PROXY_TIMEOUT_S = 300.0
 PROBE_TIMEOUT_S = 3.0
 BD_TIMEOUT_S = 15.0
 
@@ -704,7 +707,7 @@ def dispatch_do(task: str, max_usd: float, ctx: ServeContext) -> dict:
     `ctx.executor` (pin do campo `model`) vira flags de rota via
     `executor_argv` — pin FORÇA `--backend`/`--model` e por isso DESLIGA a
     escalada automática de tier do `cmd_do` (`_proximo_tier` só entra sem
-    pin): pinar local nunca escala pra pago, mas LM Studio caído + pin local
+    pin): pinar local nunca escala pra pago, mas mlx caído + pin local
     é run que falha em vez de subir.
 
     O filho pina `CONFIG_DIR_ENV`/`DATA_DIR_ENV` absolutos no próprio env: sem
@@ -916,7 +919,7 @@ def _chat_model() -> str:
 
         return DEFAULT_MODEL
     except Exception:
-        return "openai:qwen3.5-9b-mlx"
+        return "openai:bonsai"
 
 
 def llm_available() -> bool:
@@ -1003,15 +1006,8 @@ def _clip(text: str, limit: int = STATE_MAX_CHARS) -> str:
 
 def chat_model_candidates() -> list[str]:
     """Nomes a tentar no endpoint OpenAI local, em ordem, sem duplicata.
-    [0] = `_chat_model()` (comportamento de HOJE, byte-idêntico — inclui o
-    `removeprefix(OPENAI_PREFIX)` que `llm_reply` já fazia); [1], se houver, é
-    o `run_model` do primeiro executor LOCAL do registro que tiver um.
-
-    Bug conhecido, não feature: `harness.queue.DEFAULT_MODEL` ==
-    "openai:qwen3.5-9b-mlx" enquanto `config/models.toml` t0 ==
-    "openai:qwen/qwen3.5-9b" — os dois nomes vivem no repo. `_chat_model()`
-    continua primário (comportamento de hoje intocado); o segundo candidato é
-    só o retry que cobre esse desalinhamento sem esperar ele ser corrigido."""
+    [0] = `_chat_model()` (queue DEFAULT_MODEL / bonsai); [1], se houver, é o
+    `run_model` do primeiro executor LOCAL do registro."""
     candidates = [str(_chat_model()).removeprefix(OPENAI_PREFIX)]
     try:
         local = next((e for e in executors() if e.local and e.run_model), None)
@@ -1268,7 +1264,7 @@ comandos do harness:
   /where                        — workspace detectado no payload do Cursor (raw + veredito)
   /models                       — executores disponíveis (id pro campo "model" do cliente)
   /help                         — esta lista
-texto sem barra vai para o modelo local (LM Studio, porta 1234) — chat é sempre local e $0.
+texto sem barra vai para o modelo local (mlx_lm.server, porta 1235, bonsai) — chat é sempre local e $0.
 texto livre pedindo AÇÃO: eu executo na hora (harness do em segundo plano, --no-apply, teto $5.00) —
 no auto vai pro executor local ($0); executor pago só com pin explícito ou /do.
 "só pergunta" no texto (ou HARNESS_SERVE_AUTO_DO=0 no serve) desliga o disparo.
@@ -1494,7 +1490,7 @@ def handle_message(text: str, ctx: ServeContext) -> str:
     reply = llm_reply(text, ctx)
     if reply is None:
         msg = (
-            f"LM Studio não respondeu em {llm_base_url()} — sem modelo local eu só "
+            f"mlx_lm.server não respondeu em {llm_base_url()} — sem modelo local eu só "
             f"respondo comando:\n\n{HELP}"
         )
         return "\n".join([*notes, msg])
@@ -1661,6 +1657,115 @@ def plan_turn(messages: list[dict], body: dict, ctx: ServeContext) -> Turn:
     return Turn(text=handle_message(user_text, ctx), verbatim=(route == ROUTE_TEXT), kind=route)
 
 
+# --------------------------------------------------------------------------- bonsai proxy (Cursor Agent → mlx)
+
+
+def _upstream_chat_url() -> str:
+    return f"{llm_base_url()}/chat/completions"
+
+
+def _proxy_post_json(payload: dict[str, Any], *, timeout_s: float) -> tuple[int, bytes]:
+    """POST JSON; devolve (status, corpo bruto). Status 0 = rede morta."""
+    import urllib.error
+    import urllib.request
+
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        _upstream_chat_url(),
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    key = os.environ.get(KEY_ENV, "")
+    if key:
+        req.add_header("Authorization", f"Bearer {key}")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            return resp.status, resp.read()
+    except urllib.error.HTTPError as exc:
+        try:
+            raw = exc.read()
+        except Exception:
+            raw = b""
+        return int(exc.code), raw
+    except (urllib.error.URLError, OSError, ValueError):
+        return 0, b""
+
+
+def _iter_upstream_sse(payload: dict[str, Any], *, timeout_s: float):
+    """Abre stream no upstream e yield linhas `data: …` (bytes, sem framing duplo)."""
+    import urllib.error
+    import urllib.request
+
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        _upstream_chat_url(),
+        data=body,
+        headers={"Content-Type": "application/json", "Accept": "text/event-stream"},
+        method="POST",
+    )
+    key = os.environ.get(KEY_ENV, "")
+    if key:
+        req.add_header("Authorization", f"Bearer {key}")
+    try:
+        resp = urllib.request.urlopen(req, timeout=timeout_s)
+    except urllib.error.HTTPError as exc:
+        err = exc.read().decode("utf-8", "replace")
+        frame = {
+            "id": "chatcmpl-error",
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": BONSAI_ID,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": f"[upstream {exc.code}] {err[:500]}"},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+        yield ("data: " + json.dumps(frame, ensure_ascii=False)).encode("utf-8")
+        yield b"data: [DONE]"
+        return
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        frame = {
+            "id": "chatcmpl-error",
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": BONSAI_ID,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": f"[upstream offline] {exc}"},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+        yield ("data: " + json.dumps(frame, ensure_ascii=False)).encode("utf-8")
+        yield b"data: [DONE]"
+        return
+
+    buf = b""
+    try:
+        while True:
+            chunk = resp.read(256)
+            if not chunk:
+                if buf.strip():
+                    yield buf.strip()
+                break
+            buf += chunk
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                line = line.rstrip(b"\r")
+                if line.startswith(b"data:"):
+                    yield line
+    finally:
+        try:
+            resp.close()
+        except Exception:
+            pass
+
+
 # --------------------------------------------------------------------------- OpenAI shapes
 
 
@@ -1669,12 +1774,14 @@ def new_id(rng: Callable[[], uuid.UUID] = uuid.uuid4) -> str:
 
 
 def models_payload() -> dict:
-    return {
-        "object": "list",
-        "data": [
-            {"id": e.id, "object": "model", "created": 0, "owned_by": "harness"} for e in executors()
-        ],
-    }
+    """`bonsai` primeiro — modelo Cursor Agent (proxy mlx). Depois os
+    executores do harness (`harness`, `harness:local`, …)."""
+    data = [
+        {"id": BONSAI_ID, "object": "model", "created": 0, "owned_by": "harness"},
+    ]
+    for e in executors():
+        data.append({"id": e.id, "object": "model", "created": 0, "owned_by": "harness"})
+    return {"object": "list", "data": data}
 
 
 def model_error_payload(requested: str | None) -> dict:
@@ -1684,7 +1791,7 @@ def model_error_payload(requested: str | None) -> dict:
     `MAX_MODEL_ID_CHARS`): é texto de cliente indo pra uma mensagem de erro,
     mesma cautela de `_safe_for_log`."""
     safe = re.sub(r"[\x00-\x1f\x7f]", "?", requested or "")[:MAX_MODEL_ID_CHARS]
-    ids = [e.id for e in executors()]
+    ids = [BONSAI_ID, *[e.id for e in executors()]]
     return {
         "error": {
             "message": f"modelo desconhecido: {safe!r}. Disponíveis: {', '.join(ids)}",
@@ -2103,6 +2210,16 @@ class _Handler(BaseHTTPRequestHandler):
         # irrepresentável no meio de um SSE, e o Cursor manda `stream=True`.
         requested = body.get("model") if isinstance(body.get("model"), str) else None
         self._log_state["model_req"] = requested
+        # Cursor Agent model: proxy transparente pro mlx (não o router slash).
+        if cursor_openai.is_bonsai_model(requested):
+            self._log_state["model_res"] = BONSAI_ID
+            self._log_state["rota"] = "bonsai-proxy"
+            msgs = body.get("messages") if isinstance(body.get("messages"), list) else []
+            if not msgs and isinstance(body.get("input"), (list, str)):
+                self._log_state["msgs"] = 1 if body.get("input") else 0
+            self._log_state["ws"] = _ws_field(ctx_for_request(msgs, self.ctx))
+            self._proxy_bonsai(body)
+            return
         ex = resolve_executor(requested)
         degradado = False
         if ex is None:
@@ -2209,6 +2326,70 @@ class _Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length) if length else b""
         self._trace_set_body(raw)
         self._error(METHOD_NOT_ALLOWED, "método não suportado")
+
+    def _proxy_bonsai(self, body: dict[str, Any]) -> None:
+        """Normaliza o body (Responses→Chat), fala com mlx, remapeia thinking."""
+        want_stream = bool(body.get("stream"))
+        normalized = cursor_openai.normalize_chat_body(dict(body))
+        normalized["stream"] = want_stream
+        echo = BONSAI_ID
+        if want_stream:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            headers = {
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Transfer-Encoding": "chunked",
+            }
+            total = 0
+            try:
+                for frame in cursor_openai.iter_remapped_sse_lines(
+                    _iter_upstream_sse(normalized, timeout_s=PROXY_TIMEOUT_S),
+                    echo_model=echo,
+                ):
+                    self.wfile.write(b"%x\r\n%s\r\n" % (len(frame), frame))
+                    self.wfile.flush()
+                    self._capture_response_chunk(frame)
+                    total += len(frame)
+                    if self.trace:
+                        self._trace_flush_resp_header(200, headers)
+                        print(
+                            f"sse> {frame.decode('utf-8', errors='replace')}",
+                            file=sys.stderr,
+                        )
+                self.wfile.write(b"0\r\n\r\n")
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            self._record_response(200, total)
+            return
+
+        status, raw = _proxy_post_json(normalized, timeout_s=PROXY_TIMEOUT_S)
+        if status == 0:
+            self._error(502, f"mlx_lm.server offline em {llm_base_url()}")
+            return
+        if status != 200:
+            try:
+                err = json.loads(raw.decode("utf-8", "replace") or "{}")
+                if isinstance(err, dict):
+                    self._json(status, err)
+                    return
+            except json.JSONDecodeError:
+                pass
+            self._error(status, f"upstream {status}: {raw[:500]!r}")
+            return
+        try:
+            data = json.loads(raw.decode("utf-8", "replace"))
+        except json.JSONDecodeError:
+            self._error(502, "upstream devolveu JSON inválido")
+            return
+        if not isinstance(data, dict):
+            self._error(502, "upstream devolveu corpo inesperado")
+            return
+        self._json(200, cursor_openai.remap_completion_response(data, echo_model=echo))
 
     def _stream(
         self,
