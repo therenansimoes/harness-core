@@ -294,14 +294,25 @@ def job_running(job: dict) -> bool:
 
 
 def dispatch_do(task: str, max_usd: float, ctx: ServeContext) -> dict:
-    """Sobe `harness do <task> --no-apply` em segundo plano e grava o
-    registro do job. Não checa teto/concorrência — quem chama (`handle_message`)
-    já decidiu que pode disparar."""
+    """Sobe `harness do <task> --no-apply --max-usd <max_usd>` em segundo plano e
+    grava o registro do job. O teto viaja no argv — é o `cmd_do` (fail-closed,
+    pré-dispatch) quem o aplica de verdade agora, não só o `pressure.cost_cap_usd`
+    do governor (ambiente, fail-open). Não checa teto/concorrência — quem chama
+    (`handle_message`) já decidiu que pode disparar."""
     jid = uuid.uuid4().hex[:8]
     d = jobs_dir()
     d.mkdir(parents=True, exist_ok=True)
     log = (d / f"{jid}.log").resolve()
-    argv = [sys.executable, "-m", "harness.cli", "do", task, "--no-apply"]
+    argv = [
+        sys.executable,
+        "-m",
+        "harness.cli",
+        "do",
+        task,
+        "--no-apply",
+        "--max-usd",
+        f"{max_usd:.2f}",
+    ]
     pid = _popen(argv, cwd=ctx.cwd, log=log)
     record = {
         "id": jid,
@@ -482,6 +493,8 @@ def _cmd_do(arg: str, ctx: ServeContext) -> str:
             return f'--max-usd precisa de um número, veio "{raw}"'
     if not task:
         return "uso: /do <pedido> [--max-usd N]"
+    if max_usd <= 0:
+        return "recusado: --max-usd tem que ser maior que zero. Nada foi disparado."
     if max_usd > MAX_USD_CAP:
         return (
             f"recusado: --max-usd {max_usd:.2f} passa do teto do servidor "
@@ -493,18 +506,12 @@ def _cmd_do(arg: str, ctx: ServeContext) -> str:
         return f"já tem um job rodando ({jid}) — espere terminar (/status). Nada foi disparado."
 
     record = dispatch_do(task, max_usd, ctx)
+    # `--max-usd` agora viaja no argv e é aplicado fail-closed pelo `cmd_do`
+    # (`ceiling`), não só pelo `pressure.cost_cap_usd` do governor (ambiente,
+    # fail-open) — a linha do teto reflete isso, sem alarme de "SEM TETO".
     cap = load_gov().cost_cap_usd
-    if cap <= 0:
-        teto_linha = (
-            f"teto pedido: ${max_usd:.2f} · ATENÇÃO: o runner está SEM TETO "
-            "(pressure.cost_cap_usd=0 em config/governor.toml) — o --max-usd "
-            "não é aplicado por ele"
-        )
-    else:
-        teto_linha = (
-            f"teto pedido: ${max_usd:.2f} · teto real do runner "
-            f"(governor cost_cap_usd): ${cap:.2f}"
-        )
+    extra = f" · teto ambiente do governor: ${cap:.2f}" if cap > 0 else ""
+    teto_linha = f"teto deste run: ${max_usd:.2f} (--max-usd, vale para todas as tentativas){extra}"
     return (
         f"job {record['id']} iniciado em {ctx.cwd}\n"
         f"pedido: {task}\n"

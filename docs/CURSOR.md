@@ -72,12 +72,16 @@ permission than a read.
   delivery branch, nothing merges into the default branch on its own.
 - Only one `/do` job runs at a time (`MAX_RUNNING_JOBS = 1`); a second
   request while one is in flight is refused.
-- `--max-usd` above `5.00` is refused outright. That refusal is enforcement
-  of the request, not of the run: the actual ceiling a dispatched `harness
-  do` obeys is `pressure.cost_cap_usd` in `config/governor.toml` (read via
-  `governor.load_gov()`), and the `/do` reply prints that real number next
-  to the one the user asked for. If the governor's cap is `0` (unset), the
-  reply says so explicitly instead of pretending `--max-usd` was honored.
+- `--max-usd` above `5.00` (or `<= 0`) is refused outright, before anything
+  dispatches. What survives that gate travels in the argv of the spawned
+  `harness do` and is a REAL hard cap on that run: `harness do --max-usd N`
+  is checked fail-closed, before every dispatch (`governor/ceiling.py`), and
+  stops the run — nothing applied — the moment cumulative spend across all
+  attempts would reach `N`. `pressure.cost_cap_usd` (`config/governor.toml`,
+  read via `governor.load_gov()`) is a separate, independent mechanism: an
+  environment-wide cap, fail-open, checked after the money for an attempt is
+  already spent. The `/do` reply prints both numbers side by side when the
+  governor cap is set.
 - Binds `127.0.0.1` by default. A non-loopback `--host` is accepted but
   prints a warning to stderr.
 - With `--api-key`/`HARNESS_SERVE_KEY` set, every request needs

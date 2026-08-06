@@ -28,6 +28,7 @@ from harness.ab import ArmSpec, run_ab
 from harness.backends import registry
 from harness.backends.offgrid import LEDGER_NODE as OFFGRID_NODE
 from harness.backends.offgrid import resolve_backend
+from harness.governor import ceiling
 from harness.improve.counterfactual import DEFAULT_LIMIT as WHATIF_LIMIT
 from harness.improve.counterfactual import MOCK_BACKEND
 from harness.improve.replay import DEFAULT_LIMIT
@@ -442,13 +443,21 @@ def _last_event(final: dict, node: str) -> dict:
 
 
 def _graph_final(
-    args: argparse.Namespace, unit: UnitSpec, sel: Selection, progress=None
+    args: argparse.Namespace,
+    unit: UnitSpec,
+    sel: Selection,
+    progress=None,
+    spent_before: float | None = 0.0,
 ) -> tuple[dict, float]:
     """Roda a unidade no grafo e devolve `(estado final, segundos)`.
 
     Separado do `_run_via_graph` porque o `harness do` precisa do estado (branch
     de entrega, arquivos tocados, id do ledger) para montar o relatório dele; o
     `run` só precisa do código de saída.
+    `spent_before`: gasto de run_ids ANTERIORES do mesmo `harness do` (escalada
+    de tier) — só quem chama sabendo disso passa algo diferente do default.
+    `args.max_usd` via `getattr`, não `args.max_usd` direto: o namespace do
+    `cmd_run` não tem esse atributo, e `run` continua sem teto explícito.
     """
     from harness.graph.run_graph import run_unit
 
@@ -479,6 +488,8 @@ def _graph_final(
         thread_id=uuid.uuid4().hex[:12],
         route=args.route,
         on_stage=None if progress is None else progress.stage,
+        max_usd=getattr(args, "max_usd", None),
+        spent_before=spent_before,
     )
     return final, time.monotonic() - t0
 
@@ -638,6 +649,12 @@ def _motivo_nao_aceito(decision) -> str:
     reason = decision.reason if decision else ""
     if not decision:
         return "o grafo parou sem decisão"
+    if ceiling.BREACH_REASON in reason:
+        return "teto de gasto estourado (--max-usd) — parou antes de gastar mais"
+    if ceiling.BLIND_REASON in reason:
+        return "não deu para ler o gasto acumulado — parou por precaução (teto ativo)"
+    if ceiling.NO_COST_REASON in reason:
+        return "o executor não reporta custo e há teto ativo — parou antes de despachar"
     if reason.startswith("verify_failed"):
         return "verify vermelho"
     if reason.startswith("kpi_regression"):
@@ -659,6 +676,9 @@ def cmd_do(args: argparse.Namespace) -> int:
     from harness.projects import IntegrateError, default_branch, delivery_branch, integrate
 
     paths.ensure_user_config()
+    if args.max_usd is not None and args.max_usd <= 0:
+        print("--max-usd tem que ser maior que zero", file=sys.stderr)
+        return 2
     do_mod.pin_home_paths()
     repo, criado = do_mod.ensure_repo(Path.cwd())
     if criado:
@@ -703,6 +723,8 @@ def cmd_do(args: argparse.Namespace) -> int:
     print(f"harness do · {repo} ({do_mod.current_branch(repo)})")
     print(_linha_do("pedido", args.task))
     print(_linha_do("régua", f"{verify_cmd}  ({motivo})"))
+    if args.max_usd:
+        print(_linha_do("teto", f"${args.max_usd:.2f} neste comando (todas as tentativas)"))
     if args.dry_run:
         print(_linha_do("rota", _rota_txt(args.route, sel)))
         print(_linha_do("unit", unit_dir))
@@ -722,7 +744,17 @@ def cmd_do(args: argparse.Namespace) -> int:
                     acima.model or None,
                 )
                 sel = _resolve_route(args, unit)
-                final, sec = _graph_final(args, unit, sel, progress)
+                # Escalada de tier: mesmo comando, run_id novo. O que a
+                # primeira tentativa já gastou tem que somar no teto do
+                # segundo `_graph_final` — sem isto o `--max-usd` reseta a
+                # cada degrau de tier, e o comando gastaria dois tetos.
+                try:
+                    gasto = ceiling.spent_for_run(
+                        final["run_id"], store.db_path(), final.get("attempt", 0)
+                    )
+                except Exception:
+                    gasto = None  # desconhecido -> fail-closed no _execute
+                final, sec = _graph_final(args, unit, sel, progress, spent_before=gasto)
             elif _sem_turno(final):
                 print(
                     "nenhum executor respondeu e não há tier acima deste — rode `harness doctor`",
@@ -2251,6 +2283,15 @@ def build_parser() -> argparse.ArgumentParser:
     adv.add_argument("--backend", default=None, help="força o executor (implica --route manual)")
     adv.add_argument("--model", default=None, help="força o modelo (implica --route manual)")
     adv.add_argument("--max-turns", type=int, default=None, dest="max_turns", metavar="N")
+    adv.add_argument(
+        "--max-usd",
+        type=float,
+        default=None,
+        dest="max_usd",
+        metavar="N",
+        help="teto de gasto DESTE comando em dólar, somando todas as tentativas; "
+        "estourou, o run para e nada é aplicado",
+    )
     adv.add_argument(
         "--no-apply",
         action="store_true",

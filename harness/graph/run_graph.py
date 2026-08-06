@@ -48,7 +48,7 @@ from harness.genome import tamper
 from harness.genome.genome import DEFAULT_PATH as GENOME_PATH
 from harness.genome.genome import Genome
 from harness.genome.genome import load as load_genome
-from harness.governor import guards, reorg
+from harness.governor import ceiling, guards, reorg
 from harness.governor.governor import (
     CUTOFF,
     check_cost,
@@ -95,6 +95,11 @@ CFG_BACKEND = "harness_backend"
 CFG_MODEL = "harness_model"
 CFG_MAX_TURNS = "harness_max_turns"
 CFG_ROUTE = "harness_route"
+# Teto de gasto explícito do comando (`--max-usd`), fail-closed — ver
+# `governor/ceiling.py`. Não confundir com `pressure.cost_cap_usd`, que é
+# ambiente e fail-open.
+CFG_MAX_USD = "harness_max_usd"
+CFG_SPENT_BEFORE = "harness_spent_before_usd"
 
 DEFAULT_MAX_TURNS = 30  # auditoria 2026-08-03: 8 model calls não cobrem ler+editar+verificar
 VERIFY_TIMEOUT_S = 120.0
@@ -309,6 +314,17 @@ def _cfg(config, key: str, default: Any = None) -> Any:
 
 def _db(config) -> Path:
     return Path(_cfg(config, CFG_DATA_DIR, "data")) / store.DB_NAME
+
+
+def _ceiling(config) -> ceiling.Ceiling:
+    """`config["configurable"]` -> `Ceiling`. SEM try/except: um teto pedido
+    que some em silêncio por causa de config torta é o bug que isto conserta,
+    não um caso a degradar."""
+    prior = _cfg(config, CFG_SPENT_BEFORE, 0.0)  # chave ausente -> 0.0
+    return ceiling.Ceiling(
+        limit_usd=float(_cfg(config, CFG_MAX_USD) or 0.0),
+        prior_usd=None if prior is None else float(prior),  # None gravado -> DESCONHECIDO
+    )
 
 
 def _event(node: str, **extra: Any) -> Event:
@@ -1065,6 +1081,52 @@ def _execute(state: RunState, config=None) -> dict:
     # hoje de propósito: quem julga backend quebrado é o exit_reason do execute,
     # não o grafo — preflight não bloqueia a topologia.
     ws = Path(state["workspace"])
+    # Choke point do teto explícito (`--max-usd`): checa DEPOIS da resolução do
+    # backend (capabilities do backend que vai rodar de verdade, não do
+    # primário se degradou) e ANTES do dispatch — nada de dinheiro sai sem
+    # passar por aqui. Sem teto ativo (`cel.active` falso) é zero overhead, o
+    # caminho de hoje intacto.
+    cel = _ceiling(config)
+    if cel.active:
+        br = ceiling.check(
+            cel, run_id, db, attempt, registry.get_backend(sel.backend).capabilities().reports_cost
+        )
+        if br.fired:
+            res = ExecResult(
+                ok=False,
+                exit_reason=ceiling.BUDGET_EXIT,
+                turns=0,
+                cost_usd=0.0,
+                tokens_in=0,
+                tokens_out=0,
+                files_changed=(),
+                session_id=None,
+                trace_path=ws / TRACE_FILE,
+            )
+            # Grava o nó: uma thread resumida reusa o resultado barrado e
+            # continua barrada — fail-closed sobrevive ao resume.
+            store.record_node(
+                run_id,
+                "execute",
+                _exec_payload(res)
+                | {"ceiling": br.reason, "spent_usd": br.spent_usd, "limit_usd": br.limit_usd},
+                db,
+                attempt=attempt,
+            )
+            return {
+                "exec": res,
+                "events": [
+                    _event(
+                        "execute",
+                        ok=False,
+                        exit_reason=ceiling.BUDGET_EXIT,
+                        attempt=attempt,
+                        ceiling=br.reason,
+                        spent_usd=br.spent_usd,
+                        limit_usd=br.limit_usd,
+                    )
+                ],
+            }
     result = registry.get_backend(sel.backend).execute(
         ExecRequest(
             prompt=_prompt(state),
@@ -1317,6 +1379,18 @@ def _gate(state: RunState, config=None) -> dict:
             specs,
         )
         action, reason = ruled.action, ruled.reason
+    # Teto de gasto explícito (`--max-usd`): execute barrado sobrepõe até
+    # `accept` — verify pode dar verde num workspace que já satisfazia a
+    # régua de uma tentativa anterior, e aceitar um attempt que não rodou é
+    # o fail-open que o teto existe pra evitar. INCONDICIONAL de propósito,
+    # ao contrário dos guards abaixo que só agem em cima de `retry`.
+    ex = state.get("exec")
+    if ex is not None and ex.exit_reason == ceiling.BUDGET_EXIT:
+        action = "escalate_human"
+        # O motivo específico (teto/gasto ilegível/backend sem custo) está no
+        # payload que `_execute` gravou — `ExecResult` não tem campo pra ele.
+        saved = store.get_node(state["run_id"], "execute", _db(config), attempt=attempt) or {}
+        reason = f"{reason}; {saved.get('ceiling') or ceiling.BREACH_REASON}"
     # Blocker DECLARADO pelo agente: roteia por tipo, antes do teto de tentativas.
     # `needs_user_input` não é desistência nem falha de execução — é pedido de
     # decisão humana, e mandar pro humano agora não gasta a tentativa que sobrou
@@ -1345,6 +1419,17 @@ def _gate(state: RunState, config=None) -> dict:
     if action == "retry" and _gov_cost(state["run_id"], _db(config), attempt) == CUTOFF:
         action = "escalate_human"
         reason = f"{reason}; governor:custo_estourado"
+    # Teto explícito de novo, agora olhando pra FRENTE: a próxima tentativa
+    # (attempt + 1) custaria pelo menos o que já foi gasto, e o teto do
+    # pedido (não o do ambiente) já fecharia a conta. `backend_reports_cost`
+    # fixo em `True` aqui de propósito: se o backend não reportasse custo o
+    # `_execute` da próxima tentativa já teria barrado sozinho (NO_COST_REASON).
+    cel = _ceiling(config)
+    if action == "retry" and cel.active:
+        br = ceiling.check(cel, state["run_id"], _db(config), attempt + 1, True)
+        if br.fired:
+            action = "escalate_human"
+            reason = f"{reason}; {br.reason}"
     # Guard: verify vermelho N vezes seguidas no tier DE CIMA — não há para onde
     # escalar e tentar de novo é queimar orçamento. Para de tentar e fecha com
     # relatório de falha honesto. Fail-open: qualquer dúvida (config de tier
@@ -1673,6 +1758,8 @@ def run_unit(
     max_attempts: int | None = None,
     route: str = ROUTE_MANUAL,
     on_stage: Callable[[str], None] | None = None,
+    max_usd: float | None = None,
+    spent_before: float | None = 0.0,
 ) -> RunState:
     """Roda uma unidade ponta a ponta. Mesmo `thread_id` + `data_dir` = retomada.
 
@@ -1683,6 +1770,11 @@ def run_unit(
     quem executou.
     `on_stage` recebe o nome de cada nó que TERMINOU; sem ele o caminho é o
     `invoke` de sempre.
+    `max_usd=None` (o default) = sem teto explícito, comportamento de hoje.
+    `spent_before`: gasto de run_ids ANTERIORES do mesmo comando (escalada de
+    tier em `cmd_do`, por exemplo) — `0.0` é "nada gasto ainda", `None` é
+    "gasto DESCONHECIDO", que com teto ativo barra a próxima tentativa por
+    precaução (fail-closed) em vez de fingir zero.
     """
     # Import tardio: o cli vai chamar o grafo, então o grafo não importa o cli
     # no topo (ciclo).
@@ -1717,6 +1809,8 @@ def run_unit(
                 CFG_MODEL: model,
                 CFG_MAX_TURNS: DEFAULT_MAX_TURNS,
                 CFG_ROUTE: route,
+                CFG_MAX_USD: max_usd,
+                CFG_SPENT_BEFORE: spent_before,
             },
             # Cada tentativa gasta ~8 supersteps; sobra folga para o loop de retry.
             "recursion_limit": 12 * (max_attempts + 1),

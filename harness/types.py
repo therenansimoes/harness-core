@@ -19,7 +19,7 @@ Kind = Literal["code", "content", "config", "refactor", "infra"]
 # gate lê o tipo em `ExecResult.blocker` e decide se é rota pro humano, retry
 # adiado ou retry normal.
 ExitReason = Literal[
-    "done", "max_turns", "timeout", "error", "blocked", "stalled", "truncated", "blocker"
+    "done", "max_turns", "timeout", "error", "blocked", "stalled", "truncated", "blocker", "budget"
 ]
 
 

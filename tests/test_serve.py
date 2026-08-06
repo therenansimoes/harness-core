@@ -282,11 +282,28 @@ def test_do_ok_dispara_um_job(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     assert "do" in argv
     assert "conserta o bug" in argv
     assert "--no-apply" in argv
+    # O teto (default do servidor, sem `--max-usd` no pedido) viaja no argv —
+    # `cmd_do` é quem aplica de verdade agora, fail-closed, não só o governor.
+    assert argv[argv.index("--max-usd") + 1] == "5.00"
 
     jobs = list((tmp_path / "data" / "serve" / "jobs").glob("*.json"))
     assert len(jobs) == 1
     assert "job " in resp
     assert "/status" in resp
+
+
+def test_do_max_usd_zero_ou_negativo_recusa_sem_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HARNESS_DATA_DIR", str(tmp_path / "data"))
+    ctx = _ctx(tmp_path)
+    chamado = []
+    monkeypatch.setattr(serve, "_popen", lambda *a, **kw: chamado.append((a, kw)) or 1)
+
+    for valor in ("0", "-1"):
+        resp = serve.handle_message(f"/do 'x' --max-usd {valor}", ctx)
+        assert "--max-usd tem que ser maior que zero" in resp
+    assert chamado == []
 
 
 def test_do_recusa_segundo_job_enquanto_primeiro_roda(
