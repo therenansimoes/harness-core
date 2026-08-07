@@ -1,4 +1,5 @@
 id = "micro_two_files"
+files = ["dados.py", "usa_dados.py"]
 kind = "code"
 # Micro-unidade: dois arquivos, o segundo importa o primeiro. O verify roda o
 # script de verdade — referência quebrada não passa por leitura de texto.

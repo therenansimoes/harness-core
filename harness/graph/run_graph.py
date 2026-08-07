@@ -114,6 +114,35 @@ VERIFY_TIMEOUT_S = 120.0
 VERIFY_LOG = "verify.log"
 TRACE_FILE = "trace.jsonl"
 
+# Conjunto de tools de filesystem a passar para SmartFilesystemMiddleware.
+# "delete" é omitido para micro-unidades: o risco de um modelo pequeno apagar
+# um seed file é real, e nenhuma micro-unidade pede remoção de arquivo.
+_FS_FULL_TOOLS: tuple[str, ...] = (
+    "ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep", "execute"
+)
+_FS_MICRO_TOOLS: tuple[str, ...] = (
+    "ls", "read_file", "write_file", "edit_file", "glob", "grep", "execute"
+)
+
+
+def _expected_files(unit: Any) -> tuple[str, ...]:
+    """Caminhos que devem existir ao final do run, para o CompletionGuard.
+
+    Prefere  (declarado no unit.toml); quando vazio, extrai paths
+    com extensão do verify_cmd (heurística test -f).
+    """
+    if getattr(unit, "files", None):
+        return tuple(unit.files)
+    from harness.backends.completion_guard import _files_from_verify
+    return _files_from_verify(getattr(unit, "verify_cmd", "") or "")
+
+
+def _fs_tools_for(unit_id: str) -> tuple[str, ...]:
+    """Retorna o conjunto de FS tools adequado para a unidade."""
+    if unit_id.startswith("micro_"):
+        return _FS_MICRO_TOOLS
+    return _FS_FULL_TOOLS
+
 # Não vão para o workspace: a spec da unidade e lixo de ferramenta.
 IGNORE_NAMES = ("unit.toml", "__pycache__", ".git", ".venv", "node_modules")
 
@@ -1327,6 +1356,7 @@ def _execute(state: RunState, config=None) -> dict:
         ExecRequest(
             prompt=_prompt(state),
             workspace=ws,
+            tools=_fs_tools_for(state["unit"].id),
             model=sel.model or None,
             max_turns=sel.max_turns,
             trace_path=ws / TRACE_FILE,
@@ -1337,6 +1367,7 @@ def _execute(state: RunState, config=None) -> dict:
             # backend que não olha esses campos executa exatamente como antes.
             roles_allow=sel.roles_allow,
             roles_required=sel.roles_required,
+            expected_files=_expected_files(state["unit"]),
         )
     )
     payload = _exec_payload(result)

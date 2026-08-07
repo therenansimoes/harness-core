@@ -1,0 +1,19 @@
+id = "micro_marketing_cta"
+files = ["CTA.md"]
+kind = "content"
+requires_real_backend = true
+prompt = "Read prompt.md in the workspace and follow it exactly. Use marketing methodology: audience, offer, one CTA."
+verify_cmd = """
+set -ex
+test -f CTA.md || { echo FALHA: CTA.md missing; exit 1; }
+grep -Fq makers CTA.md || { echo FALHA: missing makers; exit 1; }
+grep -Fq BOM CTA.md || { echo FALHA: missing BOM; exit 1; }
+grep -Fq Download CTA.md || { echo FALHA: missing Download; exit 1; }
+python3 - <<PY
+lines = [l.strip() for l in open("CTA.md", encoding="utf-8").read().splitlines() if l.strip()]
+bullets = [l for l in lines if l.startswith("- ") or l.startswith("* ")]
+assert len(bullets) == 3, bullets
+assert len(lines) == 3, lines
+print("micro_marketing_cta ok")
+PY
+"""

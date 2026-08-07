@@ -343,15 +343,18 @@ def run_once(
         # Log de run anterior não fica no workspace para o agente ler: o golden
         # impresso pelo verificador selado seria a resposta pronta.
         (ws / ".harness" / "verify.log").unlink(missing_ok=True)
+        from harness.graph.run_graph import _fs_tools_for, _expected_files, _save_trace
         result = backend.execute(
             ExecRequest(
                 prompt=unit.prompt,
                 workspace=ws,
+                tools=_fs_tools_for(unit.id),
                 model=model,
                 max_turns=max_turns,
                 trace_path=ws / "trace.jsonl",
                 run_id=run_id,
                 kind=unit.kind,
+                expected_files=_expected_files(unit),
             )
         )
         # A régua decide, não o executor: verify roda sempre que houve execução
@@ -382,6 +385,8 @@ def run_once(
             decision = Decision("retry", f"backend_{result.exit_reason}")
         if decision.action == "revert" and repo is not None:
             _revert(ws)  # no tmpdir o revert é o próprio descarte
+        # Fail-open: trace inexistente ou disco recusando não derruba um run já pago.
+        _save_trace(ws / "trace.jsonl", run_id, 0, None)
 
     sec_total = time.monotonic() - t0
     row = RunRow(

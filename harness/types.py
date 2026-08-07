@@ -112,6 +112,10 @@ class ExecRequest:
     roles_allow: tuple[str, ...] | None = None
     # Papéis que a frota PRECISA ter neste run (área concentrada pede revisor).
     roles_required: tuple[str, ...] = ()
+    # Caminhos que devem existir em disco ao final do run (relativos ao workspace).
+    # Vazio (o default) = sem guarda. Preenchido pelo run_graph a partir de
+    # `UnitSpec.files` (ou do parse do verify_cmd como fallback).
+    expected_files: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

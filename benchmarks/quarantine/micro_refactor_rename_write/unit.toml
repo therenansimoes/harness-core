@@ -1,0 +1,30 @@
+id = "micro_refactor_rename_write"
+files = ["util.py", "pedido.py", "relatorio.py"]
+kind = "refactor"
+requires_real_backend = true
+prompt = """Overwrite these three files with EXACTLY the contents below (write_file each path). No planner.
+
+=== /util.py ===
+def soma_total(valores):
+    return sum(valores)
+
+=== /pedido.py ===
+from util import soma_total
+
+
+def total_pedido(itens):
+    return soma_total(itens)
+
+=== /relatorio.py ===
+from util import soma_total
+
+
+def linha_relatorio(itens):
+    return f"total={soma_total(itens)}"
+"""
+verify_cmd = """
+set -ex
+! grep -n calcula_total util.py pedido.py relatorio.py
+grep -q 'def soma_total' util.py
+python3 -c "import pedido,relatorio; assert pedido.total_pedido([1,2])==3; assert 'total=3' in relatorio.linha_relatorio([1,2]); print('ok')"
+"""

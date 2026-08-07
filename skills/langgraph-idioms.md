@@ -1,6 +1,6 @@
 ---
 name = "langgraph-idioms"
-kinds = ["code", "refactor"]
+kinds = ["code"]
 description = "Idiomas LangGraph do harness: idempotência por chave, configurable, interrupt, checkpointer"
 ---
 ## Idiomas LangGraph deste harness

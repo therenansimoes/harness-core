@@ -97,16 +97,18 @@ def test_select_ranks_by_query_overlap_and_caps(tmp_path):
     _four_skills(root)
 
     got = select_skills("code", root, query="editar o markup HTML do template index")
-    assert [s.name for s in got] == ["html-edit", "markup-css"]
+    # description-first: markup-css hits on description; html-edit is body-only
+    # and is dropped while any description hit exists.
+    assert [s.name for s in got] == ["markup-css"]
 
 
 def test_select_without_query_keeps_kind_order_under_limit(tmp_path):
     root = tmp_path / "skills"
     _four_skills(root)
 
-    assert [s.name for s in select_skills("code", root)] == ["html-edit", "ledger-sqlite"]
+    assert [s.name for s in select_skills("code", root)] == ["html-edit", "ledger-sqlite", "markup-css"]
     # query sem token utilizável (< 3 chars) = sem query, não zera a seleção
-    assert len(select_skills("code", root, query="x")) == 2
+    assert len(select_skills("code", root, query="x")) == 3
     assert [s.name for s in select_skills("code", root, query="css", limit=1)] == ["markup-css"]
 
 
@@ -148,8 +150,13 @@ def test_path_trigger_respeita_o_limite(tmp_path):
             f"{n}.md",
             f'name = "{n}"\nkinds = ["config"]\ndescription = "d"\npaths = ["*.toml"]',
         )
+    # PATH_CAP=max(1,limit//3): at limit=2 -> max(1,0)=1, so 1 triggered slot
+    # overflow triggered fall into resto and fill remaining slots
     got = select_skills("config", root, files=["genome.toml"], limit=2)
     assert [s.name for s in got] == ["a", "b"]
+    # at limit=6 -> PATH_CAP=2, all 3 triggered included
+    got6 = select_skills("config", root, files=["genome.toml"], limit=6)
+    assert [s.name for s in got6] == ["a", "b", "c"]
 
 
 def test_path_trigger_casa_basename_e_path_completo(tmp_path):
@@ -203,6 +210,35 @@ def test_render_prompt_output(tmp_path):
 
 def test_render_prompt_empty_for_no_skills():
     assert render_prompt([]) == ""
+
+
+def test_render_prompt_truncates_long_body(tmp_path):
+    root = tmp_path / "skills"
+    section1 = "word " * 520
+    section2 = "## Second section\n" + "extra " * 20
+    body = section1.strip() + "\n\n" + section2
+    _write(root, "long.md", 'name = "long"\nkinds = []\ndescription = "d"', body)
+    out = render_prompt(load_skills(root))
+    assert "<!-- skill truncated -->" in out
+    assert "Second section" not in out
+
+
+def test_render_prompt_short_body_not_truncated(tmp_path):
+    root = tmp_path / "skills"
+    body = "short body with fewer than five hundred words word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word "
+    _write(root, "short.md", 'name = "short"\nkinds = []\ndescription = "d"', body)
+    out = render_prompt(load_skills(root))
+    assert "<!-- skill truncated -->" not in out
+    assert "short body" in out
+
+
+def test_render_prompt_no_section_boundary_hard_truncates(tmp_path):
+    root = tmp_path / "skills"
+    body = "word " * 600
+    _write(root, "nosec.md", 'name = "nosec"\nkinds = []\ndescription = "d"', body)
+    out = render_prompt(load_skills(root))
+    assert "<!-- skill truncated -->" in out
+    assert out.count("word") <= 501
 
 
 # --- seeds do repo ---------------------------------------------------------
@@ -332,7 +368,7 @@ def test_backend_injects_real_skills_from_foreign_cwd_and_records_usage(monkeypa
     assert "- python-fixes —" in captured["system_prompt"]  # índice
     assert "config-calibration" not in captured["system_prompt"]  # kind errado
     # Teto (9B não lê 4 skills): contado onde os corpos moram agora, o bloco.
-    assert (da._untrusted_block(req) or "").count("### ") <= 2
+    assert (da._untrusted_block(req) or "").count("### ") <= 3
     rows = attribution.lift("python-fixes")
     assert rows["with"] == (0, 0)  # sem linha em `runs`: só o usage foi gravado
     with attribution._connect() as conn:
@@ -389,3 +425,93 @@ def test_prompt_files_dedup_e_prompt_sem_arquivo():
     prompt = "leia harness/x.py, edite harness/x.py e o config/agents.toml"
     assert da._prompt_files(prompt) == ["harness/x.py", "config/agents.toml"]
     assert da._prompt_files("suba o piso do bandit sem mexer em arquivo nenhum") == []
+
+
+def test_methodology_skills_select_by_domain_keywords() -> None:
+    """New Ralph methodology skills must win SELECT_LIMIT ranking on domain queries."""
+    cases = [
+        ("content", "marketing landing page conversion CTA offer", None, "marketing-methodology"),
+        ("content", "inventory SKU reorder stock BOM audit", None, "inventory-methodology"),
+        ("content", "ecommerce checkout cart pricing refund fulfill", None, "ecommerce-sales-methodology"),
+        ("code", "Next.js app router server component page.tsx", ["app/page.tsx"], "nextjs-methodology"),
+        ("code", "python pytest failure fix types uv run", None, "python-methodology"),
+        ("code", "research sources claims counter-evidence before coding", None, "method-research"),
+        ("code", "planning decompose implementation steps verify plan", None, "method-planning"),
+    ]
+    for kind, query, files, expect in cases:
+        got = select_skills(kind, REPO_SKILLS, query=query, files=files)
+        names = [s.name for s in got]
+        assert expect in names, (kind, query, names)
+
+
+def test_path_trigger_proc_skills() -> None:
+    """Proc skills with paths= must be path-triggered for .py units (limit=10 to bypass SELECT_LIMIT cap)."""
+    # All *.py proc skills compete; use limit=10 to confirm each is triggered.
+    py_files_rename = ["pedido.py", "relatorio.py"]
+    got = select_skills("code", REPO_SKILLS, query="rename function across files", files=py_files_rename, limit=10)
+    names = [s.name for s in got]
+    assert "proc-rename-via-write" in names, names
+
+    got = select_skills("code", REPO_SKILLS, query="edit existing class method", files=["util.py"], limit=10)
+    names = [s.name for s in got]
+    assert "proc-surgical-edit-check" in names, names
+
+    got = select_skills("code", REPO_SKILLS, query="create module and importer", files=["main.py"], limit=10)
+    names = [s.name for s in got]
+    assert "proc-two-module-create" in names, names
+
+    got = select_skills("code", REPO_SKILLS, query="write new file from spec", files=["app.py"], limit=10)
+    names = [s.name for s in got]
+    assert "proc-exact-write-from-spec" in names, names
+
+    got = select_skills("code", REPO_SKILLS, query="fix bug", files=["service.py"], limit=10)
+    names = [s.name for s in got]
+    assert "python-fixes" in names, names
+
+    # Under SELECT_LIMIT=2, rename prompt wins over unrelated skills when files present
+    got2 = select_skills("code", REPO_SKILLS, query="rename symbol across files", files=py_files_rename)
+    names2 = [s.name for s in got2]
+    assert "proc-rename-via-write" in names2, names2
+
+
+def test_path_trigger_recovery_cards_no_paths() -> None:
+    """Recovery cards have no paths=: fire on description match alone."""
+    got = select_skills(None, REPO_SKILLS, query="empty_turn nudge fired do something")
+    assert "proc-recover-after-empty-turn" in [s.name for s in got], [s.name for s in got]
+
+    got = select_skills(None, REPO_SKILLS, query="completion_guard nudge fired missing files write")
+    assert "proc-recover-missing-files" in [s.name for s in got], [s.name for s in got]
+
+
+def test_path_cap_prevents_path_flood() -> None:
+    """ym0.18 redesign: SELECT_LIMIT=3, PATH_CAP=max(1,limit//3)=1.
+    One slot for best desc-ranked path-triggered skill; two free slots for ranking.
+    """
+    # Single-file: best path-triggered by desc score wins 1 slot;
+    # python-methodology fills a ranking slot.
+    got = select_skills("code", REPO_SKILLS, query="fix bug python service", files=["service.py"])
+    names = [s.name for s in got]
+    assert len(names) <= 3, f"exceeded limit: {names}"
+    assert not ("proc-exact-write-from-spec" in names and "proc-rename-via-write" in names), (
+        f"path flood: both alphabetically-first skills crowded in: {names}"
+    )
+    # python-methodology should surface via ranking (free slots)
+    assert "python-methodology" in names, f"expected python-methodology in ranking slots, got {names}"
+
+    # Pytest / test file: python-methodology wins desc score -> triggered slot.
+    got2 = select_skills("code", REPO_SKILLS, query="python pytest typed uv run tests", files=["tests/test_foo.py"])
+    names2 = [s.name for s in got2]
+    assert "python-methodology" in names2, f"expected python-methodology, got {names2}"
+
+    # Exact-write query: proc-exact-write-from-spec wins triggered slot.
+    got3 = select_skills("code", REPO_SKILLS, query="write new file from spec exact content", files=["new_mod.py"])
+    names3 = [s.name for s in got3]
+    assert "proc-exact-write-from-spec" in names3, f"expected proc-exact-write-from-spec, got {names3}"
+
+    # Multi-file rename: proc-rename-via-write wins triggered slot (rename in desc);
+    # ranking fills remaining 2 slots — python-methodology or two-module-create can appear.
+    got4 = select_skills("code", REPO_SKILLS, query="rename symbol across files", files=["pedido.py", "relatorio.py"])
+    names4 = [s.name for s in got4]
+    assert "proc-rename-via-write" in names4, f"expected proc-rename-via-write in triggered slot, got {names4}"
+    # At SELECT_LIMIT=3, at least one methodology/proc should surface alongside rename.
+    assert len(names4) >= 2, f"expected at least 2 skills for multi-file rename, got {names4}"

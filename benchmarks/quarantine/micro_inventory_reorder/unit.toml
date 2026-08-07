@@ -1,0 +1,18 @@
+id = "micro_inventory_reorder"
+files = ["REORDER.md"]
+kind = "content"
+requires_real_backend = true
+prompt = "Read prompt.md and follow it exactly. Use inventory methodology: SKU, free stock, reorder."
+verify_cmd = """
+set -ex
+test -f REORDER.md || { echo FALHA: REORDER.md missing; exit 1; }
+grep -Fq CAP-100uF REORDER.md || { echo FALHA: missing SKU; exit 1; }
+grep -Fq 7 REORDER.md || { echo FALHA: missing free stock 7; exit 1; }
+grep -Ei "reorder" REORDER.md || { echo FALHA: missing reorder; exit 1; }
+python3 - <<PY
+lines=[l.strip() for l in open("REORDER.md",encoding="utf-8").read().splitlines() if l.strip()]
+bullets=[l for l in lines if l.startswith("- ") or l.startswith("* ")]
+assert len(bullets)==3 and len(lines)==3, (bullets, lines)
+print("micro_inventory_reorder ok")
+PY
+"""

@@ -1,4 +1,5 @@
 id = "micro_content_summary"
+files = ["resumo.md"]
 kind = "content"
 # Micro-unidade de conteúdo: 3 bullets a partir de fixtures/texto.md. Os fatos
 # obrigatórios são todos ASCII de propósito — grep de fato com acento depende de

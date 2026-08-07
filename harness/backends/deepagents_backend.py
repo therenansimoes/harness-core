@@ -22,7 +22,7 @@ from typing import Any, ClassVar
 
 from harness import trust_boundary
 from harness.backends.agent_roles import load_roles, roles_manual
-from harness.skills import render_prompt, select_skills
+from harness.skills import CONTENT_SELECT_LIMIT, render_prompt, select_skills
 from harness.types import Capabilities, ExecRequest, ExecResult, ExitReason, Preflight
 
 try:
@@ -79,6 +79,7 @@ _HTTP_CLIENTS: ContextVar[list[Any] | None] = ContextVar("harness_http_clients",
 # Contrato com o prompt-builder: se este arquivo existir, seu conteúdo é
 # prependado às instructions do agente; ausente => comportamento atual.
 EXECUTOR_PROMPT_PATH = Path("prompts/executor.md")
+PROCEDURES_PROMPT_PATH = Path("prompts/procedures.md")
 # Manual das tools (o que cada uma faz, assinatura, exemplo e pegadinha). Cada
 # modelo usa tool de um jeito; prompts/tools/<provider>_<modelo>.md e
 # prompts/tools/<provider>.md ganham do geral quando existem.
@@ -535,6 +536,35 @@ def _build_agent(req: ExecRequest):
         middleware.append(LoopGuardMiddleware())
     except Exception:
         pass
+    # Hermes/Qwopus: tool markup ends up in content instead of tool_calls.
+    # Salvage runs before EmptyTurn so the nudge never fires for a real call.
+    try:
+        from harness.backends.tool_salvage import ToolSalvageMiddleware
+
+        middleware.append(ToolSalvageMiddleware())
+    except Exception:
+        pass
+    # Qwopus/LMS: reasoning-only turn → empty content, no tools → stalled.
+    # One nudge+retry recovers renames that stop mid-read.
+    try:
+        from harness.backends.empty_turn import EmptyTurnMiddleware
+
+        middleware.append(EmptyTurnMiddleware())
+    except Exception:
+        pass
+    # Stop sem arquivos esperados → nudge listando os paths ausentes (uma vez).
+    try:
+        from harness.backends.completion_guard import CompletionGuardMiddleware
+
+        if req.expected_files:
+            middleware.append(
+                CompletionGuardMiddleware(
+                    expected_files=req.expected_files,
+                    workspace=req.workspace,
+                )
+            )
+    except Exception:
+        pass
     # Erro de tool transitório (rede da web_tools, lock de arquivo, subprocess
     # que morreu) gastava um turno do agente e virava texto de erro no contexto.
     try:
@@ -576,7 +606,10 @@ def _build_agent(req: ExecRequest):
         "O `read_file` mostra números de linha que NÃO existem no arquivo: no "
         "`old_string` do edit_file use só o texto cru, com a indentação exata. "
         "Se o edit_file falhar duas vezes com 'String not found', pare de "
-        "tentar e reescreva o arquivo inteiro com write_file."
+        "tentar e reescreva o arquivo inteiro com write_file. "
+        "Rename: read_file em TODOS os paths listados (pode ser no mesmo turno) "
+        "e edit_file em TODOS antes de qualquer mensagem final — resposta vazia "
+        "sem tool_call no meio da tarefa é falha."
     )
     # `kind` já é campo do ExecRequest (preenchido pelo router no run_graph e
     # pela unit no cli); getattr segura request serializado de genoma antigo.
@@ -616,13 +649,17 @@ def _build_agent(req: ExecRequest):
     if base_prompt:
         system_prompt = f"{base_prompt}\n\n{system_prompt}"
 
+    procedures_index = _procedures_prompt()
+    if procedures_index:
+        system_prompt = f"{system_prompt}\n\n{procedures_index}"
+
     # Papéis vêm de config/agents.toml (dado, não código): [] devolve o
     # comportamento de antes — só o `general-purpose` default da tool `task`.
     # `model` só serve ao papel que delega (o subagent aninhado é compilado na
     # hora): é a MESMA instância do agente principal, nenhum peso extra na
     # máquina.
     adapter = _adapter_for(req.adapter)
-    chat_model = _model_for(req.model, adapter)
+    chat_model = _model_for(req.model, adapter, max_tokens=DEFAULT_OPENAI_MAX_TOKENS)
     # `_fleet` é o recorte que o reorg decidiu no route: frota inteira (o
     # normal), frota filtrada ou frota nenhuma. Com `roles == []` o manual já sai
     # "" e `subagents` nem chega ao create_deep_agent — o colapso é real, não uma
@@ -726,6 +763,10 @@ def _build_agent(req: ExecRequest):
 
 
 MODEL_TEMPERATURE = 0.2
+# Local LMS leaves max_tokens unset → short server default; with thinking on
+# (Qwopus ignores enable_thinking:false) reasoning fills the budget and the
+# turn ends with empty content + no tool_calls (micro_refactor stall).
+DEFAULT_OPENAI_MAX_TOKENS = 4096
 # `chat_template_kwargs` é o canal do vLLM/llama.cpp para ligar o modo de
 # raciocínio dos modelos que trazem dois templates (Qwen3 e afins).
 THINKING_EXTRA_BODY = {"chat_template_kwargs": {"enable_thinking": False}}
@@ -756,7 +797,7 @@ def _thinking_kwargs(model: str) -> dict[str, Any]:
     return {}
 
 
-def _model_for(model: str | None, adapter: Any = None):
+def _model_for(model: str | None, adapter: Any = None, max_tokens: int | None = None):
     """Instância de chat model com temperature baixa e thinking ligado.
 
     `create_deep_agent` aceita string OU BaseChatModel; a string usa o default
@@ -776,7 +817,10 @@ def _model_for(model: str | None, adapter: Any = None):
         try:
             from langchain.chat_models import init_chat_model
 
-            return _track(init_chat_model(model, temperature=MODEL_TEMPERATURE, **kwargs))
+            call = dict(kwargs)
+            if model.startswith(OPENAI_PREFIX) and "max_tokens" not in call:
+                call["max_tokens"] = max_tokens if max_tokens is not None else DEFAULT_OPENAI_MAX_TOKENS
+            return _track(init_chat_model(model, temperature=MODEL_TEMPERATURE, **call))
         except Exception:
             continue
     return model
@@ -854,9 +898,14 @@ def _selected_skills(req: ExecRequest) -> list[Any]:
     """Seleção de skills deste request — determinística, então o `_build_agent`
     e o `_payload_messages` chegam na mesma lista sem passar estado entre eles
     (assinatura do `_build_agent` fica de pé)."""
-    return select_skills(
-        getattr(req, "kind", None), query=req.prompt, files=_prompt_files(req.prompt)
-    )
+    kind = getattr(req, "kind", None)
+    # ym0.20: content tasks with proc-content-cta-skeleton already path-triggered
+    # don't need 2 free methodology slots; 1 is enough → limit=2 cuts ~1 body.
+    limit = CONTENT_SELECT_LIMIT if kind == "content" else None
+    kwargs = {"query": req.prompt, "files": _prompt_files(req.prompt)}
+    if limit is not None:
+        kwargs["limit"] = limit
+    return select_skills(kind, **kwargs)
 
 
 def _untrusted_block(req: ExecRequest) -> str | None:
@@ -926,6 +975,16 @@ def _executor_prompt() -> str:
     try:
         if EXECUTOR_PROMPT_PATH.is_file():
             return EXECUTOR_PROMPT_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        pass
+    return ""
+
+
+def _procedures_prompt() -> str:
+    """Conteúdo de prompts/procedures.md (índice de procedimentos), ou "" se ausente."""
+    try:
+        if PROCEDURES_PROMPT_PATH.is_file():
+            return PROCEDURES_PROMPT_PATH.read_text(encoding="utf-8").strip()
     except OSError:
         pass
     return ""

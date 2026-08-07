@@ -1,4 +1,5 @@
 id = "micro_edit_line"
+files = ["config.py"]
 kind = "code"
 # Micro-unidade com seed: `config.py` já vem no workspace (seed_workspace copia
 # tudo menos o unit.toml), então o modelo só edita — não precisa criar.

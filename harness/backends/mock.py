@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from typing import ClassVar
 
 from harness.types import Capabilities, ExecRequest, ExecResult, Preflight
@@ -28,6 +30,11 @@ class MockBackend:
         req.workspace.mkdir(parents=True, exist_ok=True)
         out = req.workspace / OUTPUT_FILE
         out.write_text(req.prompt, encoding="utf-8")
+        if req.trace_path is not None:
+            req.trace_path.write_text(
+                json.dumps({"role": "assistant", "content": req.prompt}) + "\n",
+                encoding="utf-8",
+            )
         return ExecResult(
             ok=True,
             exit_reason="done",

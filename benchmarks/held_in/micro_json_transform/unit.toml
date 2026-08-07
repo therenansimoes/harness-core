@@ -1,4 +1,5 @@
 id = "micro_json_transform"
+files = ["out.json"]
 kind = "code"
 # Micro-unidade: lê fixtures/in.json (vem no seed do workspace) e escreve
 # out.json na raiz. Transformação de uma linha, verify determinístico.

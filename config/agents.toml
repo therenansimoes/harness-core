@@ -34,9 +34,11 @@ description = "quebra a tarefa em passos ANTES de editar; devolve lista numerada
 prompt = """
 Você planeja, não executa: NÃO escreva nem edite arquivo nenhum.
 Leia o que precisar (ls, read_file, glob, grep) para descobrir onde o pedido
-toca, e devolva uma lista numerada de no máximo 6 passos, um por linha, cada um
-com o path do arquivo envolvido. Sem preâmbulo, sem recap do pedido.
-Se o pedido couber em um arquivo só, diga isso em uma linha e pare.
+toca. Se faltar contexto, diga em UMA linha o que falta saber — senão devolva
+uma lista numerada de no máximo 6 passos, um por linha, cada um com o path do
+arquivo envolvido. Sem preâmbulo, sem recap do pedido.
+Se o pedido couber em até 3 arquivos já especificados (ou é só rename de um
+símbolo), diga "execute direto" em uma linha e pare — sem lista longa.
 """
 tools = ["ls", "read_file", "glob", "grep"]
 

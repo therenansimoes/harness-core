@@ -1,0 +1,21 @@
+id = "micro_nextjs_page"
+files = ["app/page.tsx"]
+kind = "code"
+requires_real_backend = true
+prompt = """Create app/page.tsx with EXACTLY this content (Next.js App Router server component):
+
+export default function Page() {
+  return <main>HarnessHello</main>;
+}
+
+No other files. Do not add 'use client'.
+"""
+verify_cmd = """
+set -ex
+test -f app/page.tsx || { echo FALHA: app/page.tsx missing; exit 1; }
+grep -Fq "HarnessHello" app/page.tsx || { echo FALHA: missing HarnessHello; exit 1; }
+grep -Fq "<main" app/page.tsx || { echo FALHA: missing main; exit 1; }
+! grep -Fq "use client" app/page.tsx || { echo FALHA: must be server component; exit 1; }
+grep -Eq "export default" app/page.tsx || { echo FALHA: missing default export; exit 1; }
+python3 -c "from pathlib import Path; t=Path('app/page.tsx').read_text(encoding='utf-8'); assert 'HarnessHello' in t and 'use client' not in t; print('micro_nextjs_page ok')"
+"""

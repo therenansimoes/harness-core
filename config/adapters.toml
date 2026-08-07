@@ -198,7 +198,7 @@ served_model = "qwopus3.5-4b-coder-mtp"
 ref = "/Users/renansimoes/.lmstudio/models/Jackrong/Qwopus3.5-4B-Coder-MTP-GGUF"
 kinds = []
 match = ["scaffold", "webapp", "frontend", "website", "app"]
-enable_thinking = true
+enable_thinking = false
 temperature = 1.0
 top_p = 0.95
 

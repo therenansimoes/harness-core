@@ -2,6 +2,7 @@
 name = "python-fixes"
 kinds = ["code"]
 description = "Correção de bug em Python com diff mínimo e verificação real"
+paths = ["**/*.py"]
 ---
 ## Correção de bugs com diff mínimo
 

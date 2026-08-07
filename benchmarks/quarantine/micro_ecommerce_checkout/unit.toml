@@ -1,0 +1,18 @@
+id = "micro_ecommerce_checkout"
+files = ["CHECKOUT.md"]
+kind = "content"
+requires_real_backend = true
+prompt = """Write CHECKOUT.md with EXACTLY these 3 lines (no title, no extras):
+
+- Cart line: WIDGET-A
+- Payment: PENDING
+- shipping: unknown
+"""
+verify_cmd = """
+set -ex
+test -f CHECKOUT.md || { echo FALHA: CHECKOUT.md missing; exit 1; }
+grep -Fq WIDGET-A CHECKOUT.md || exit 1
+grep -Fq PENDING CHECKOUT.md || exit 1
+grep -Fq shipping CHECKOUT.md || exit 1
+python3 -c "from pathlib import Path; lines=[l.strip() for l in Path('CHECKOUT.md').read_text(encoding='utf-8').splitlines() if l.strip()]; assert len(lines)==3; print('ok')"
+"""

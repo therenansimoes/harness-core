@@ -1,4 +1,5 @@
 id = "micro_refactor_rename"
+files = ["util.py", "pedido.py", "relatorio.py"]
 kind = "refactor"
 # Micro-unidade de refactor: 3 arquivos de seed, um rename e dois call sites.
 # O grep do nome velho olha só os .py do seed — prompt.md também cita o nome

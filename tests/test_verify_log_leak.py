@@ -94,3 +94,22 @@ def test_run_once_tambem_grava_fora_do_repo(data_dir, tmp_path):
     log = store.data_dir() / "logs" / outcome.row.run_id / "verify.log"
     assert log.is_file()
     assert outcome.verify_tail != ""
+
+
+def test_run_once_salva_trace_em_data_logs(data_dir, tmp_path):
+    """run_once deve copiar trace.jsonl para data/logs/<run_id>/trace.0.jsonl."""
+    unit = cli.load_unit(_unit(tmp_path, "rastreavel"))
+    outcome = cli.run_once(unit, "mock")
+
+    trace = store.data_dir() / "logs" / outcome.row.run_id / "trace.0.jsonl"
+    assert trace.is_file(), f"trace ausente em {trace}"
+
+
+def test_run_once_trace_com_repo(data_dir, tmp_path):
+    """run_once com --repo tambem deve salvar o trace."""
+    repo = _repo(tmp_path)
+    unit = cli.load_unit(_unit(tmp_path, "rastreavel2"))
+    outcome = cli.run_once(unit, "mock", repo=str(repo))
+
+    trace = store.data_dir() / "logs" / outcome.row.run_id / "trace.0.jsonl"
+    assert trace.is_file(), f"trace ausente em {trace}"

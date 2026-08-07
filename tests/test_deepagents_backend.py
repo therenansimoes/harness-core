@@ -508,7 +508,7 @@ def test_manual_das_tools_entra_no_system_prompt(tmp_path, monkeypatch):
     monkeypatch.setattr(deepagents, "create_deep_agent", spy)
     da._build_agent(ExecRequest(prompt="x", workspace=tmp_path, model="openai:qwen3.5-9b-mlx"))
     prompt = capturado["system_prompt"]
-    assert "Manual das tools" in prompt
+    assert ("Manual das tools" in prompt) or ("# Tools" in prompt)
     for tool in (
         "ls",
         "read_file",
@@ -629,6 +629,7 @@ def test_model_for_passa_o_kwarg_do_provider(monkeypatch):
     assert visto[-1] == {
         "temperature": da.MODEL_TEMPERATURE,
         "extra_body": da.THINKING_EXTRA_BODY,
+        "max_tokens": da.DEFAULT_OPENAI_MAX_TOKENS,
     }
     da._model_for("anthropic:claude-sonnet-4-5")
     assert visto[-1] == {"temperature": da.MODEL_TEMPERATURE}
@@ -650,8 +651,12 @@ def test_model_for_cai_pra_temperature_se_provider_rejeita_kwarg(monkeypatch):
     monkeypatch.setattr(lcm, "init_chat_model", fake)
     assert da._model_for("openai:qwen3.5-9b-mlx") == "model:openai:qwen3.5-9b-mlx"
     assert visto == [
-        {"temperature": da.MODEL_TEMPERATURE, "extra_body": da.THINKING_EXTRA_BODY},
-        {"temperature": da.MODEL_TEMPERATURE},
+        {
+            "temperature": da.MODEL_TEMPERATURE,
+            "extra_body": da.THINKING_EXTRA_BODY,
+            "max_tokens": da.DEFAULT_OPENAI_MAX_TOKENS,
+        },
+        {"temperature": da.MODEL_TEMPERATURE, "max_tokens": da.DEFAULT_OPENAI_MAX_TOKENS},
     ]
 
 
@@ -1064,3 +1069,18 @@ def test_shell_backend_fail_open_quando_sandbox_none(tmp_path, monkeypatch):
     monkeypatch.setattr(sb_mod, "make_sandbox", lambda *a, **k: None)
     b = da._shell_backend(tmp_path)
     assert type(b).__name__ == "SafeShellBackend"
+
+
+def test_local_openai_tools_prompt_is_slim() -> None:
+    """Local openai:* must not load the 30KB+ tools.md encyclopedia."""
+    from harness.backends import deepagents_backend as da
+    text = da._tools_prompt("openai:qwopus3.5-4b-coder-mtp")
+    assert text
+    assert len(text) < 4_000
+    assert "write_file" in text or "Files" in text
+
+
+def test_model_for_accepts_max_tokens_kwarg():
+    import inspect
+    sig = inspect.signature(da._model_for)
+    assert "max_tokens" in sig.parameters
