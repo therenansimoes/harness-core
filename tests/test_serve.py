@@ -180,7 +180,7 @@ def test_models_payload_um_modelo_harness() -> None:
     payload = serve.models_payload()
     assert payload["object"] == "list"
     assert len(payload["data"]) == 1 + len(serve.executors())
-    assert payload["data"][0]["id"] == "bonsai"
+    assert payload["data"][0]["id"] == "qwopus3.5-4b-coder-mtp"
     assert payload["data"][1]["id"] == "harness"
 
 
@@ -237,7 +237,7 @@ def test_get_v1_models_200(tmp_path: Path) -> None:
     t.join(5)
     assert status == 200
     assert len(body["data"]) == 1 + len(serve.executors())
-    assert body["data"][0]["id"] == "bonsai"
+    assert body["data"][0]["id"] == "qwopus3.5-4b-coder-mtp"
 
 
 def test_post_chat_completions_help(tmp_path: Path) -> None:
@@ -282,7 +282,7 @@ def test_api_key_bearer_correto_200_em_todas_rotas(tmp_path: Path) -> None:
     )
     t.join(5)
     assert status_get == 200
-    assert body_get["data"][0]["id"] == "bonsai"
+    assert body_get["data"][0]["id"] == "qwopus3.5-4b-coder-mtp"
     assert status_post == 200
     assert "/do" in json.loads(raw_post)["choices"][0]["message"]["content"]
 
@@ -308,7 +308,7 @@ def test_sem_key_loopback_continua_sem_auth(tmp_path: Path) -> None:
     status, body = _get(port, "/v1/models")
     t.join(5)
     assert status == 200
-    assert body["data"][0]["id"] == "bonsai"
+    assert body["data"][0]["id"] == "qwopus3.5-4b-coder-mtp"
 
 
 def test_auth_status_fail_closed_sem_key_fora_do_loopback() -> None:
@@ -1003,14 +1003,14 @@ def test_models_toml_quebrado_degrada_pro_auto(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr("harness.routing.router.load_config", boom)
     execs = serve.executors()
     assert [e.id for e in execs] == ["harness"]
-    assert [m["id"] for m in serve.models_payload()["data"]] == ["bonsai", "harness"]
+    assert [m["id"] for m in serve.models_payload()["data"]] == ["qwopus3.5-4b-coder-mtp", "harness"]
 
 
 def test_models_payload_so_chaves_padrao(monkeypatch: pytest.MonkeyPatch) -> None:
     _fake_tiers(monkeypatch)
     payload = serve.models_payload()
     ids = [item["id"] for item in payload["data"]]
-    assert ids[0] == "bonsai"
+    assert ids[0] == "qwopus3.5-4b-coder-mtp"
     assert "harness" in ids
     assert len(ids) == len(set(ids))
     for item in payload["data"]:
@@ -2155,9 +2155,11 @@ def test_bonsai_proxy_nonstream_remaps_reasoning(tmp_path: Path, monkeypatch: py
     }
 
     def fake_proxy(payload, *, timeout_s):
-        assert payload.get("model") == "default"
+        assert payload.get("model") == "qwopus3.5-4b-coder-mtp"
+        assert payload.get("chat_template_kwargs", {}).get("enable_thinking") is True
         assert "messages" in payload
         assert "input" not in payload
+        assert isinstance(payload.get("tools"), list)
         return 200, json.dumps(upstream).encode("utf-8")
 
     monkeypatch.setattr(serve, "_proxy_post_json", fake_proxy)
@@ -2173,7 +2175,7 @@ def test_bonsai_proxy_nonstream_remaps_reasoning(tmp_path: Path, monkeypatch: py
     t.join(5)
     assert status == 200
     body = json.loads(raw)
-    assert body["model"] == "bonsai"
+    assert body["model"] == "qwopus3.5-4b-coder-mtp"
     msg = body["choices"][0]["message"]
     assert msg["content"] == "feito"
     assert msg["reasoning_content"] == "pensei"

@@ -95,7 +95,7 @@ KEY_ENV = "OPENAI_API_KEY"
 OPENAI_PREFIX = "openai:"
 BONSAI_ID = cursor_openai.BONSAI_ID
 LLM_TIMEOUT_S = 120.0
-# bonsai 27B 1bit: thinking+tools pode passar de 2 min — proxy dedicado.
+# qwopus3.5-4b-coder-mtp: thinking+tools — proxy dedicado Cursor.
 PROXY_TIMEOUT_S = 300.0
 PROBE_TIMEOUT_S = 3.0
 BD_TIMEOUT_S = 15.0
@@ -919,7 +919,7 @@ def _chat_model() -> str:
 
         return DEFAULT_MODEL
     except Exception:
-        return "openai:bonsai"
+        return "openai:qwopus3.5-4b-coder-mtp"
 
 
 def llm_available() -> bool:
@@ -1264,7 +1264,7 @@ comandos do harness:
   /where                        — workspace detectado no payload do Cursor (raw + veredito)
   /models                       — executores disponíveis (id pro campo "model" do cliente)
   /help                         — esta lista
-texto sem barra vai para o modelo local (LM Studio, porta 1234, bonsai) — chat é sempre local e $0.
+texto sem barra vai para o modelo local (LM Studio, porta 1234, qwopus) — chat é sempre local e $0.
 texto livre pedindo AÇÃO: eu executo na hora (harness do em segundo plano, --no-apply, teto $5.00) —
 no auto vai pro executor local ($0); executor pago só com pin explícito ou /do.
 "só pergunta" no texto (ou HARNESS_SERVE_AUTO_DO=0 no serve) desliga o disparo.
@@ -1774,7 +1774,7 @@ def new_id(rng: Callable[[], uuid.UUID] = uuid.uuid4) -> str:
 
 
 def models_payload() -> dict:
-    """`bonsai` primeiro — modelo Cursor Agent (proxy mlx). Depois os
+    """`qwopus3.5-4b-coder-mtp` primeiro — modelo Cursor Agent. Depois os
     executores do harness (`harness`, `harness:local`, …)."""
     data = [
         {"id": BONSAI_ID, "object": "model", "created": 0, "owned_by": "harness"},

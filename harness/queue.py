@@ -46,7 +46,7 @@ from harness.types import UnitSpec
 
 DEFAULT_PROJECT = "oficina"
 DEFAULT_BACKEND = "deepagents"
-DEFAULT_MODEL = "openai:bonsai"
+DEFAULT_MODEL = "openai:qwopus3.5-4b-coder-mtp"
 DEFAULT_DEADLINE_S = 3600.0
 REGRESSION_TIMEOUT_S = 120.0  # regressão é barata: verify que demora não é régua
 

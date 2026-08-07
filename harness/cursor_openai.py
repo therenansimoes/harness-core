@@ -24,10 +24,13 @@ UPSTREAM_MODEL_ENV_ALT = "HARNESS_UPSTREAM_MODEL"
 # Cursor Agent dumps huge contexts (~200k tokens). Cap chars before upstream
 # or the Mac pages to death. Override via env.
 PROMPT_CHARS_ENV = "HARNESS_SERVE_MAX_PROMPT_CHARS"
-DEFAULT_MAX_PROMPT_CHARS = 48_000  # ~12k tokens rough; LMS also capped at load
-MAX_SINGLE_MSG_CHARS = 12_000
+DEFAULT_MAX_PROMPT_CHARS = 24_000  # ~6k tokens; keep TTFT sane under Cursor dumps
+MAX_SINGLE_MSG_CHARS = 8_000
 MEM_FREE_WARN_MB_ENV = "HARNESS_SERVE_MEM_WARN_MB"
 DEFAULT_MEM_WARN_MB = 2_048  # warn/log when free RAM below this
+MAX_TOKENS_ENV = "HARNESS_SERVE_MAX_TOKENS"
+DEFAULT_MAX_TOKENS = 4_096
+DISABLE_THINKING_ENV = "HARNESS_SERVE_DISABLE_THINKING"  # "0" to keep model CoT
 
 # Fields Cursor (or mixed clients) stuff into chat/completions that mlx_lm
 # does not want — strip on the way in.
@@ -44,16 +47,23 @@ _STRIP_REQUEST_KEYS = frozenset(
     }
 )
 
-BONSAI_ID = "bonsai"
+# Cursor Agent local passthrough — LMS id (tools + thinking go through as-is).
+CURSOR_LOCAL_ID = "qwopus3.5-4b-coder-mtp"
+BONSAI_ID = CURSOR_LOCAL_ID  # legacy export name used by serve.py / tests
 # Stable aliases Cursor / docs may send. Comparison is casefold + strip openai:.
-BONSAI_ALIASES = frozenset(
+CURSOR_LOCAL_ALIASES = frozenset(
     {
+        "qwopus3.5-4b-coder-mtp",
+        "qwopus",
+        "qwopus3.5-4b-coder",
+        # legacy Cursor configs still pointing at bonsai
         "bonsai",
         "prism-ml/bonsai-27b",
         "prism-ml/bonsai-27b-mlx-1bit",
         "bonsai-27b",
     }
 )
+BONSAI_ALIASES = CURSOR_LOCAL_ALIASES  # legacy alias
 
 
 def normalize_model_id(raw: str | None) -> str:
@@ -65,12 +75,18 @@ def normalize_model_id(raw: str | None) -> str:
     return key.strip()
 
 
-def is_bonsai_model(raw: str | None) -> bool:
-    """True when the client asked for the local bonsai passthrough model."""
+def is_cursor_local_model(raw: str | None) -> bool:
+    """True when the client asked for the local LMS passthrough (qwopus)."""
     key = normalize_model_id(raw).casefold()
     if not key:
         return False
-    return key in {a.casefold() for a in BONSAI_ALIASES} or key.endswith("/bonsai-27b")
+    aliases = {a.casefold() for a in CURSOR_LOCAL_ALIASES}
+    return key in aliases or key.endswith("/bonsai-27b") or key.endswith("qwopus3.5-4b-coder-mtp")
+
+
+def is_bonsai_model(raw: str | None) -> bool:
+    """Legacy name — same as is_cursor_local_model."""
+    return is_cursor_local_model(raw)
 
 
 def _is_responses_body(body: dict[str, Any]) -> bool:
@@ -355,6 +371,33 @@ def memory_pressure_high() -> tuple[bool, dict[str, Any]]:
     return int(snap.get("available_mb") or 0) < warn, snap
 
 
+
+def _max_tokens_cap() -> int:
+    raw = (os.environ.get(MAX_TOKENS_ENV) or "").strip()
+    if raw:
+        try:
+            return max(64, int(raw))
+        except ValueError:
+            pass
+    return DEFAULT_MAX_TOKENS
+
+
+def _thinking_disabled() -> bool:
+    # Default OFF → thinking ON. Set HARNESS_SERVE_DISABLE_THINKING=1 to disable CoT.
+    return (os.environ.get(DISABLE_THINKING_ENV) or "0").strip() == "1"
+
+
+def _clamp_max_tokens(out: dict[str, Any]) -> None:
+    """Cursor often asks for huge max_tokens; local decode stays short."""
+    cap = _max_tokens_cap()
+    raw = out.get("max_tokens")
+    try:
+        cur = int(raw) if raw is not None else cap
+    except (TypeError, ValueError):
+        cur = cap
+    out["max_tokens"] = max(1, min(cur, cap))
+
+
 def normalize_chat_body(body: dict[str, Any]) -> dict[str, Any]:
     """Return a Chat Completions body safe to POST to the local upstream."""
     if not isinstance(body, dict):
@@ -373,6 +416,15 @@ def normalize_chat_body(body: dict[str, Any]) -> dict[str, Any]:
             out["max_tokens"] = int(out["max_output_tokens"])
         except (TypeError, ValueError):
             pass
+    _clamp_max_tokens(out)
+
+    kwargs = out.get("chat_template_kwargs")
+    if not isinstance(kwargs, dict):
+        kwargs = {}
+    else:
+        kwargs = dict(kwargs)
+    kwargs["enable_thinking"] = not _thinking_disabled()
+    out["chat_template_kwargs"] = kwargs
 
     tools = out.get("tools")
     if isinstance(tools, list):
@@ -381,12 +433,13 @@ def normalize_chat_body(body: dict[str, Any]) -> dict[str, Any]:
     # Client sees `bonsai`; upstream needs the id mlx_lm actually serves
     # (local path or HF id from GET /v1/models). Override via env.
     model = normalize_model_id(out.get("model") if isinstance(out.get("model"), str) else None)
-    if is_bonsai_model(model) or model in BONSAI_ALIASES or model.casefold() == BONSAI_ID:
+    if is_cursor_local_model(model):
         upstream = (
             (os.environ.get(UPSTREAM_MODEL_ENV_ALT) or "").strip()
             or (os.environ.get(UPSTREAM_MODEL_ENV) or "").strip()
         )
-        out["model"] = upstream or model or BONSAI_ID
+        # Always pin to the LMS id unless HARNESS_UPSTREAM_MODEL overrides.
+        out["model"] = upstream or CURSOR_LOCAL_ID
 
     for key in _STRIP_REQUEST_KEYS:
         out.pop(key, None)

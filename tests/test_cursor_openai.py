@@ -8,8 +8,9 @@ from harness import cursor_openai as co
 
 
 def test_is_bonsai_model_aliases() -> None:
-    assert co.is_bonsai_model("bonsai")
-    assert co.is_bonsai_model("BONSAI")
+    assert co.is_cursor_local_model("qwopus3.5-4b-coder-mtp")
+    assert co.is_cursor_local_model("qwopus")
+    assert co.is_bonsai_model("bonsai")  # legacy alias
     assert co.is_bonsai_model("openai:bonsai")
     assert co.is_bonsai_model("prism-ml/bonsai-27b")
     assert not co.is_bonsai_model("harness")
@@ -49,7 +50,7 @@ def test_normalize_responses_body_to_messages() -> None:
     assert body["tools"][1]["name"] == "ApplyPatch"
     assert "store" not in body
     assert "stream_options" not in body
-    assert body["model"] == "bonsai"
+    assert body["model"] == co.CURSOR_LOCAL_ID
 
 
 def test_normalize_keeps_nested_function_tools() -> None:
@@ -101,8 +102,8 @@ def test_remap_completion_reasoning_field() -> None:
             }
         ],
     }
-    out = co.remap_completion_response(data, echo_model="bonsai")
-    assert out["model"] == "bonsai"
+    out = co.remap_completion_response(data, echo_model=co.CURSOR_LOCAL_ID)
+    assert out["model"] == co.CURSOR_LOCAL_ID
     msg = out["choices"][0]["message"]
     assert msg["reasoning_content"] == "penso logo existo"
     assert "reasoning" not in msg
@@ -116,8 +117,8 @@ def test_remap_sse_reasoning_to_reasoning_content() -> None:
         "model": "default",
         "choices": [{"index": 0, "delta": {"reasoning": "hmm"}, "finish_reason": None}],
     }
-    out = co.remap_sse_data_payload(chunk, echo_model="bonsai")
-    assert out["model"] == "bonsai"
+    out = co.remap_sse_data_payload(chunk, echo_model=co.CURSOR_LOCAL_ID)
+    assert out["model"] == co.CURSOR_LOCAL_ID
     assert out["choices"][0]["delta"]["reasoning_content"] == "hmm"
     assert "reasoning" not in out["choices"][0]["delta"]
 
@@ -127,11 +128,11 @@ def test_iter_remapped_sse_lines_done_and_json() -> None:
         b'data: {"choices":[{"delta":{"reasoning":"a"},"index":0}]}',
         b"data: [DONE]",
     ]
-    frames = list(co.iter_remapped_sse_lines(lines, echo_model="bonsai"))
+    frames = list(co.iter_remapped_sse_lines(lines, echo_model=co.CURSOR_LOCAL_ID))
     assert frames[-1] == b"data: [DONE]\n\n"
     first = json.loads(frames[0][len(b"data: ") : -2])
     assert first["choices"][0]["delta"]["reasoning_content"] == "a"
-    assert first["model"] == "bonsai"
+    assert first["model"] == co.CURSOR_LOCAL_ID
 
 
 def test_trim_messages_drops_oldest() -> None:
@@ -156,3 +157,15 @@ def test_normalize_strips_trim_stats_only_after_caller_pops() -> None:
     assert "_harness_trim" in body
     assert body["_harness_trim"]["trimmed"] is True
     assert body["messages"][-1]["content"] == "hi"
+
+
+def test_normalize_clamps_max_tokens_and_enables_thinking() -> None:
+    body = co.normalize_chat_body(
+        {
+            "model": "qwopus3.5-4b-coder-mtp",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 100_000,
+        }
+    )
+    assert body["max_tokens"] == co.DEFAULT_MAX_TOKENS
+    assert body["chat_template_kwargs"]["enable_thinking"] is True

@@ -77,6 +77,14 @@ tier = "t0"
 input_per_mtok = 0.0
 output_per_mtok = 0.0
 
+[pricing."openai:qwopus3.5-4b-coder-mtp"]
+input_per_mtok = 0.0
+output_per_mtok = 0.0
+
+[pricing."openai:qwopus"]
+input_per_mtok = 0.0
+output_per_mtok = 0.0
+
 # Aliases legados (ainda referidos em testes/fixtures) — $0 se alguém piná-los.
 [pricing."openai:qwen3.5-9b-mlx"]
 input_per_mtok = 0.0

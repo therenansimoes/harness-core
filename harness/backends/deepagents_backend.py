@@ -43,7 +43,7 @@ LMSTUDIO_TIMEOUT_S = 3.0
 MLX_BASE_URL = "http://127.0.0.1:1235/v1"
 MLX_BASE_URL_ENV = "HARNESS_MLX_BASE_URL"
 RUNTIME_MLX = "mlx"
-DEFAULT_LOCAL_MODEL = "bonsai"
+DEFAULT_LOCAL_MODEL = "qwopus3.5-4b-coder-mtp"
 
 CONFIG_DIR_ENV = "HARNESS_CONFIG_DIR"
 MODELS_FILE = "models.toml"
@@ -284,7 +284,7 @@ def _lmstudio_models(url: str) -> set[str]:
 
 def _model_listed(wanted: str, served: set[str]) -> bool:
     """mlx_lm.server costuma listar o path do peso ou `default`, não o alias
-    estável `bonsai` que o harness/Cursor usam."""
+    estável `qwopus3.5-4b-coder-mtp` que o harness/Cursor usam."""
     if not served:
         return True
     if wanted in served or "default" in served:
