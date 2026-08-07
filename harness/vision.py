@@ -6,7 +6,7 @@ distingue uma página pintada e feia de uma pintada e boa, e é exatamente esse
 buraco que sobrou depois que o gate de asset morto foi tapado.
 
 Este módulo é a camada de cima: manda o PNG para um endpoint OpenAI-compatível
-(mlx_lm.server na 1235 por default) com um modelo que enxerga, e pede nota + bullets
+(LM Studio na 1234 por default) com um modelo que enxerga, e pede nota + bullets
 contra uma rubrica de 5 eixos. Determinístico não é — por isso NÃO é a régua
 binária. É subcheck de peso pequeno na régua graduada (`[checks]` do unit.toml).
 
@@ -39,9 +39,9 @@ MODELS_FILE = "models.toml"
 RUBRIC_FILE = "rubric.toml"
 VISION_SECTION = "vision"
 
-# Mesmo endpoint do t0 (mlx_lm.server :1235) e mesma env var de override:
+# Mesmo endpoint do t0 (LM Studio :1234) e mesma env var de override:
 # quem aponta o backend para outro servidor aponta a visão junto, por construção.
-DEFAULT_BASE_URL = "http://127.0.0.1:1235/v1"
+DEFAULT_BASE_URL = "http://127.0.0.1:1234/v1"
 BASE_URL_ENV = "OPENAI_BASE_URL"
 KEY_ENV = "OPENAI_API_KEY"
 # `init_chat_model` quer o prefixo; o HTTP cru não. Aqui a string vai como id de

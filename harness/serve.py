@@ -90,7 +90,7 @@ ACTION_MAX_CHARS = 2000  # acima disso é despejo de texto, não pedido
 CHUNK_CHARS = 120  # tamanho da fatia de cada frame SSE
 STATE_MAX_CHARS = 2000  # mesmo raciocínio de deepagents_backend.TARGET_CONSTITUTION_MAX_CHARS
 BASE_URL_ENV = "OPENAI_BASE_URL"  # mesma var de vision.py / deepagents_backend
-DEFAULT_BASE_URL = "http://127.0.0.1:1235/v1"
+DEFAULT_BASE_URL = "http://127.0.0.1:1234/v1"
 KEY_ENV = "OPENAI_API_KEY"
 OPENAI_PREFIX = "openai:"
 BONSAI_ID = cursor_openai.BONSAI_ID
@@ -1264,7 +1264,7 @@ comandos do harness:
   /where                        — workspace detectado no payload do Cursor (raw + veredito)
   /models                       — executores disponíveis (id pro campo "model" do cliente)
   /help                         — esta lista
-texto sem barra vai para o modelo local (mlx_lm.server, porta 1235, bonsai) — chat é sempre local e $0.
+texto sem barra vai para o modelo local (LM Studio, porta 1234, bonsai) — chat é sempre local e $0.
 texto livre pedindo AÇÃO: eu executo na hora (harness do em segundo plano, --no-apply, teto $5.00) —
 no auto vai pro executor local ($0); executor pago só com pin explícito ou /do.
 "só pergunta" no texto (ou HARNESS_SERVE_AUTO_DO=0 no serve) desliga o disparo.
@@ -2328,9 +2328,42 @@ class _Handler(BaseHTTPRequestHandler):
         self._error(METHOD_NOT_ALLOWED, "método não suportado")
 
     def _proxy_bonsai(self, body: dict[str, Any]) -> None:
-        """Normaliza o body (Responses→Chat), fala com mlx, remapeia thinking."""
+        """Normaliza o body (Responses→Chat), fala com upstream local, remapeia thinking."""
         want_stream = bool(body.get("stream"))
+        pressure, mem = cursor_openai.memory_pressure_high()
+        if mem.get("ok"):
+            print(
+                f"[serve] mem available={mem.get('available_mb')}MB "
+                f"free={mem.get('free_mb')}MB warn<{mem.get('warn_mb')}MB"
+                f"{' PRESSURE' if pressure else ''}",
+                file=sys.stderr,
+            )
         normalized = cursor_openai.normalize_chat_body(dict(body))
+        trim = normalized.pop("_harness_trim", None)
+        if pressure and isinstance(normalized.get("messages"), list):
+            tight = max(8_000, cursor_openai.DEFAULT_MAX_PROMPT_CHARS // 3)
+            normalized["messages"], trim = cursor_openai.trim_messages(
+                normalized["messages"], max_chars=tight
+            )
+        if isinstance(trim, dict) and trim.get("trimmed"):
+            print(
+                f"[serve] prompt trimmed {trim.get('before_chars')}→{trim.get('after_chars')} chars "
+                f"({trim.get('before_msgs')}→{trim.get('after_msgs')} msgs, budget={trim.get('budget')})",
+                file=sys.stderr,
+            )
+        elif isinstance(trim, dict):
+            print(
+                f"[serve] prompt {trim.get('after_chars')} chars / {trim.get('after_msgs')} msgs "
+                f"(budget={trim.get('budget')})",
+                file=sys.stderr,
+            )
+        # Hard stop only when free RAM is critically low.
+        if mem.get("ok") and int(mem.get("available_mb") or 0) < 512:
+            self._error(
+                503,
+                "memória crítica (<512MB) — feche apps / descarregue modelos e tente de novo",
+            )
+            return
         normalized["stream"] = want_stream
         echo = BONSAI_ID
         if want_stream:

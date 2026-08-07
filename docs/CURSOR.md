@@ -13,18 +13,16 @@ to use is **`bonsai`**: a transparent proxy to `mlx_lm.server` that:
 Slash commands (`harness`, `harness:local`, …) still exist on the same port
 but are a side path, not the Cursor Agent product.
 
-## 1. Start mlx (no LM Studio)
+## 1. Start LM Studio (offload)
 
 ```sh
-# once: install mlx-lm outside this repo (uv.lock is genome-immutable)
-pip install mlx-lm   # or: uv tool install mlx-lm
-
-./scripts/mlx_bonsai.sh
-# → mlx_lm.server on :1235 with Bonsai-27B-mlx-1bit
+lms server start
+# 2bit variant (NOT 1bit). Cap context at load — Cursor can dump 200k+ tokens.
+lms load prism-ml/bonsai-27b -y -c 8192 --gpu max --identifier bonsai
 ```
 
-Weights default to `~/.lmstudio/models/prism-ml/Bonsai-27B-mlx-1bit` (already
-on disk if you used LM Studio before). Override with `HARNESS_MLX_MODEL`.
+Upstream is `http://127.0.0.1:1234/v1`. The gateway also trims prompts
+(`HARNESS_SERVE_MAX_PROMPT_CHARS`, default 48000 chars) and logs memory.
 
 ## 2. Start the gateway
 
@@ -33,7 +31,7 @@ uv run harness serve --api-key "$HARNESS_SERVE_KEY"
 ```
 
 Binds `127.0.0.1:8765` by default. Upstream chat uses `OPENAI_BASE_URL`
-(default `http://127.0.0.1:1235/v1`).
+(default `http://127.0.0.1:1234/v1`).
 
 ## 3. Expose HTTPS (Cursor cannot hit localhost)
 

@@ -12,8 +12,22 @@ lines. No HTTP.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Iterator
 from typing import Any
+
+# Upstream model id (LM Studio or mlx_lm). Set to the id from GET /v1/models
+# (e.g. `bonsai` after `lms load … --identifier bonsai`).
+UPSTREAM_MODEL_ENV = "HARNESS_MLX_SERVED_MODEL"  # legacy name; works for LMS too
+UPSTREAM_MODEL_ENV_ALT = "HARNESS_UPSTREAM_MODEL"
+
+# Cursor Agent dumps huge contexts (~200k tokens). Cap chars before upstream
+# or the Mac pages to death. Override via env.
+PROMPT_CHARS_ENV = "HARNESS_SERVE_MAX_PROMPT_CHARS"
+DEFAULT_MAX_PROMPT_CHARS = 48_000  # ~12k tokens rough; LMS also capped at load
+MAX_SINGLE_MSG_CHARS = 12_000
+MEM_FREE_WARN_MB_ENV = "HARNESS_SERVE_MEM_WARN_MB"
+DEFAULT_MEM_WARN_MB = 2_048  # warn/log when free RAM below this
 
 # Fields Cursor (or mixed clients) stuff into chat/completions that mlx_lm
 # does not want — strip on the way in.
@@ -147,14 +161,212 @@ def _normalize_tool(tool: Any) -> Any:
     return tool
 
 
+def _part_text(part: Any) -> str:
+    """Extract plain text from one OpenAI/Responses content part; drop images."""
+    if isinstance(part, str):
+        return part
+    if not isinstance(part, dict):
+        return ""
+    typ = part.get("type")
+    if typ in ("text", "input_text", "output_text"):
+        return str(part.get("text") or "")
+    if typ in ("image_url", "input_image", "image", "input_file", "file"):
+        return ""  # mlx_lm text-only — Cursor often attaches screenshots
+    # Unknown dict part: prefer .text if present
+    if isinstance(part.get("text"), str):
+        return part["text"]
+    return ""
+
+
+def flatten_message_content(content: Any) -> str:
+    """mlx_lm rejects non-text content types — always coerce to a string."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(_part_text(p) for p in content)
+    return str(content)
+
+
+def _flatten_messages(messages: Any) -> list[dict[str, Any]]:
+    if not isinstance(messages, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        m = dict(msg)
+        if "content" in m:
+            m["content"] = flatten_message_content(m.get("content"))
+        out.append(m)
+    return out
+
+
+
+def _max_prompt_chars() -> int:
+    raw = (os.environ.get(PROMPT_CHARS_ENV) or "").strip()
+    if raw:
+        try:
+            return max(4_000, int(raw))
+        except ValueError:
+            pass
+    return DEFAULT_MAX_PROMPT_CHARS
+
+
+def _messages_chars(messages: list[dict[str, Any]]) -> int:
+    total = 0
+    for m in messages:
+        c = m.get("content")
+        total += len(c) if isinstance(c, str) else len(str(c or ""))
+    return total
+
+
+def _clip_str(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    head = max(1, limit // 2)
+    tail = max(1, limit - head - 16)
+    return text[:head] + "\n…[truncated]…\n" + text[-tail:]
+
+
+def trim_messages(
+    messages: list[dict[str, Any]],
+    *,
+    max_chars: int | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Drop oldest turns / clip huge messages so local inference stays alive.
+
+    Keeps at most one system message and the newest turns that fit the budget,
+    always preferring the latest user turn.
+    """
+    budget = _max_prompt_chars() if max_chars is None else max_chars
+    stats: dict[str, Any] = {
+        "before_chars": _messages_chars(messages),
+        "before_msgs": len(messages),
+        "budget": budget,
+        "trimmed": False,
+    }
+    if not messages:
+        stats["after_chars"] = 0
+        stats["after_msgs"] = 0
+        return [], stats
+
+    capped: list[dict[str, Any]] = []
+    for m in messages:
+        mm = dict(m)
+        c = mm.get("content")
+        if isinstance(c, str) and len(c) > MAX_SINGLE_MSG_CHARS:
+            mm["content"] = _clip_str(c, MAX_SINGLE_MSG_CHARS)
+            stats["trimmed"] = True
+        capped.append(mm)
+
+    system = next((dict(m) for m in capped if m.get("role") == "system"), None)
+    rest = [dict(m) for m in capped if m.get("role") != "system"]
+
+    # Build from newest → oldest until budget filled
+    chosen_rev: list[dict[str, Any]] = []
+    sys_list = []
+    if system is not None:
+        # reserve up to 25% of budget for system
+        sys_budget = max(2_000, budget // 4)
+        c = system.get("content")
+        if isinstance(c, str) and len(c) > sys_budget:
+            system["content"] = _clip_str(c, sys_budget)
+            stats["trimmed"] = True
+        sys_list = [system]
+
+    for m in reversed(rest):
+        trial = sys_list + list(reversed(chosen_rev + [m]))
+        if chosen_rev and _messages_chars(trial) > budget:
+            stats["trimmed"] = True
+            break
+        chosen_rev.append(m)
+
+    final = sys_list + list(reversed(chosen_rev))
+    # Last message must fit remaining room
+    if final:
+        head_chars = _messages_chars(final[:-1])
+        room = max(2_000, budget - head_chars)
+        last = dict(final[-1])
+        c = last.get("content")
+        if isinstance(c, str) and len(c) > room:
+            last["content"] = _clip_str(c, room)
+            final[-1] = last
+            stats["trimmed"] = True
+
+    if len(final) != len(capped):
+        stats["trimmed"] = True
+    stats["after_chars"] = _messages_chars(final)
+    stats["after_msgs"] = len(final)
+    return final, stats
+
+
+def memory_snapshot() -> dict[str, Any]:
+    """Best-effort macOS free/inactive memory in MB — never raises."""
+    out: dict[str, Any] = {"ok": False}
+    try:
+        import subprocess
+
+        raw = subprocess.check_output(["vm_stat"], text=True, timeout=2.0)
+        page = 4096
+        for line in raw.splitlines():
+            if "page size of" in line:
+                for tok in line.replace("(", " ").split():
+                    if tok.isdigit():
+                        page = int(tok)
+                        break
+        counts: dict[str, int] = {}
+        for line in raw.splitlines():
+            if ":" not in line:
+                continue
+            k, _, v = line.partition(":")
+            digits = "".join(ch for ch in v if ch.isdigit())
+            if digits:
+                counts[k.strip()] = int(digits)
+        free = counts.get("Pages free", 0) + counts.get("Pages speculative", 0)
+        inactive = counts.get("Pages inactive", 0)
+        out.update(
+            {
+                "ok": True,
+                "free_mb": (free * page) // (1024 * 1024),
+                "inactive_mb": (inactive * page) // (1024 * 1024),
+                "available_mb": ((free + inactive) * page) // (1024 * 1024),
+                "page_bytes": page,
+            }
+        )
+    except Exception as exc:
+        out["error"] = str(exc)
+    return out
+
+
+def memory_pressure_high() -> tuple[bool, dict[str, Any]]:
+    snap = memory_snapshot()
+    warn = DEFAULT_MEM_WARN_MB
+    raw = (os.environ.get(MEM_FREE_WARN_MB_ENV) or "").strip()
+    if raw:
+        try:
+            warn = max(256, int(raw))
+        except ValueError:
+            pass
+    snap["warn_mb"] = warn
+    if not snap.get("ok"):
+        return False, snap
+    return int(snap.get("available_mb") or 0) < warn, snap
+
+
 def normalize_chat_body(body: dict[str, Any]) -> dict[str, Any]:
-    """Return a Chat Completions body safe to POST to mlx_lm.server."""
+    """Return a Chat Completions body safe to POST to the local upstream."""
     if not isinstance(body, dict):
         return {}
     out = dict(body)
 
     if _is_responses_body(out):
         out["messages"] = _input_to_messages(out.get("input"))
+
+    if isinstance(out.get("messages"), list):
+        out["messages"] = _flatten_messages(out["messages"])
+        out["messages"], out["_harness_trim"] = trim_messages(out["messages"])
 
     if "max_output_tokens" in out and "max_tokens" not in out:
         try:
@@ -166,12 +378,15 @@ def normalize_chat_body(body: dict[str, Any]) -> dict[str, Any]:
     if isinstance(tools, list):
         out["tools"] = [_normalize_tool(t) for t in tools]
 
-    # Force client-facing model id downstream callers may overwrite; upstream
-    # mlx often ignores model and serves the CLI weight. Prefer `default` if
-    # the alias is bonsai — many mlx builds only list `default`.
+    # Client sees `bonsai`; upstream needs the id mlx_lm actually serves
+    # (local path or HF id from GET /v1/models). Override via env.
     model = normalize_model_id(out.get("model") if isinstance(out.get("model"), str) else None)
     if is_bonsai_model(model) or model in BONSAI_ALIASES or model.casefold() == BONSAI_ID:
-        out["model"] = "default"
+        upstream = (
+            (os.environ.get(UPSTREAM_MODEL_ENV_ALT) or "").strip()
+            or (os.environ.get(UPSTREAM_MODEL_ENV) or "").strip()
+        )
+        out["model"] = upstream or model or BONSAI_ID
 
     for key in _STRIP_REQUEST_KEYS:
         out.pop(key, None)

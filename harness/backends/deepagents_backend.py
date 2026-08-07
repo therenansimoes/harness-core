@@ -30,11 +30,10 @@ try:
 except Exception:  # módulo chega em PR paralelo; sem ele, sem tools extras
     load_mcp_tools = lambda *a, **k: []  # noqa: E731
 
-# Runtime local default: mlx_lm.server na porta 1235 (OpenAI-compatível).
+# Runtime local default: LM Studio na porta 1234 (OpenAI-compat + GPU offload).
 # Prefixo `openai:` = endpoint OpenAI-shaped em loopback, NÃO a nuvem.
-# LM Studio (:1234) só via OPENAI_BASE_URL explícito.
 OPENAI_PREFIX = "openai:"
-LMSTUDIO_BASE_URL = "http://127.0.0.1:1235/v1"  # nome legado; default = mlx
+LMSTUDIO_BASE_URL = "http://127.0.0.1:1234/v1"  # LM Studio (offload)
 LMSTUDIO_BASE_URL_ENV = "OPENAI_BASE_URL"
 LMSTUDIO_KEY_ENV = "OPENAI_API_KEY"
 LMSTUDIO_TIMEOUT_S = 3.0

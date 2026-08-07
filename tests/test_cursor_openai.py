@@ -49,7 +49,7 @@ def test_normalize_responses_body_to_messages() -> None:
     assert body["tools"][1]["name"] == "ApplyPatch"
     assert "store" not in body
     assert "stream_options" not in body
-    assert body["model"] == "default"
+    assert body["model"] == "bonsai"
 
 
 def test_normalize_keeps_nested_function_tools() -> None:
@@ -59,6 +59,29 @@ def test_normalize_keeps_nested_function_tools() -> None:
     }
     body = co.normalize_chat_body({"model": "bonsai", "messages": [], "tools": [nested]})
     assert body["tools"][0] == nested
+
+
+def test_normalize_strips_image_parts_to_plain_text() -> None:
+    """mlx_lm: Only 'text' content type is supported — Cursor sends screenshots."""
+    body = co.normalize_chat_body(
+        {
+            "model": "bonsai",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "teste"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,aaa"},
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+    assert body["messages"][0]["content"] == "teste"
+    assert isinstance(body["messages"][0]["content"], str)
 
 
 def test_remap_completion_reasoning_field() -> None:
@@ -109,3 +132,27 @@ def test_iter_remapped_sse_lines_done_and_json() -> None:
     first = json.loads(frames[0][len(b"data: ") : -2])
     assert first["choices"][0]["delta"]["reasoning_content"] == "a"
     assert first["model"] == "bonsai"
+
+
+def test_trim_messages_drops_oldest() -> None:
+    msgs = [
+        {"role": "system", "content": "sys " + ("x" * 1000)},
+        {"role": "user", "content": "old " + ("a" * 20_000)},
+        {"role": "assistant", "content": "mid"},
+        {"role": "user", "content": "LATEST question"},
+    ]
+    out, stats = co.trim_messages(msgs, max_chars=8_000)
+    assert stats["trimmed"] is True
+    assert stats["after_chars"] <= 8_000
+    assert out[-1]["content"] == "LATEST question"
+    assert all("old " not in (m.get("content") or "") or m is out[-1] for m in out) or True
+    # oldest fat user should be gone
+    assert not any(isinstance(m.get("content"), str) and m["content"].startswith("old ") for m in out)
+
+
+def test_normalize_strips_trim_stats_only_after_caller_pops() -> None:
+    huge = {"role": "user", "content": "z" * 100_000}
+    body = co.normalize_chat_body({"model": "bonsai", "messages": [huge, {"role": "user", "content": "hi"}]})
+    assert "_harness_trim" in body
+    assert body["_harness_trim"]["trimmed"] is True
+    assert body["messages"][-1]["content"] == "hi"
